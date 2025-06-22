@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  discord-bot:
+    build: .
+    container_name: discord-event-bot
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
+    restart: always
+    volumes:
+      - .:/app
+    networks:
+      - bot-network
+
+networks:
+  bot-network:
+    driver: bridge

@@ -5,7 +5,7 @@ services:
     build: .
     container_name: discord-event-bot
     environment:
-      - DISCORD_TOKEN=${DISCORD_TOKEN}
+      - DISCORD_TOKEN=MTM4NjE3NTAxMDYxMTM5NjY4OA.G19YLr.l13sqKUDHRbClI_TqfzITEJgBy379rSv8npV2s
     restart: always
     volumes:
       - .:/app

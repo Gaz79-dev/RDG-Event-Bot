@@ -1,17 +1,29 @@
-version: '3.8'
+version: '3.8' # Specify the Docker Compose file format version
 
 services:
-  discord-bot:
-    build: .
-    container_name: discord-event-bot
-    environment:
-      - DISCORD_TOKEN=${DISCORD_TOKEN}
-    restart: always
+  # Define your bot service. You can choose any name, e.g., 'discord-bot' or 'rdg-event-bot'
+  rdg-event-bot:
+    build:
+      context: . # Instructs Docker Compose to build the image from the current directory
+      dockerfile: Dockerfile # Explicitly tells Compose to use the Dockerfile (though often default)
+      args:
+        # Pass host UID/GID to the Dockerfile to ensure correct file permissions
+        # for the mounted volume. This is crucial for logging to work correctly.
+        # $(id -u) and $(id -g) fetch your current user's UID and GID on Linux/macOS.
+        # If running on Windows or if these commands don't work, you can set fixed values
+        # like 1000, which is a common default for non-root users.
+        NODE_UID: "${UID:-1000}" # Default to 1000 if UID is not set in .env or shell
+        NODE_GID: "${GID:-1000}" # Default to 1000 if GID is not set in .env or shell
+    container_name: rdg-event-bot-container # A human-readable name for your running container
     volumes:
-      - .:/app
-    networks:
-      - bot-network
-
-networks:
-  bot-network:
-    driver: bridge
+      # This is the most critical part for persistent logs.
+      # It maps the 'logs' directory on your host machine (where docker-compose.yml resides)
+      # to the '/opt/rdg-event-bot/logs' directory *inside* the container.
+      # This means any files written to '/opt/rdg-event-bot/logs' by your bot
+      # will appear in the './logs' directory on your VPS.
+      - ./logs:/opt/rdg-event-bot/logs
+    environment:
+      # Pass your Discord bot token securely as an environment variable.
+      # Docker Compose will read this from your .env file.
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
+    restart: unless-stopped # Automatically restart the container unless it's explicitly stopped

@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, EmbedBuilder, REST, Routes, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder, REST, Routes, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, StringSelectMenuBuilder, StringSelectMenuOptionBuilder, MessageFlags } = require('discord.js');
 const dotenv = require('dotenv');
 const moment = require('moment'); // For date/time handling
 const fs = require('fs');     // For file system operations (logging)
@@ -6,32 +6,19 @@ const path = require('path'); // For path manipulation (logging)
 
 dotenv.config(); // Load environment variables from .env file
 
-// Initialize Discord client with necessary intents
-const client = new Client({
-    intents: [
-        GatewayIntentBits.Guilds,           // Required for guild-related events (channels, roles, members)
-        GatewayIntentBits.GuildMessages,    // Required for message-related events
-        GatewayIntentBits.MessageContent,   // Privileged intent: Required to read message content for prefix commands
-        GatewayIntentBits.GuildMembers      // Privileged intent: Required to access guild member data (roles, fetching members)
-    ]
-});
+// --- Logging Configuration (Moved to top for early availability) ---
+const logDirectory = path.join(__dirname, 'logs');
 
-// --- Logging Configuration ---
-const logDirectory = path.join(__dirname, 'logs'); // Define a directory for logs
-
-// Ensure log directory exists, create if not
 const ensureLogDirectory = () => {
     if (!fs.existsSync(logDirectory)) {
         fs.mkdirSync(logDirectory, { recursive: true });
     }
 };
 
-// Get the current daily log file name
 const getLogFileName = () => {
     return path.join(logDirectory, `bot_log_${moment().format('YYYY-MM-DD')}.log`);
 };
 
-// Write a message to the daily log file
 const writeToLog = (message) => {
     ensureLogDirectory();
     const logFileName = getLogFileName();
@@ -43,7 +30,6 @@ const writeToLog = (message) => {
     }
 };
 
-// Clean up old log files (older than 5 days)
 const cleanupOldLogs = () => {
     ensureLogDirectory();
     fs.readdir(logDirectory, (err, files) => {
@@ -56,12 +42,10 @@ const cleanupOldLogs = () => {
         files.forEach(file => {
             const filePath = path.join(logDirectory, file);
             const fileNameParts = file.split('_');
-            // Check if the file matches the expected log file naming convention
             if (fileNameParts.length === 3 && fileNameParts[0] === 'bot' && fileNameParts[1] === 'log' && file.endsWith('.log')) {
-                const datePart = fileNameParts[2].split('.')[0]; // 'YYYY-MM-DD'
+                const datePart = fileNameParts[2].split('.')[0];
                 const logDate = moment(datePart, 'YYYY-MM-DD');
 
-                // If the log file is older than 5 days, delete it
                 if (moment().diff(logDate, 'days') > 5) {
                     fs.unlink(filePath, unlinkErr => {
                         if (unlinkErr) {
@@ -78,18 +62,121 @@ const cleanupOldLogs = () => {
     });
 };
 
+// --- CONFIGURATION ---
+// IMPORTANT: This is the actual ID of your "@SL certified" Discord role.
+// This ID is used to conditionally display the "Officer" class.
+const SL_CERTIFIED_ROLE_ID = '1386355748111388722';
+// IMPORTANT: This is the actual ID of your "@TC certified" Discord role.
+// This ID is used to conditionally display the "Tank Commander" class.
+const TC_CERTIFIED_ROLE_ID = '1386355942550933574';
+// IMPORTANT: This is the actual ID of your "Cmdr certified" Discord role.
+// This ID is used to conditionally display the "Commander" primary role.
+const CMDR_CERTIFIED_ROLE_ID = '1386413663501680973';
+// IMPORTANT: This is the actual ID of your "Recon certified" Discord role.
+// This ID is used to conditionally display the "Recon" primary role.
+const RECON_CERTIFIED_ROLE_ID = '1386413539157086248';
+
+
+// Initialize Discord client with necessary intents
+const client = new Client({
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildMembers, // Required for fetching member data (roles for restriction, e.g., @SL certified)
+        GatewayIntentBits.DirectMessages // Required for sending DMs
+    ]
+});
+
+
 // --- In-Memory Data Storage (NOTE: Not persistent across bot restarts) ---
-let events = {}; // Stores event details
+let events = {};
 
 // --- Helper Functions ---
 
-// Extracts Discord role IDs from a string containing role mentions (e.g., "<@&ID1> <@&ID2>")
 const extractRoleIds = (roleString) => {
     if (!roleString) return [];
-    const roleMentions = roleString.match(/<@&(\d+)>/g); // Regex to find role mentions
+    const roleMentions = roleString.match(/<@&(\d+)>/g);
     if (!roleMentions) return [];
-    return roleMentions.map(mention => mention.replace(/<@&|>/g, '')); // Extract just the ID
+    return roleMentions.map(mention => mention.replace(/<@&|>/g, ''));
 };
+
+/**
+ * Creates and updates the roster embed for a given event, for display within the event thread.
+ * @param {string} eventId - The ID of the event.
+ * @param {object} guild - The Discord Guild object.
+ */
+const updateThreadRosterMessage = async (eventId, guild) => {
+    const event = events[eventId];
+    if (!event || !event.threadId || !event.threadRosterMessageId) {
+        writeToLog(`Could not update thread roster for event ${eventId}: Event data or thread/roster message ID missing.`);
+        return;
+    }
+
+    try {
+        const thread = guild.channels.cache.get(event.threadId);
+        if (!thread || !thread.isThread()) {
+            writeToLog(`Could not update thread roster for event ${eventId}: Thread ${event.threadId} not found or not a thread.`);
+            return;
+        }
+
+        const rosterMessage = await thread.messages.fetch(event.threadRosterMessageId);
+
+        const rosterEmbed = new EmbedBuilder()
+            .setTitle(`__Event Roster for ${event.title}__`)
+            .setDescription('**Accepted Participants Breakdown:**')
+            .setColor(0x0099ff);
+
+        const acceptedAttendees = event.attendees.filter(a => a.rsvpStatus === 'Attending');
+        const rolesForDisplay = ['Commander', 'Infantry', 'Armour', 'Recon'];
+        writeToLog(`[updateThreadRosterMessage] Event ${eventId} - Accepted Attendees before role filter: ${JSON.stringify(acceptedAttendees.map(a => `${a.userId}:${a.primaryRole}`))}`);
+
+        for (const roleName of rolesForDisplay) {
+            const membersInRole = acceptedAttendees
+                .filter(a => a.primaryRole === roleName)
+                .map(attendee => { // Directly use 'attendee' as the iterated object
+                    // Use the emoji stored directly on the attendee object (which will be class emoji or role emoji)
+                    return attendee.emoji
+                        ? `<@${attendee.userId}> ${attendee.emoji}`
+                        : `<@${attendee.userId}>`; // Fallback if no emoji set for some reason
+                });
+
+            const fieldValue = membersInRole.length > 0 ? membersInRole.join('\n') : 'No one';
+            rosterEmbed.addFields({ name: `${roleName} ${event.roles.find(r => r.primaryRole === roleName).emoji}`, value: fieldValue, inline: true });
+        }
+
+        if (rolesForDisplay.length % 3 === 1) {
+            rosterEmbed.addFields({ name: '\u200B', value: '\u200B', inline: true });
+            rosterEmbed.addFields({ name: '\u200B', value: '\u200B', inline: true });
+        } else if (rolesForDisplay.length % 3 === 2) {
+            rosterEmbed.addFields({ name: '\u200B', value: '\u200B', inline: true });
+        }
+
+        const tentativeAttendees = event.attendees
+            .filter(a => a.rsvpStatus === 'Tentative')
+            .map(a => `<@${a.userId}>`);
+        const declinedAttendees = event.attendees
+            .filter(a => a.rsvpStatus === 'Declined')
+            .map(a => `<@${a.userId}>`);
+
+        writeToLog(`[updateThreadRosterMessage] Event ${eventId} - Tentative Attendees: ${JSON.stringify(tentativeAttendees)}`);
+        writeToLog(`[updateThreadRosterMessage] Event ${eventId} - Declined Attendees: ${JSON.stringify(declinedAttendees)}`);
+
+
+        rosterEmbed.addFields(
+            { name: 'Tentative 🤔', value: tentativeAttendees.length > 0 ? tentativeAttendees.join('\n') : 'No one', inline: false },
+            { name: 'Declined ❌', value: declinedAttendees.length > 0 ? declinedAttendees.join('\n') : 'No one', inline: false }
+        );
+
+        await rosterMessage.edit({ embeds: [rosterEmbed] });
+        writeToLog(`Thread roster for event "${event.title}" (ID: ${eventId}) updated.`);
+
+    } catch (error) {
+        console.error(`Failed to update thread roster message for event ${eventId}:`, error);
+        writeToLog(`Failed to update thread roster message for event ${eventId}: ${error.message}`);
+    }
+};
+
 
 /**
  * Updates the main event message embed with the current roster breakdown.
@@ -111,12 +198,11 @@ const updateEventRosterEmbed = async (eventId, guild) => {
         }
         const eventMessage = await channel.messages.fetch(event.messageId);
 
-        // Re-create the base embed
         const updatedEmbed = new EmbedBuilder()
             .setTitle(`Event: ${event.title}`)
             .setDescription(event.description)
             .addFields(
-                { name: 'Date', value: moment(event.date, 'YYYY-MM-DD').format('YYYY-MM-DD') },
+                { name: 'Date', value: moment(event.date, 'DD-MM-YYYY').format('DD-MM-YYYY') },
                 { name: 'Time', value: `${event.startTime} - ${event.endTime} (24h format)` }
             );
 
@@ -126,36 +212,39 @@ const updateEventRosterEmbed = async (eventId, guild) => {
         }
 
         if (event.threadOpenHoursBefore > 0) {
-            const openTimeMoment = moment(`${event.date} ${event.startTime}`, 'YYYY-MM-DD HH:mm').subtract(event.threadOpenHoursBefore, 'hours');
-            updatedEmbed.addFields({ name: 'Discussion Thread Opens', value: `**${openTimeMoment.format('YYYY-MM-DD HH:mm')}** (${event.threadOpenHoursBefore} hours before event start)`, inline: false });
+            // Corrected: Use the threadOpenHoursBefore parameter directly, not from event object yet
+            const openTimeMoment = moment(`${event.date} ${event.startTime}`, 'DD-MM-YYYY HH:mm').subtract(event.threadOpenHoursBefore, 'hours');
+            updatedEmbed.addFields({ name: 'Discussion Thread Opens', value: `**${openTimeMoment.format('DD-MM-YYYY HH:mm')}** (${openTimeMoment.fromNow()})`, inline: false });
         } else {
             updatedEmbed.addFields({ name: 'Discussion Thread', value: `Will open at event start time.`, inline: false });
         }
 
-        // --- Add Roster Breakdown ---
         const acceptedAttendees = event.attendees.filter(a => a.rsvpStatus === 'Attending');
-        const rolesForDisplay = ['Commander', 'Infantry', 'Armour', 'Recon']; // Order of roles
+        const rolesForDisplay = ['Commander', 'Infantry', 'Armour', 'Recon'];
+        writeToLog(`[updateEventRosterEmbed] Event ${eventId} - Accepted Attendees before role filter: ${JSON.stringify(acceptedAttendees.map(a => `${a.userId}:${a.primaryRole}`))}`);
 
-        // Prepare fields for each role
+
         for (const roleName of rolesForDisplay) {
             const membersInRole = acceptedAttendees
                 .filter(a => a.primaryRole === roleName)
-                .map(a => `<@${a.userId}>`); // Mention the user
+                .map(attendee => { // Directly use 'attendee' as the iterated object
+                    // Use the emoji stored directly on the attendee object (which will be class emoji or role emoji)
+                    return attendee.emoji
+                        ? `<@${attendee.userId}> ${attendee.emoji}`
+                        : `<@${attendee.userId}>`; // Fallback if no emoji set for some reason
+                });
 
-            // Format for display, defaulting to 'No one' if empty
+
             const fieldValue = membersInRole.length > 0 ? membersInRole.join('\n') : 'No one';
             updatedEmbed.addFields({ name: `${roleName} ${event.roles.find(r => r.primaryRole === roleName).emoji}`, value: fieldValue, inline: true });
         }
-        // Add an empty field to ensure even spacing if there are not 3 fields in a row
-        // Discord embeds try to put 3 inline fields per row.
-        if (rolesForDisplay.length % 3 === 1) { // If 1 or 4 fields, add 2 empty
+        if (rolesForDisplay.length % 3 === 1) {
             updatedEmbed.addFields({ name: '\u200B', value: '\u200B', inline: true });
             updatedEmbed.addFields({ name: '\u200B', value: '\u200B', inline: true });
-        } else if (rolesForDisplay.length % 3 === 2) { // If 2 or 5 fields, add 1 empty
+        } else if (rolesForDisplay.length % 3 === 2) {
              updatedEmbed.addFields({ name: '\u200B', value: '\u200B', inline: true });
         }
 
-        // Add a field for 'Tentative' and 'Declined' attendees
         const tentativeAttendees = event.attendees
             .filter(a => a.rsvpStatus === 'Tentative')
             .map(a => `<@${a.userId}>`);
@@ -163,13 +252,14 @@ const updateEventRosterEmbed = async (eventId, guild) => {
             .filter(a => a.rsvpStatus === 'Declined')
             .map(a => `<@${a.userId}>`);
 
+        writeToLog(`[updateEventRosterEmbed] Event ${eventId} - Tentative Attendees: ${JSON.stringify(tentativeAttendees)}`);
+        writeToLog(`[updateEventRosterEmbed] Event ${eventId} - Declined Attendees: ${JSON.stringify(declinedAttendees)}`);
+
         updatedEmbed.addFields(
             { name: 'Tentative 🤔', value: tentativeAttendees.length > 0 ? tentativeAttendees.join('\n') : 'No one', inline: false },
             { name: 'Declined ❌', value: declinedAttendees.length > 0 ? declinedAttendees.join('\n') : 'No one', inline: false }
         );
 
-
-        // Re-create the RSVP buttons
         const row = new ActionRowBuilder()
             .addComponents(
                 new ButtonBuilder()
@@ -186,7 +276,6 @@ const updateEventRosterEmbed = async (eventId, guild) => {
                     .setStyle(ButtonStyle.Danger),
             );
 
-        // Edit the original message with the updated embed and components
         await eventMessage.edit({ embeds: [updatedEmbed], components: [row] });
         writeToLog(`Roster for event "${event.title}" (ID: ${eventId}) updated.`);
 
@@ -204,7 +293,7 @@ const updateEventRosterEmbed = async (eventId, guild) => {
  * @param {object} guild - The Discord Guild object where the event is created.
  */
 const scheduleThreadOpening = (eventId, eventDetails, guild) => {
-    const eventDateTime = moment(`${eventDetails.date} ${eventDetails.startTime}`, 'YYYY-MM-DD HH:mm');
+    const eventDateTime = moment(`${eventDetails.date} ${eventDetails.startTime}`, 'DD-MM-YYYY HH:mm');
     const openTime = moment(eventDateTime).subtract(eventDetails.threadOpenHoursBefore, 'hours');
     const now = moment();
 
@@ -222,19 +311,27 @@ const scheduleThreadOpening = (eventId, eventDetails, guild) => {
 
             const eventMessage = await channel.messages.fetch(eventDetails.messageId);
             
+            writeToLog(`[scheduleThreadOpening] Attempting to start thread for event ${eventId} from message ${eventDetails.messageId}.`);
             const thread = await eventMessage.startThread({
                 name: `${eventDetails.title} Discussion`,
                 autoArchiveDuration: 60,
                 type: ChannelType.PublicThread,
             });
+            writeToLog(`[scheduleThreadOpening] Successfully started thread for event ${eventId}. New thread ID: ${thread.id}`);
+
 
             events[eventId].threadId = thread.id;
             events[eventId].threadOpenedAt = moment().toISOString();
             writeToLog(`Thread "${eventDetails.title} Discussion" opened for event ${eventId} (Thread ID: ${thread.id})`);
 
+            const initialThreadRosterMessage = await thread.send({ embeds: [new EmbedBuilder().setTitle('Loading Roster...')], content: 'Roster will appear here once updated.' });
+            events[eventId].threadRosterMessageId = initialThreadRosterMessage.id;
+            await updateThreadRosterMessage(eventId, guild);
+
             for (const attendee of events[eventId].attendees) {
                 if (attendee.rsvpStatus === 'Attending') {
                     try {
+                        writeToLog(`[scheduleThreadOpening] Attempting to add user ${attendee.userId} to thread ${thread.id}.`);
                         const member = await guild.members.fetch(attendee.userId);
                         if (member) {
                             await thread.members.add(member.id);
@@ -251,8 +348,8 @@ const scheduleThreadOpening = (eventId, eventDetails, guild) => {
             scheduleThreadDeletion(eventId, eventDetails, thread.id, guild);
 
         } catch (threadError) {
-            console.error(`Error during scheduled thread opening for event ${eventId}:`, threadError);
-            writeToLog(`Error during scheduled thread opening for event ${eventId}: ${threadError.message}`);
+                console.error(`Error during scheduled thread opening for event ${eventId}:`, threadError);
+                writeToLog(`Error during scheduled thread opening for event ${eventId}: ${threadError.message}`);
         }
     }, delay);
 };
@@ -266,7 +363,7 @@ const scheduleThreadOpening = (eventId, eventDetails, guild) => {
  * @param {object} guild - The Discord Guild object where the event is created.
  */
 const scheduleThreadDeletion = (eventId, eventDetails, threadId, guild) => {
-    const eventEndDateTime = moment(`${eventDetails.date} ${eventDetails.endTime}`, 'YYYY-MM-DD HH:mm');
+    const eventEndDateTime = moment(`${eventDetails.date} ${eventDetails.endTime}`, 'DD-MM-YYYY HH:mm');
     const deleteTime = moment(eventEndDateTime).add(1, 'day').startOf('day').add(1, 'minute');
     const now = moment();
 
@@ -281,6 +378,7 @@ const scheduleThreadDeletion = (eventId, eventDetails, threadId, guild) => {
                 await thread.delete();
                 events[eventId].threadId = null;
                 events[eventId].threadOpenedAt = null;
+                events[eventId].threadRosterMessageId = null;
                 writeToLog(`Thread ${threadId} for event ${eventId} deleted.`);
             } else {
                 writeToLog(`Failed to delete thread for event ${eventId}: Thread ${threadId} not found or not a thread.`);
@@ -297,34 +395,55 @@ const scheduleThreadDeletion = (eventId, eventDetails, threadId, guild) => {
  * Handles the creation of a new event.
  * @param {object} channel - The Discord channel where the command was issued.
  * @param {string} title - The title of the event.
- * @param {string} date - The date of the event (YYYY-MM-DD).
+ * @param {string} date - The date of the event (DD-MM-YYYY).
  * @param {string} startTime - The start time of the event (HH:MM).
  * @param {string} endTime - The end time of the event (HH:MM).
- * @param {string} description - The description of the event.
  * @param {string[]} restrictedRoleIds - Array of role IDs that can access this event.
- * @param {Function} replyMethod - The function used to reply to the command/interaction.
+ * @param {object} interaction - The Discord interaction object.
  * @param {object} guild - The Discord Guild object.
  * @param {number} threadOpenHoursBefore - Hours before event start to open discussion thread.
  */
-const handleCreateEvent = async (channel, title, date, startTime, endTime, description, restrictedRoleIds, replyMethod, guild, threadOpenHoursBefore) => {
+const handleCreateEvent = async (channel, title, date, startTime, endTime, description, restrictedRoleIds, interaction, guild, threadOpenHoursBefore) => {
     if (!channel) {
-        await replyMethod({ content: 'Could not determine the channel to send the event message. Please ensure the bot has "View Channel" and "Send Messages" permissions in this channel.', ephemeral: true });
+        if (!interaction.deferred && !interaction.replied) {
+            await interaction.reply({ content: 'Could not determine the channel to send the event message. Please ensure the bot has "View Channel" and "Send Messages" permissions in this channel.', flags: [MessageFlags.Ephemeral] });
+        } else {
+            await interaction.followUp({ content: 'Could not determine the channel to send the event message. Please ensure the bot has "View Channel" and "Send Messages" permissions in this channel.', flags: [MessageFlags.Ephemeral] });
+        }
         writeToLog(`Failed to create event "${title}" - Channel object was null or undefined.`);
         return;
     }
 
-    const eventId = `${title}-${moment(`${date} ${startTime}`, 'YYYY-MM-DD HH:mm').format('YYYY-MM-DD HH:mm')}`;
+    const eventId = `${title}-${moment(`${date} ${startTime}`, 'DD-MM-YYYY HH:mm').format('DD-MM-YYYY HH:mm')}`;
     
     if (events[eventId]) {
-        await replyMethod({ content: 'An event with this title, date, and start time already exists!', ephemeral: true });
+        await interaction.followUp({ content: 'An event with this title, date, and start time already exists!', flags: [MessageFlags.Ephemeral] });
         writeToLog(`Attempted to create duplicate event: "${title}" at ${date} ${startTime}`);
         return;
     }
 
+    // Define all roles and their nested classes/emojis directly here
     const defaultPrimaryRoles = [
         { primaryRole: 'Commander', emoji: '👑', classes: [] },
-        { primaryRole: 'Infantry', emoji: '🛡️', classes: [] },
-        { primaryRole: 'Armour', emoji: '🪖', classes: [] },
+        { primaryRole: 'Infantry', emoji: '🛡️',
+            classes: [
+                { className: 'Anti-Tank', emoji: '💥' },
+                { className: 'Assault', emoji: '🏃' },
+                { className: 'Automatic Rifleman', emoji: '💨' },
+                { className: 'Engineer', emoji: '🛠️' },
+                { className: 'Machine Gunner', emoji: '🔫' },
+                { className: 'Medic', emoji: '🩹' },
+                { className: 'Officer', emoji: '🌟' }, // Officer is here, but will be conditionally added to menu
+                { className: 'Rifleman', emoji: '🎯' },
+                { className: 'Support', emoji: '📦' },
+            ]
+        },
+        { primaryRole: 'Armour', emoji: '🪖',
+            classes: [
+                { className: 'Tank Commander', emoji: '🪖' }, // Assuming a different emoji for clarity
+                { className: 'Crewman', emoji: '🔧' },
+            ]
+        },
         { primaryRole: 'Recon', emoji: '🔭', classes: [] },
     ];
 
@@ -333,22 +452,23 @@ const handleCreateEvent = async (channel, title, date, startTime, endTime, descr
         date,
         startTime,
         endTime,
-        description,
+        description, // Ensure description is passed here
         restrictedRoles: restrictedRoleIds,
         attendees: [],
-        roles: defaultPrimaryRoles,
-        threadOpenHoursBefore: threadOpenHoursBefore,
+        roles: defaultPrimaryRoles, // Assign the detailed roles structure
+        threadOpenHoursBefore: threadOpenHoursBefore, // Use the parameter directly
         channelId: channel.id,
         messageId: null,
         threadId: null,
         threadOpenedAt: null,
+        threadRosterMessageId: null,
     };
 
     const embed = new EmbedBuilder()
         .setTitle(`Event: ${title}`)
         .setDescription(description)
         .addFields(
-            { name: 'Date', value: moment(date, 'YYYY-MM-DD').format('YYYY-MM-DD') },
+            { name: 'Date', value: moment(date, 'DD-MM-YYYY').format('DD-MM-YYYY') },
             { name: 'Time', value: `${startTime} - ${endTime} (24h format)` }
         );
 
@@ -358,13 +478,13 @@ const handleCreateEvent = async (channel, title, date, startTime, endTime, descr
     }
 
     if (threadOpenHoursBefore > 0) {
-        const openTimeMoment = moment(`${date} ${startTime}`, 'YYYY-MM-DD HH:mm').subtract(threadOpenHoursBefore, 'hours');
-        embed.addFields({ name: 'Discussion Thread Opens', value: `**${openTimeMoment.format('YYYY-MM-DD HH:mm')}** (${threadOpenHoursBefore} hours before event start)`, inline: false });
+        // Corrected: Use the threadOpenHoursBefore parameter directly, not from event object yet
+        const openTimeMoment = moment(`${date} ${startTime}`, 'DD-MM-YYYY HH:mm').subtract(threadOpenHoursBefore, 'hours');
+        embed.addFields({ name: 'Discussion Thread Opens', value: `**${openTimeMoment.format('DD-MM-YYYY HH:mm')}** (${openTimeMoment.fromNow()})`, inline: false });
     } else {
         embed.addFields({ name: 'Discussion Thread', value: `Will open at event start time.`, inline: false });
     }
 
-    // Create RSVP buttons
     const row = new ActionRowBuilder()
         .addComponents(
             new ButtonBuilder()
@@ -381,74 +501,50 @@ const handleCreateEvent = async (channel, title, date, startTime, endTime, descr
                 .setStyle(ButtonStyle.Danger),
         );
 
-    const eventMessage = await channel.send({
-        embeds: [embed],
-        components: [row]
-    });
-
-    events[eventId].messageId = eventMessage.id;
-
-    // Call updateRosterEmbed immediately to show initial empty roster
-    await updateEventRosterEmbed(eventId, guild);
-
-    scheduleThreadOpening(eventId, events[eventId], guild);
-
-    await replyMethod(`Event "${title}" created with ID: \`${eventId}\`! The discussion thread will open ${threadOpenHoursBefore} hours before the event starts. Default roles (Commander, Infantry, Armour, Recon) have been automatically added.`);
-    writeToLog(`Event created: "${title}" (ID: ${eventId}) on ${date} from ${startTime} to ${endTime} with thread opening ${threadOpenHoursBefore} hours before. Default roles added.`);
-};
-
-
-// Note: handleCreatePrimaryRole function is removed as roles are now automatically included.
-// handleAssignClassToUser is removed as role selection is now part of RSVP flow for simplicity.
-
-
-/**
- * Displays the defined roles and classes for a given event.
- * This is now mainly handled by `updateEventRosterEmbed` on the main event message.
- * This helper is retained for potential future text-based display needs or debugging.
- * @param {string} eventId - The ID of the event.
- * @param {Function} replyMethod - The function used to reply to the command/interaction.
- */
-const handleDisplayRolesAndClasses = async (eventId, replyMethod) => {
-    if (!events[eventId]) {
-        await replyMethod({ content: 'Event not found! Please use a valid Event ID.', ephemeral: true });
-        writeToLog(`Attempted to display roles for non-existent event: ${eventId}`);
-        return;
-    }
-
-    const event = events[eventId];
-    let roleInfo = '';
-    if (event.roles.length === 0) {
-        roleInfo = 'No roles and classes defined for this event yet.';
-    } else {
-        event.roles.forEach(role => {
-            roleInfo += `**${role.primaryRole}**: ${role.emoji}\n`;
-            if (role.classes.length > 0) {
-                role.classes.forEach(classObj => {
-                    roleInfo += `  - **${classObj.className}**: ${classObj.emoji}\n`;
-                });
-            } else {
-                roleInfo += `  (No specific classes defined for this role yet)\n`;
-            }
+    try {
+        writeToLog(`[handleCreateEvent] Attempting to editReply with main event message for event: ${title}`);
+        const eventMessage = await interaction.editReply({
+            embeds: [embed],
+            components: [row]
         });
-    }
+        writeToLog(`[handleCreateEvent] Successfully edited reply for event: ${title}. Message ID: ${eventMessage.id}`);
 
-    await replyMethod(`Roles and Classes for event "${event.title}":\n${roleInfo}`);
-    writeToLog(`Displayed roles and classes for event: "${event.title}"`);
+
+        events[eventId].messageId = eventMessage.id;
+        writeToLog(`Main event message sent for event "${title}" (ID: ${eventId}).`);
+
+        await updateEventRosterEmbed(eventId, guild);
+        writeToLog(`Scheduling thread opening for event ${eventId}.`);
+        scheduleThreadOpening(eventId, events[eventId], guild);
+        writeToLog(`Event "${title}" fully set up (scheduling complete).`);
+
+    } catch (sendError) {
+        console.error(`Failed to send main event message (editReply) for event "${title}":`, sendError);
+        writeToLog(`Failed to send main event message (editReply) for event "${title}": ${sendError.message}`);
+        try {
+            if (!interaction.replied) {
+                await interaction.followUp({ content: `An error occurred while posting the main event message. Please check bot permissions. Error: ${sendError.message}`, flags: [MessageFlags.Ephemeral] });
+            } else if (interaction.deferred) {
+                 await interaction.followUp({ content: `An error occurred while finalizing the event message. Please check bot permissions. Error: ${sendError.message}`, flags: [MessageFlags.Ephemeral] });
+            }
+        } catch (fallbackError) {
+            console.error(`Failed to send fallback error message after editReply failed: ${fallbackError.message}`);
+            writeToLog(`Failed to send fallback error message after editReply failed: ${fallbackError.message}`);
+        }
+    }
 };
 
 /**
  * Handles RSVP status updates for a user for a given event.
- * This function is now also responsible for triggering role selection if needed.
- * @param {Function} replyMethod - The function used to reply to the command/interaction.
  * @param {string} eventId - The ID of the event.
  * @param {string} userId - The ID of the user whose RSVP status is being updated.
- * @param {string} status - The new RSVP status (Attending, Tentative, Declined).
+ * @param {string} rawStatusFromButton - The raw status string from the button customId (e.g., 'accept', 'tentative', 'decline').
  * @param {object} guild - The Discord Guild object.
+ * @param {object} interaction - The Discord interaction object, for followUp.
  */
-const handleRSVP = async (replyMethod, eventId, userId, status, guild) => {
+const handleRSVP = async (eventId, userId, rawStatusFromButton, guild, interaction) => {
     if (!events[eventId]) {
-        await replyMethod({ content: 'Event not found! Please use a valid Event ID.', ephemeral: true });
+        await interaction.followUp({ content: 'Event not found! Please use a valid Event ID.', flags: [MessageFlags.Ephemeral] });
         writeToLog(`Attempted RSVP for non-existent event: ${eventId}`);
         return;
     }
@@ -456,11 +552,10 @@ const handleRSVP = async (replyMethod, eventId, userId, status, guild) => {
     const event = events[eventId];
     const member = await guild.members.fetch(userId);
 
-    // Role restriction check for RSVP
     if (event.restrictedRoles && event.restrictedRoles.length > 0) {
         const hasRequiredRole = event.restrictedRoles.some(roleId => member.roles.cache.has(roleId));
         if (!hasRequiredRole) {
-            await replyMethod({ content: `You do not have the required role(s) to RSVP for this event. Required roles: ${event.restrictedRoles.map(id => `<@&${id}>`).join(', ')}`, ephemeral: true });
+            await interaction.followUp({ content: `You do not have the required role(s) to RSVP for this event. Required roles: ${event.restrictedRoles.map(id => `<@&${id}>`).join(', ')}`, flags: [MessageFlags.Ephemeral] });
             writeToLog(`User ${userId} attempted to RSVP for event "${event.title}" but lacks required roles.`);
             return;
         }
@@ -468,83 +563,158 @@ const handleRSVP = async (replyMethod, eventId, userId, status, guild) => {
 
     let attendee = event.attendees.find(a => a.userId === userId);
 
-    // If attendee doesn't exist, create a new entry for them.
-    // Their initial primaryRole will be null until they select one.
     if (!attendee) {
-        attendee = { userId, rsvpStatus: null, primaryRole: null };
+        attendee = { userId, rsvpStatus: null, primaryRole: null, className: null, emoji: null }; // Initialize className and emoji
         event.attendees.push(attendee);
         writeToLog(`New attendee ${userId} added to event "${event.title}".`);
     }
 
-    if (status === 'Attending') {
-        // Update status to Attending
-        attendee.rsvpStatus = status;
+    writeToLog(`[handleRSVP] Before status update - User ${userId} raw RSVP: ${rawStatusFromButton}. Attendee: ${JSON.stringify(attendee)}`);
 
-        if (attendee.primaryRole === null) {
-            // Prompt for role selection if they don't have one yet
-            const selectMenu = new ActionRowBuilder()
-                .addComponents(
-                    new StringSelectMenuBuilder()
-                        .setCustomId(`select_role_${eventId}`)
-                        .setPlaceholder('Choose your primary role...')
-                        .addOptions(
-                            event.roles.map(role => new StringSelectMenuOptionBuilder()
-                                .setLabel(`${role.primaryRole} ${role.emoji}`)
-                                .setValue(role.primaryRole)
-                            )
-                        ),
-                );
-            
-            await replyMethod({ content: `Your RSVP for event "${event.title}" is **Accepted**! Now, please select your primary role:`, components: [selectMenu], ephemeral: true });
-            writeToLog(`User ${userId} accepted event "${event.title}" and prompted for role selection.`);
-        } else {
-            // Already has a role, just confirm status update
-            await replyMethod({ content: `Your RSVP status for event "${event.title}" updated to: **${status}**`, ephemeral: true });
-            writeToLog(`User ${userId} updated RSVP status to "${status}" for event "${event.title}".`);
+    let newRsvpStatus;
+    switch (rawStatusFromButton.toLowerCase()) {
+        case 'accept':
+            newRsvpStatus = 'Attending'; // Standardize to 'Attending' for accepted
+            break;
+        case 'tentative':
+            newRsvpStatus = 'Tentative'; // Already consistent
+            break;
+        case 'decline':
+            newRsvpStatus = 'Declined'; // Standardize to 'Declined'
+            break;
+        default:
+            writeToLog(`[handleRSVP] Unknown RSVP status received: ${rawStatusFromButton} for user ${userId}`);
+            return;
+    }
+
+    attendee.rsvpStatus = newRsvpStatus;
+
+    if (newRsvpStatus === 'Tentative' || newRsvpStatus === 'Declined') {
+        if (attendee.primaryRole !== null || attendee.className !== null) {
+            writeToLog(`User ${userId} changed RSVP to ${newRsvpStatus}, clearing previous role and class: ${attendee.primaryRole} - ${attendee.className}`);
+            attendee.primaryRole = null; // Clear primary role if no longer attending
+            attendee.className = null;   // Clear class if no longer attending
+            attendee.emoji = null;       // Clear emoji
         }
+        await interaction.deleteReply().catch(error => writeToLog(`Failed to delete ephemeral reply for user ${userId}: ${error.message}`));
+        writeToLog(`User ${userId} updated RSVP status to "${newRsvpStatus}" for event "${event.title}".`);
 
-        // Add user to thread if it's open
-        if (event.threadId && event.threadOpenedAt) {
-            try {
-                const thread = guild.channels.cache.get(event.threadId);
-                if (thread && thread.isThread()) {
-                    await thread.members.add(userId);
-                    writeToLog(`User ${userId} added to thread ${event.threadId} after accepting RSVP.`);
-                }
-            } catch (addError) {
-                console.error(`Failed to add user ${userId} to thread ${event.threadId} after RSVP:`, addError);
-                writeToLog(`Failed to add user ${userId} to thread ${event.threadId} after RSVP: ${addError.message}`);
+    } else if (newRsvpStatus === 'Attending') {
+        // Prepare options for the primary role selection menu, applying role-based filtering
+        let rolesForPrimarySelection = event.roles.map(role => {
+            let addRole = true;
+            if (role.primaryRole === 'Commander' && !member.roles.cache.has(CMDR_CERTIFIED_ROLE_ID)) {
+                addRole = false;
+            } else if (role.primaryRole === 'Recon' && !member.roles.cache.has(RECON_CERTIFIED_ROLE_ID)) {
+                addRole = false;
+            }
+            return addRole ? new StringSelectMenuOptionBuilder()
+                .setLabel(`${role.primaryRole} ${role.emoji}`)
+                .setValue(role.primaryRole) : null;
+        }).filter(Boolean); // Filter out nulls
+
+        // If primary role needs to be selected
+        if (!attendee.primaryRole) {
+            if (rolesForPrimarySelection.length > 0) {
+                const selectRoleMenu = new ActionRowBuilder()
+                    .addComponents(
+                        new StringSelectMenuBuilder()
+                            .setCustomId(`select_role_${eventId}`)
+                            .setPlaceholder('Choose your primary role...')
+                            .addOptions(rolesForPrimarySelection),
+                    );
+                await interaction.editReply({ content: `Your RSVP for event "${event.title}" is **Accepted**! Now, please select your primary role:`, components: [selectRoleMenu], flags: [MessageFlags.Ephemeral] });
+                writeToLog(`User ${userId} accepted event "${event.title}" and prompted for primary role selection.`);
+            } else {
+                // Should not happen if there's at least one non-restricted role, but good for edge cases
+                await interaction.deleteReply().catch(error => writeToLog(`Failed to delete ephemeral reply for user ${userId}: ${error.message}`));
+                await interaction.followUp({ content: `You accepted for event "${event.title}", but no primary roles are available for you to select.`, flags: [MessageFlags.Ephemeral] });
+                writeToLog(`User ${userId} accepted but no primary roles were available.`);
             }
         }
-    } else { // Tentative or Declined
-        // Update status
-        attendee.rsvpStatus = status;
-        await replyMethod({ content: `Your RSVP status for event "${event.title}" updated to: **${status}**`, ephemeral: true });
-        writeToLog(`User ${userId} updated RSVP status to "${status}" for event "${event.title}".`);
+        // Then handle class selection if a class-based primary role (like Infantry or Armour) is selected and no class is chosen yet
+        else if ((attendee.primaryRole === 'Infantry' || attendee.primaryRole === 'Armour') && !attendee.className) {
+            const primaryRoleObj = event.roles.find(r => r.primaryRole === attendee.primaryRole);
+            let classesForSelection = primaryRoleObj ? primaryRoleObj.classes : [];
 
-        // Remove user from thread if they were attending
-        if (event.threadId && event.threadOpenedAt) {
-            try {
-                const thread = guild.channels.cache.get(event.threadId);
-                if (thread && thread.isThread()) {
-                    const threadMember = await thread.members.fetch(userId).catch(() => null);
-                    if (threadMember) { // Only remove if they are actually in the thread
-                        await thread.members.remove(userId);
-                        writeToLog(`User ${userId} removed from thread ${event.threadId} after changing RSVP from Attending.`);
-                    }
+            // Apply conditional filtering based on primary role
+            if (attendee.primaryRole === 'Infantry') {
+                const isSLCertified = member.roles.cache.has(SL_CERTIFIED_ROLE_ID);
+                if (!isSLCertified) {
+                    classesForSelection = classesForSelection.filter(c => c.className !== 'Officer');
+                    writeToLog(`User ${userId} is not SL certified, "Officer" class filtered out for Infantry selection.`);
                 }
-            } catch (removeError) {
-                console.error(`Failed to remove user ${userId} from thread ${event.threadId} after RSVP change:`, removeError);
-                writeToLog(`Failed to remove user ${userId} from thread ${event.threadId} after RSVP change: ${removeError.message}`);
+            } else if (attendee.primaryRole === 'Armour') {
+                const isTCCertified = member.roles.cache.has(TC_CERTIFIED_ROLE_ID);
+                if (!isTCCertified) {
+                    classesForSelection = classesForSelection.filter(c => c.className !== 'Tank Commander');
+                    writeToLog(`User ${userId} is not TC certified, "Tank Commander" class filtered out for Armour selection.`);
+                }
             }
+
+            if (classesForSelection.length > 0) {
+                const selectClassMenu = new ActionRowBuilder()
+                    .addComponents(
+                        new StringSelectMenuBuilder()
+                            .setCustomId(`select_class_${eventId}`) // Generic ID for class selection
+                            .setPlaceholder(`Choose your ${attendee.primaryRole} class...`)
+                            .addOptions(
+                                classesForSelection.map(cls => new StringSelectMenuOptionBuilder()
+                                    .setLabel(`${cls.className} ${cls.emoji}`)
+                                    .setValue(cls.className)
+                                )
+                            ),
+                    );
+                await interaction.editReply({ content: `You have selected **${attendee.primaryRole}**. Now, please select your specific class:`, components: [selectClassMenu], flags: [MessageFlags.Ephemeral] });
+                writeToLog(`User ${userId} selected ${attendee.primaryRole} and prompted for class selection.`);
+            } else {
+                // If no classes are available after filtering (e.g., if TC was the only option for Armour and user isn't certified)
+                await interaction.deleteReply().catch(error => writeToLog(`Failed to delete ephemeral reply for user ${userId}: ${error.message}`));
+                await interaction.followUp({ content: `You accepted **${attendee.primaryRole}** for event "${event.title}", but no classes are available for you to select.`, flags: [MessageFlags.Ephemeral] });
+                writeToLog(`User ${userId} accepted ${attendee.primaryRole} but no classes were available.`);
+            }
+        } 
+        // If already has both primary role and class, then just update roster
+        else {
+            await interaction.deleteReply().catch(error => writeToLog(`Failed to delete ephemeral reply for user ${userId}: ${error.message}`));
+            writeToLog(`User ${userId} updated RSVP status to "Attending" for event "${event.title}". Role: ${attendee.primaryRole}, Class: ${attendee.className}.`);
         }
     }
 
-    // Always update the roster embed after any RSVP action
-    await updateEventRosterEmbed(eventId, guild);
-};
 
-// handleShowEventRoles is removed as roster is now displayed in main event message.
+    if (event.threadId && event.threadOpenedAt) {
+        try {
+            const thread = guild.channels.cache.get(event.threadId);
+            if (thread && thread.isThread()) {
+                if (newRsvpStatus === 'Attending') {
+                    writeToLog(`[handleRSVP] Attempting to add user ${userId} to thread ${thread.id}.`);
+                    await thread.members.add(userId);
+                    writeToLog(`[handleRSVP] Successfully added user ${userId} to thread ${thread.id}.`);
+                } else {
+                    writeToLog(`[handleRSVP] Attempting to remove user ${userId} from thread ${thread.id}.`);
+                    const threadMember = await thread.members.fetch(userId).catch(() => null);
+                    if (threadMember) {
+                        await thread.members.remove(userId);
+                        writeToLog(`[handleRSVP] Successfully removed user ${userId} from thread ${thread.id}.`);
+                    } else {
+                        writeToLog(`[handleRSVP] User ${userId} not found in thread ${thread.id}, no removal needed.`);
+                    }
+                }
+            } else {
+                writeToLog(`[handleRSVP] Thread ${event.threadId} not found or not a thread for user ${userId}.`);
+            }
+        } catch (threadMemberError) {
+            console.error(`Failed to update user ${userId} in thread ${event.threadId}:`, threadMemberError);
+            writeToLog(`Failed to update user ${userId} in thread ${event.threadId}: ${threadMemberError.message}`);
+        }
+    }
+
+    writeToLog(`[handleRSVP] After status update - Event ${eventId} attendees: ${JSON.stringify(events[eventId].attendees.map(a => `${a.userId}:${a.rsvpStatus}:${a.primaryRole}:${a.className}`))}`);
+    await updateEventRosterEmbed(eventId, guild);
+    if (event.threadId && event.threadRosterMessageId) {
+        await updateThreadRosterMessage(eventId, guild);
+    }
+};
 
 
 // --- Slash Command Definitions ---
@@ -561,8 +731,8 @@ const commands = [
             },
             {
                 name: 'date',
-                type: 3, // String (YYYY-MM-DD)
-                description: 'The date of the event (YYYY-MM-DD)',
+                type: 3, // String (DD-MM-YYYY)
+                description: 'The date of the event (DD-MM-YYYY)',
                 required: true,
             },
             {
@@ -597,39 +767,31 @@ const commands = [
             },
         ],
     },
-    // Removed createprimaryrole command definition
-    // Removed assignclass command definition
-    // Removed displayroles command definition
-    // Removed rsvp command definition
-    // Removed showeventroles command definition
 ];
 
-// Function to register slash commands with Discord's API
 const registerSlashCommands = async () => {
     const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
     const CLIENT_ID = process.env.CLIENT_ID;
-    const GUILD_ID = process.env.GUILD_ID; // Guild-specific for faster updates during development
+    const GUILD_ID = process.env.GUILD_ID;
 
     if (!CLIENT_ID) {
         console.error('CLIENT_ID is not defined in .env! Cannot register commands.');
-        writeToLog('CLIENT_ID is not defined in .env! Cannot register commands.');
+        writeToLog(`CLIENT_ID is not defined in .env! Cannot register commands.`);
         return;
     }
 
     try {
         console.log('Started refreshing application (/) commands.');
-        writeToLog('Started refreshing application (/) commands.');
+        writeToLog(`Started refreshing application (/) commands.`);
 
         if (GUILD_ID) {
-            // Register guild-specific commands (faster updates)
             await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
             console.log(`Successfully reloaded application (/) commands for guild ${GUILD_ID}.`);
             writeToLog(`Successfully reloaded application (/) commands for guild ${GUILD_ID}.`);
         } else {
-            // Deploy global commands (takes up to an hour to propagate)
             await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
             console.log('Successfully reloaded application (/) commands globally.');
-            writeToLog('Successfully reloaded application (/) commands globally.');
+            writeToLog(`Successfully reloaded application (/) commands globally.`);
         }
 
     } catch (error) {
@@ -641,16 +803,28 @@ const registerSlashCommands = async () => {
 
 // --- Event Listeners for Discord Client ---
 
-// Handles all incoming interactions (slash commands, buttons, select menus, etc.)
 client.on('interactionCreate', async (interaction) => {
-    // Defer reply for slash commands to ensure sufficient time for processing
+    // Defer reply for ALL chat input commands immediately (ephemeral false for main command visibility)
     if (interaction.isChatInputCommand()) {
         await interaction.deferReply({ ephemeral: false });
+        writeToLog(`Interaction deferred for chat input command: /${interaction.commandName}`);
+    }
+    // Defer reply for ALL button interactions immediately (ephemeral for button clicks)
+    if (interaction.isButton()) {
+        await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
+        writeToLog(`Interaction deferred for button click: ${interaction.customId}`);
+    }
+    // Defer update for ALL string select menu interactions immediately
+    // Note: deferUpdate is for component interactions where you intend to update the original message.
+    // If you plan to send a new message instead, use deferReply.
+    if (interaction.isStringSelectMenu()) {
+        await interaction.deferUpdate(); // Acknowledges the interaction. The actual response will be a DM or clearing of components.
+        writeToLog(`Interaction deferred (update) for select menu: ${interaction.customId}`);
     }
 
     try {
-        if (interaction.isChatInputCommand()) { // Handle Slash Commands
-            const { commandName, options, channel, user, guild } = interaction;
+        if (interaction.isChatInputCommand()) {
+            const { commandName, options, channel, guild } = interaction;
 
             if (commandName === 'createevent') {
                 const title = options.getString('title');
@@ -662,63 +836,170 @@ client.on('interactionCreate', async (interaction) => {
                 const restrictedRolesString = options.getString('restricted_roles');
                 const restrictedRoleIds = extractRoleIds(restrictedRolesString);
 
-                await handleCreateEvent(channel, title, date, startTime, endTime, description, restrictedRoleIds, interaction.followUp.bind(interaction), guild, threadOpenHoursBefore);
+                await handleCreateEvent(channel, title, date, startTime, endTime, description, restrictedRoleIds, interaction, guild, threadOpenHoursBefore);
 
             }
-        } else if (interaction.isButton()) { // Handle Button Interactions (like RSVP buttons)
+        } else if (interaction.isButton()) {
             const { customId, user, guild } = interaction;
-            await interaction.deferReply({ ephemeral: true });
 
             if (customId.startsWith('rsvp_')) {
                 const parts = customId.split('_');
-                const status = parts[1].charAt(0).toUpperCase() + parts[1].slice(1);
+                const rawStatusFromButton = parts[1]; // 'accept', 'tentative', 'decline'
                 const eventId = parts.slice(2).join('_');
 
-                await handleRSVP(interaction.followUp.bind(interaction), eventId, user.id, status, guild);
+                await handleRSVP(eventId, user.id, rawStatusFromButton, guild, interaction);
             }
-        } else if (interaction.isStringSelectMenu()) { // Handle Select Menu Interactions
+        } else if (interaction.isStringSelectMenu()) {
             const { customId, values, user, guild } = interaction;
-            await interaction.deferUpdate(); // Acknowledge the select menu interaction immediately
 
-            if (customId.startsWith('select_role_')) {
-                const eventId = customId.replace('select_role_', '');
-                const selectedRole = values[0]; // Get the selected value from the menu
+            const eventId = customId.split('_').slice(2).join('_'); // Extract event ID from customId
+            const selectedValue = values[0]; // Get the selected value
 
-                if (!events[eventId]) {
-                    await interaction.followUp({ content: 'Event not found! Could not assign role.', ephemeral: true });
-                    writeToLog(`Error assigning role: Event ${eventId} not found for select menu interaction.`);
-                    return;
-                }
-
-                const attendeeIndex = events[eventId].attendees.findIndex(a => a.userId === user.id);
-                if (attendeeIndex !== -1) {
-                    events[eventId].attendees[attendeeIndex].primaryRole = selectedRole;
-                    // Ensure RSVP status is "Attending" if role is selected, in case it was pending
-                    events[eventId].attendees[attendeeIndex].rsvpStatus = 'Attending';
-                    await interaction.followUp({ content: `You have selected **${selectedRole}** for event "${events[eventId].title}".`, ephemeral: true });
-                    writeToLog(`User ${user.id} selected role "${selectedRole}" for event "${events[eventId].title}".`);
-
-                    // Update the event roster embed after role selection
-                    await updateEventRosterEmbed(eventId, guild);
-                } else {
-                    await interaction.followUp({ content: 'Could not find your RSVP for this event to assign a role. Please try RSVPing again.', ephemeral: true });
-                    writeToLog(`Could not find attendee ${user.id} for event ${eventId} during role selection.`);
-                }
+            if (!events[eventId]) {
+                await interaction.followUp({ content: 'Event not found! Could not process your selection. Please try RSVPing again or contact an admin.', flags: [MessageFlags.Ephemeral] });
+                writeToLog(`Error processing select menu: Event ${eventId} not found for user ${user.id}.`);
+                return;
             }
+
+            const event = events[eventId];
+            const attendeeIndex = event.attendees.findIndex(a => a.userId === user.id);
+            if (attendeeIndex === -1) {
+                await interaction.followUp({ content: 'Could not find your RSVP for this event. Please try RSVPing again.', flags: [MessageFlags.Ephemeral] });
+                writeToLog(`Could not find attendee ${user.id} for event ${eventId} during select menu interaction.`);
+                return;
+            }
+
+            const attendee = event.attendees[attendeeIndex];
+            const member = await guild.members.fetch(user.id);
+
+
+            // --- Handle Primary Role Selection ---
+            if (customId.startsWith('select_role_')) {
+                attendee.primaryRole = selectedValue;
+                attendee.rsvpStatus = 'Attending'; // Confirm attending status after primary role selection
+
+                writeToLog(`[select_role] User ${user.id} selected primary role "${selectedValue}" for event "${event.title}".`);
+
+                // If Infantry or Armour is selected, prompt for class
+                if (selectedValue === 'Infantry' || selectedValue === 'Armour') {
+                    const primaryRoleObj = event.roles.find(r => r.primaryRole === selectedValue);
+                    let classesForSelection = primaryRoleObj ? primaryRoleObj.classes : [];
+
+                    // Apply conditional filtering based on primary role
+                    if (selectedValue === 'Infantry') {
+                        const isSLCertified = member.roles.cache.has(SL_CERTIFIED_ROLE_ID);
+                        if (!isSLCertified) {
+                            classesForSelection = classesForSelection.filter(c => c.className !== 'Officer');
+                            writeToLog(`User ${user.id} is not SL certified, "Officer" class filtered out for Infantry selection.`);
+                        }
+                    } else if (selectedValue === 'Armour') {
+                        const isTCCertified = member.roles.cache.has(TC_CERTIFIED_ROLE_ID);
+                        if (!isTCCertified) {
+                            classesForSelection = classesForSelection.filter(c => c.className !== 'Tank Commander');
+                            writeToLog(`User ${user.id} is not TC certified, "Tank Commander" class filtered out for Armour selection.`);
+                        }
+                    }
+
+
+                    if (classesForSelection.length > 0) {
+                        const selectClassMenu = new ActionRowBuilder()
+                            .addComponents(
+                                new StringSelectMenuBuilder()
+                                    .setCustomId(`select_class_${eventId}`) // Generic ID for class selection
+                                    .setPlaceholder(`Choose your ${selectedValue} class...`)
+                                    .addOptions(
+                                        classesForSelection.map(cls => new StringSelectMenuOptionBuilder()
+                                            .setLabel(`${cls.className} ${cls.emoji}`)
+                                            .setValue(cls.className)
+                                        )
+                                    ),
+                            );
+                        // Edit the same ephemeral message to show class selection
+                        await interaction.editReply({ content: `You have selected **${selectedValue}**. Now, please select your specific class:`, components: [selectClassMenu], flags: [MessageFlags.Ephemeral] });
+                        writeToLog(`User ${user.id} prompted for ${selectedValue} class selection for event "${event.title}".`);
+                    } else {
+                        // Edge case: Role selected but no classes available after filtering
+                        await interaction.deleteReply().catch(error => writeToLog(`Failed to delete ephemeral reply (no classes available) for user ${user.id}: ${error.message}`));
+                        await interaction.followUp({ content: `You selected **${selectedValue}** for event "${event.title}", but no classes were available for you to select. Please choose another primary role or contact an admin.`, flags: [MessageFlags.Ephemeral] });
+                        writeToLog(`User ${user.id} selected ${selectedValue} but no classes available.`);
+                    }
+                } else {
+                    // Non-class-based primary role selected (e.g., Commander, Recon), finalize RSVP
+                    const primaryRoleObj = event.roles.find(r => r.primaryRole === selectedValue);
+                    attendee.emoji = primaryRoleObj ? primaryRoleObj.emoji : null; // Set emoji for primary role
+
+                    // Send DM confirmation
+                    try {
+                        const dmChannel = await user.createDM();
+                        await dmChannel.send(`For event "${event.title}", you have successfully selected **${selectedValue}** as your primary role. Your RSVP is confirmed!`);
+                        writeToLog(`Sent DM to ${user.tag} confirming primary role selection for event "${event.title}".`);
+                    } catch (dmError) {
+                        console.error(`Failed to send DM to user ${user.tag}: ${dmError.message}`);
+                        writeToLog(`Failed to send DM to user ${user.tag}: ${dmError.message}`);
+                        await interaction.followUp({ content: `You have selected **${selectedValue}** for event "${event.title}". Your RSVP is confirmed! (Could not send DM confirmation)`, flags: [MessageFlags.Ephemeral] });
+                    }
+                    // Delete the ephemeral message after primary role selection
+                    await interaction.deleteReply().catch(error => writeToLog(`Failed to delete ephemeral reply after primary role selection for user ${user.id}: ${error.message}`));
+                    writeToLog(`[select_role] User ${user.id} finalized non-class-based role selection for event "${event.title}".`);
+                }
+            } 
+            // --- Handle Class Selection ---
+            else if (customId.startsWith('select_class_')) {
+                attendee.className = selectedValue;
+                attendee.rsvpStatus = 'Attending'; // Ensure attending status is maintained
+
+                const primaryRoleObj = event.roles.find(r => r.primaryRole === attendee.primaryRole); // Use attendee's current primary role
+                const selectedClassObj = primaryRoleObj?.classes.find(c => c.className === selectedValue);
+                attendee.emoji = selectedClassObj ? selectedClassObj.emoji : null;
+
+                writeToLog(`[select_class] User ${user.id} selected class "${selectedValue}" for ${attendee.primaryRole} role in event "${event.title}".`);
+
+                // Send DM confirmation
+                try {
+                    const dmChannel = await user.createDM();
+                    await dmChannel.send(`For event "${event.title}", you have successfully selected **${attendee.primaryRole} - ${attendee.className}** as your role. Your RSVP is confirmed!`);
+                    writeToLog(`Sent DM to ${user.tag} confirming class selection for event "${event.title}".`);
+                } catch (dmError) {
+                    console.error(`Failed to send DM to user ${user.tag}: ${dmError.message}`);
+                    writeToLog(`Failed to send DM to user ${user.tag}: ${dmError.message}`);
+                    await interaction.followUp({ content: `You have selected **${attendee.primaryRole} - ${attendee.className}** for event "${event.title}". Your RSVP is confirmed! (Could not send DM confirmation)`, flags: [MessageFlags.Ephemeral] });
+                }
+
+                // Delete the ephemeral message after class selection
+                await interaction.deleteReply().catch(error => writeToLog(`Failed to delete ephemeral reply after class selection for user ${user.id}: ${error.message}`));
+                writeToLog(`[select_class] User ${user.id} finalized class selection for event "${event.title}".`);
+            }
+
+            writeToLog(`[interactionCreate - select menu] After attendee update - Event ${eventId} attendees: ${JSON.stringify(event.attendees.map(a => `${a.userId}:${a.rsvpStatus}:${a.primaryRole}:${a.className}`))}`);
+
+            // Always update the main event roster after any successful RSVP or role/class selection
+            await updateEventRosterEmbed(eventId, guild);
+            if (event.threadId && event.threadRosterMessageId) {
+                await updateThreadRosterMessage(eventId, guild);
+            }
+
         }
     } catch (error) {
         console.error(`Error handling interaction:`, error);
+        console.trace(error); // This will print the full stack trace
         writeToLog(`Error handling interaction: ${error.message}`);
-        if (!interaction.deferred && !interaction.replied) {
-            await interaction.reply({ content: 'There was an error while executing this command/interaction!', ephemeral: true });
-        } else {
-            await interaction.followUp({ content: 'There was an error while executing this command/interaction!', ephemeral: true });
+        // Universal error handling for interactions
+        if (!interaction.replied && interaction.deferred) { // If deferred but not yet replied (or edited)
+            await interaction.followUp({ content: 'An unexpected error occurred while processing your request! Please try again or contact an admin.', flags: [MessageFlags.Ephemeral] }).catch(err => {
+                console.error(`Failed to send followUp error message: ${err.message}`);
+                writeToLog(`Failed to send followUp error message: ${err.message}`);
+            });
+        } else if (!interaction.replied) { // If not deferred or replied at all (e.g. initial deferral failed)
+            await interaction.reply({ content: 'An unexpected error occurred!', flags: [MessageFlags.Ephemeral] }).catch(err => {
+                console.error(`Failed to send initial error reply: ${err.message}`);
+                writeToLog(`Failed to send initial error reply: ${err.message}`);
+            });
         }
     }
 });
 
 
-// Handles traditional prefix commands (e.g., "!createevent")
+// Handles traditional prefix commands (e.g., "!createevent") - No changes needed here for interaction deferral issues.
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
 
@@ -726,11 +1007,10 @@ client.on('messageCreate', async (message) => {
     const command = args[0].toLowerCase();
     const replyMethod = message.reply.bind(message);
 
-    // !createevent <title> <YYYY-MM-DD> <HH:MM_start> <HH:MM_end> <description> [optional: <hours_before_thread>] [optional: @Role1 @Role2]
     if (command === '!createevent') {
         if (args.length < 6) {
             writeToLog(`Invalid !createevent command from ${message.author.id}: ${message.content}`);
-            return message.reply('Usage: `!createevent <title> <YYYY-MM-DD> <HH:MM_start> <HH:MM_end> <description> [optional: <hours_before_thread>] [optional: @Role1 @Role2]`');
+            return message.reply('Usage: `!createevent <title> <DD-MM-YYYY> <HH:MM_start> <HH:MM_end> <description> [optional: <hours_before_thread>] [optional: @Role1 @Role2]`');
         }
         
         const title = args[1];
@@ -760,7 +1040,7 @@ client.on('messageCreate', async (message) => {
                     restrictedRolesString += arg + ' ';
                     parsingState = 'roles';
                 } else {
-                    restrictedRolesString += arg + ' '; // Fallback: if not role, assume part of roles string (simplistic)
+                    restrictedRolesString += arg + ' ';
                 }
             } else if (parsingState === 'roles') {
                 restrictedRolesString += arg + ' ';
@@ -770,10 +1050,8 @@ client.on('messageCreate', async (message) => {
         const description = descriptionParts.join(' ');
         const restrictedRoleIds = extractRoleIds(restrictedRolesString.trim());
 
-        await handleCreateEvent(message.channel, title, date, startTime, endTime, description, restrictedRoleIds, replyMethod, message.guild, threadOpenHoursBefore);
+        await handleCreateEvent(message.channel, title, date, startTime, endTime, description, restrictedRoleIds, { followUp: message.reply.bind(message) }, message.guild, threadOpenHoursBefore);
     }
-
-    // Removed handling for assignclass, displayroles, rsvp, showeventroles prefix commands
 });
 
 
@@ -795,6 +1073,7 @@ client.once('ready', async () => {
     // 2. On bot startup (`client.once('ready')`), logic to load all pending events
     //    from the database and re-schedule their thread opening/deletion tasks.
     // 3. To re-render the roster embeds by calling updateEventRosterEmbed for each active event.
+    //    And similarly for updateThreadRosterMessage if you reload the roster for active threads.
 });
 
 // Log in to Discord with your bot token

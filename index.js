@@ -151,7 +151,9 @@ const updateThreadRosterMessage = async (eventId, guild) => {
             const membersInRole = acceptedAttendees
                 .filter(a => a.primaryRole === roleName)
                 .map(attendee => { // Directly use 'attendee' as the iterated object
-                    // Use the emoji stored directly on the attendee object (which will be class emoji or role emoji)
+                    // --- Added logging for emoji check during embed build ---
+                    writeToLog(`[updateThreadRosterMessage] Attendee ${attendee.userId} in role ${roleName}: Emoji is "${attendee.emoji}"`);
+                    // --- End Added logging ---
                     return attendee.emoji
                         ? `<@${attendee.userId}> ${attendee.emoji}`
                         : `<@${attendee.userId}>`; // Fallback if no emoji set for some reason
@@ -161,13 +163,8 @@ const updateThreadRosterMessage = async (eventId, guild) => {
             // Find the emoji for the primary role for the field name
             const primaryRoleObj = event.roles.find(r => r.primaryRole === roleName);
             const roleEmoji = primaryRoleObj ? primaryRoleObj.emoji : '';
-            // Change here: Make role fields inline for columns
-            rosterEmbed.addFields({ name: `${roleName} ${roleEmoji}`, value: fieldValue, inline: true });
-
-            // After the second role (index 1), add a blank inline field to force the next role to a new row
-            if (i === 1) { // After 'Infantry' (index 1)
-                rosterEmbed.addFields({ name: '\u200B', value: '\u200B', inline: true });
-            }
+            // Change here: Make role fields NOT inline for new line
+            rosterEmbed.addFields({ name: `${roleName} ${roleEmoji}`, value: fieldValue, inline: false });
         }
         
         const tentativeAttendees = event.attendees
@@ -246,7 +243,9 @@ const updateEventRosterEmbed = async (eventId, guild) => {
             const membersInRole = acceptedAttendees
                 .filter(a => a.primaryRole === roleName)
                 .map(attendee => { // Directly use 'attendee' as the iterated object
-                    // Use the emoji stored directly on the attendee object (which will be class emoji or role emoji)
+                    // --- Added logging for emoji check during embed build ---
+                    writeToLog(`[updateEventRosterEmbed] Attendee ${attendee.userId} in role ${roleName}: Emoji is "${attendee.emoji}"`);
+                    // --- End Added logging ---
                     return attendee.emoji
                         ? `<@${attendee.userId}> ${attendee.emoji}`
                         : `<@${attendee.userId}>`; // Fallback if no emoji set for some reason
@@ -257,13 +256,8 @@ const updateEventRosterEmbed = async (eventId, guild) => {
             // Find the emoji for the primary role for the field name
             const primaryRoleObj = event.roles.find(r => r.primaryRole === roleName);
             const roleEmoji = primaryRoleObj ? primaryRoleObj.emoji : '';
-            // Change here: Make role fields inline for columns
-            updatedEmbed.addFields({ name: `${roleName} ${roleEmoji}`, value: fieldValue, inline: true });
-
-            // After the second role (index 1), add a blank inline field to force the next role to a new row
-            if (i === 1) { // After 'Infantry' (index 1)
-                updatedEmbed.addFields({ name: '\u200B', value: '\u200B', inline: true });
-            }
+            // Change here: Make role fields NOT inline for new line
+            updatedEmbed.addFields({ name: `${roleName} ${roleEmoji}`, value: fieldValue, inline: false });
         }
 
         const tentativeAttendees = event.attendees
@@ -289,7 +283,7 @@ const updateEventRosterEmbed = async (eventId, guild) => {
                     .setStyle(ButtonStyle.Success),
                 new ButtonBuilder()
                     .setCustomId(`rsvp_tentative_${eventId}`)
-                    .setLabel('Tentative 🤔')
+                    .setLabel('Tentative �')
                     .setStyle(ButtonStyle.Primary),
                 new ButtonBuilder()
                     .setCustomId(`rsvp_decline_${eventId}`)
@@ -298,7 +292,7 @@ const updateEventRosterEmbed = async (eventId, guild) => {
                 // New: Add Edit Event button
                 new ButtonBuilder()
                     .setCustomId(`edit_event_${eventId}`)
-                    .setLabel('Edit Event �')
+                    .setLabel('Edit Event 📝')
                     .setStyle(ButtonStyle.Secondary),
                 new ButtonBuilder()
                     .setCustomId(`delete_event_${eventId}`) // New: Delete button
@@ -602,6 +596,7 @@ const handleCreateEvent = async (channel, title, date, startTime, endTime, descr
                     .setCustomId(`rsvp_decline_${eventId}`)
                     .setLabel('Decline ❌')
                     .setStyle(ButtonStyle.Danger),
+                // New: Add Edit Event button
                 new ButtonBuilder()
                     .setCustomId(`edit_event_${eventId}`)
                     .setLabel('Edit Event 📝')
@@ -706,17 +701,22 @@ const handleRSVP = async (eventId, userId, rawStatusFromButton, guild, interacti
         }
     }
 
-    let attendee = event.attendees.find(a => a.userId === userId);
-    let attendeesArray = [...event.attendees]; // Create a mutable copy
+    // --- Start: Fix for duplicate declined entry ---
+    let attendeeIndex = event.attendees.findIndex(a => a.userId === userId);
+    let currentAttendees = [...event.attendees]; // Create a mutable copy of the array
 
-    if (!attendee) {
+    let attendee;
+    if (attendeeIndex === -1) {
+        // If it's a new attendee, create and push it to the currentAttendees array
         attendee = { userId, rsvpStatus: null, primaryRole: null, className: null, emoji: null };
-        attendeesArray.push(attendee);
+        currentAttendees.push(attendee);
+        attendeeIndex = currentAttendees.length - 1; // Update index to the newly added attendee
         writeToLog(`New attendee ${userId} added to event "${event.title}".`);
     } else {
-        // If attendee exists, remove the old one from the copy to re-add with updates
-        attendeesArray = attendeesArray.filter(a => a.userId !== userId);
+        // If attendee exists, get a reference to the existing object within the currentAttendees copy
+        attendee = currentAttendees[attendeeIndex];
     }
+    // --- End: Fix for duplicate declined entry ---
 
     writeToLog(`[handleRSVP] Before status update - User ${userId} raw RSVP: ${rawStatusFromButton}. Attendee: ${JSON.stringify(attendee)}`);
 
@@ -754,24 +754,24 @@ const handleRSVP = async (eventId, userId, rawStatusFromButton, guild, interacti
             writeToLog(`[handleRSVP] Checking primary role "${role.primaryRole}" for user ${userId}.`);
             // Corrected logic for Commander role restriction
             if (role.primaryRole === 'Commander') {
-                if (CMDR_CERTIFIED_ROLE_ID && !member.roles.cache.has(CMDR_CERTIFIED_ROLE_ID)) {
+                if (CMDR_CERTIFIED_ROLE_ID && member.roles.cache.has(CMDR_CERTIFIED_ROLE_ID)) {
+                    writeToLog(`[handleRSVP] User ${userId} has CMDR_CERTIFIED_ROLE_ID (${CMDR_CERTIFIED_ROLE_ID}), allowing Commander.`);
+                } else if (CMDR_CERTIFIED_ROLE_ID && !member.roles.cache.has(CMDR_CERTIFIED_ROLE_ID)) {
                     addRole = false;
                     writeToLog(`[handleRSVP] User ${userId} does not have CMDR_CERTIFIED_ROLE_ID (${CMDR_CERTIFIED_ROLE_ID}), filtering out Commander.`);
-                } else if (!CMDR_CERTIFIED_ROLE_ID) {
+                } else { // CMDR_CERTIFIED_ROLE_ID is not configured (empty or undefined)
                     writeToLog(`[handleRSVP] CMDR_CERTIFIED_ROLE_ID is not configured, allowing Commander role by default.`);
-                } else {
-                    writeToLog(`[handleRSVP] User ${userId} has CMDR_CERTIFIED_ROLE_ID (${CMDR_CERTIFIED_ROLE_ID}), allowing Commander.`);
                 }
             }
             // Corrected logic for Recon role restriction
             if (role.primaryRole === 'Recon') {
-                if (RECON_CERTIFIED_ROLE_ID && !member.roles.cache.has(RECON_CERTIFIED_ROLE_ID)) {
+                if (RECON_CERTIFIED_ROLE_ID && member.roles.cache.has(RECON_CERTIFIED_ROLE_ID)) {
+                    writeToLog(`[handleRSVP] User ${userId} has RECON_CERTIFIED_ROLE_ID (${RECON_CERTIFIED_ROLE_ID}), allowing Recon.`);
+                } else if (RECON_CERTIFIED_ROLE_ID && !member.roles.cache.has(RECON_CERTIFIED_ROLE_ID)) {
                     addRole = false;
                     writeToLog(`[handleRSVP] User ${userId} does not have RECON_CERTIFIED_ROLE_ID (${RECON_CERTIFIED_ROLE_ID}), filtering out Recon.`);
-                } else if (!RECON_CERTIFIED_ROLE_ID) {
+                } else { // RECON_CERTIFIED_ROLE_ID is not configured (empty or undefined)
                     writeToLog(`[handleRSVP] RECON_CERTIFIED_ROLE_ID is not configured, allowing Recon role by default.`);
-                } else {
-                    writeToLog(`[handleRSVP] User ${userId} has RECON_CERTIFIED_ROLE_ID (${RECON_CERTIFIED_ROLE_ID}), allowing Recon.`);
                 }
             }
             return addRole ? new StringSelectMenuOptionBuilder()
@@ -812,15 +812,13 @@ const handleRSVP = async (eventId, userId, rawStatusFromButton, guild, interacti
         }
     }
 
-    attendeesArray.push(attendee); // Add updated attendee back to the array
-
-    // Update PostgreSQL with the modified attendees array
+    // Update PostgreSQL with the modified attendees array (currentAttendees now reflects all changes)
     try {
         await pgPool.query(
             `UPDATE events SET attendees = $1 WHERE id = $2`,
-            [JSON.stringify(attendeesArray), eventId]
+            [JSON.stringify(currentAttendees), eventId]
         );
-        events[eventId].attendees = attendeesArray; // Update in-memory cache
+        events[eventId].attendees = currentAttendees; // Update in-memory cache
         writeToLog(`PostgreSQL updated with attendee ${userId} for event ${eventId}. Current attendees in cache: ${JSON.stringify(events[eventId].attendees.map(a => a.userId + ':' + a.rsvpStatus + ':' + a.primaryRole + ':' + a.className + ':' + a.emoji))}`);
     } catch (pgError) {
         console.error(`Failed to update attendee ${userId} in PostgreSQL for event ${eventId}:`, pgError);
@@ -916,26 +914,40 @@ client.on('interactionCreate', async (interaction) => {
     const commandNameLog = interaction.isChatInputCommand() ? interaction.commandName : 'N/A';
     writeToLog(`Received interaction: Type ${interaction.type}, CustomId: ${customIdLog}, CommandName: ${commandNameLog}`);
 
+    const { customId, user } = interaction; // Destructure common properties
+    const guild = interaction.guild; // Get guild directly for safety check
+
+    // Add this check at the very beginning of the interactionCreate listener
+    if (!guild) {
+        writeToLog(`Interaction ${interaction.id} received outside a guild context or guild is null/undefined. User: ${user.tag}`);
+        if (interaction.isRepliable()) {
+            await interaction.reply({ content: 'This command can only be used in a Discord server (guild).', flags: [MessageFlags.Ephemeral] });
+        }
+        return; // Exit early
+    }
+
     if (interaction.isButton()) {
-        const { customId, user, guild } = interaction;
         if (customId.startsWith('rsvp_')) {
             await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
             writeToLog(`Interaction deferred for button click: ${customId}`);
         } else if (customId.startsWith('edit_event_')) {
-            await interaction.deferReply({ flags: [MessageFlags.Ephemeral] }); // Defer here
-            writeToLog(`Interaction deferred for edit button click: ${customId}`);
+            writeToLog(`Received edit button click for event: ${customId}`);
             
             const eventId = customId.substring('edit_event_'.length);
-            // Fetch event from DB to ensure it's up-to-date
             let eventToEdit;
+
             try {
                 const res = await pgPool.query(`SELECT * FROM events WHERE id = $1`, [eventId]);
                 if (res.rows.length === 0) {
                     writeToLog(`Error: Event ${eventId} not found in DB when user ${user.id} tried to edit.`);
-                    return await interaction.editReply({ content: 'Error: Event not found in database. It might have been deleted. Please create a new event.', flags: [MessageFlags.Ephemeral] });
+                    // If event not found, reply with an error.
+                    return await interaction.reply({ content: 'Error: Event not found in database. It might have been deleted. Please create a new event.', flags: [MessageFlags.Ephemeral] });
                 }
                 eventToEdit = {
                     ...res.rows[0],
+                    // Explicitly map snake_case from DB to camelCase for use in Discord.js objects
+                    startTime: res.rows[0].start_time,
+                    endTime: res.rows[0].end_time,
                     restrictedRoles: res.rows[0].restricted_roles,
                     threadOpenHoursBefore: res.rows[0].thread_open_hours_before,
                     channelId: res.rows[0].channel_id,
@@ -951,14 +963,16 @@ client.on('interactionCreate', async (interaction) => {
             } catch (dbError) {
                 console.error(`Error fetching event ${eventId} for edit:`, dbError);
                 writeToLog(`Error fetching event ${eventId} for edit: ${dbError.message}`);
-                return await interaction.editReply({ content: 'An error occurred while fetching event details for editing. Please try again.', flags: [MessageFlags.Ephemeral] });
+                // If DB error, reply with an error.
+                return await interaction.reply({ content: 'An error occurred while fetching event details for editing. Please try again.', flags: [MessageFlags.Ephemeral] });
             }
 
-            const member = await guild.members.fetch(user.id); // Fetch the member here for role check
+            const member = await guild.members.fetch(user.id);
 
             if (user.id !== eventToEdit.creatorId && (!DELETE_EVENT_ROLE_ID || !member.roles.cache.has(DELETE_EVENT_ROLE_ID))) {
                 writeToLog(`User ${user.id} attempted to edit event ${eventId} but is not the creator (${eventToEdit.creatorId}) and does not have the configured delete role.`);
-                return await interaction.editReply({ content: 'You do not have permission to edit this event.', flags: [MessageFlags.Ephemeral] });
+                // If permission denied, reply with an error.
+                return await interaction.reply({ content: 'You do not have permission to edit this event.', flags: [MessageFlags.Ephemeral] });
             }
 
             const modal = new ModalBuilder()
@@ -970,7 +984,7 @@ client.on('interactionCreate', async (interaction) => {
                 .setLabel('Event Title')
                 .setStyle(TextInputStyle.Short)
                 .setRequired(true)
-                .setValue(eventToEdit.title);
+                .setValue(eventToEdit.title || ''); // Add fallback
 
             const dateInput = new TextInputBuilder()
                 .setCustomId('editDateInput')
@@ -978,7 +992,7 @@ client.on('interactionCreate', async (interaction) => {
                 .setPlaceholder('e.g., 22-06-2025')
                 .setStyle(TextInputStyle.Short)
                 .setRequired(true)
-                .setValue(eventToEdit.date);
+                .setValue(eventToEdit.date || ''); // Add fallback
 
             const startTimeInput = new TextInputBuilder()
                 .setCustomId('editStartTimeInput')
@@ -986,7 +1000,7 @@ client.on('interactionCreate', async (interaction) => {
                 .setPlaceholder('e.g., 19:00')
                 .setStyle(TextInputStyle.Short)
                 .setRequired(true)
-                .setValue(eventToEdit.startTime);
+                .setValue(eventToEdit.startTime || ''); // This will now correctly pull from mapped startTime
 
             const endTimeInput = new TextInputBuilder()
                 .setCustomId('editEndTimeInput')
@@ -994,14 +1008,14 @@ client.on('interactionCreate', async (interaction) => {
                 .setPlaceholder('e.g., 22:00')
                 .setStyle(TextInputStyle.Short)
                 .setRequired(true)
-                .setValue(eventToEdit.endTime);
+                .setValue(eventToEdit.endTime || ''); // This will now correctly pull from mapped endTime
 
             const descriptionInput = new TextInputBuilder()
                 .setCustomId('editDescriptionInput')
                 .setLabel('Event Description')
                 .setStyle(TextInputStyle.Paragraph)
                 .setRequired(true)
-                .setValue(eventToEdit.description);
+                .setValue(eventToEdit.description || ''); // Add fallback
 
             modal.addComponents(
                 new ActionRowBuilder().addComponents(titleInput),
@@ -1011,17 +1025,18 @@ client.on('interactionCreate', async (interaction) => {
                 new ActionRowBuilder().addComponents(descriptionInput),
             );
 
-            // Just show the modal after deferring. The modal submission will handle the reply.
             try {
+                // showModal implicitly replies to the interaction.
                 await interaction.showModal(modal);
                 writeToLog(`Edit modal for event ${eventId} shown to user ${user.tag}.`);
             } catch (modalError) {
                 console.error(`Failed to show edit event modal for user ${user.id} and event ${eventId}:`, modalError);
                 writeToLog(`Failed to show edit event modal for user ${user.id} and event ${eventId}: ${modalError.message}`);
-                // If modal fails to show, we need to resolve the initial deferred reply
-                await interaction.editReply({ content: 'Failed to open the edit form. Please try again later or contact an admin.', flags: [MessageFlags.Ephemeral] });
+                // If modal fails, reply to the interaction with an error message.
+                // This will be the first and only reply if showModal failed at the API level.
+                await interaction.reply({ content: 'Failed to open the edit form. Please try again later or contact an admin.', flags: [MessageFlags.Ephemeral] });
             }
-            return; // Return here, let modal submit handle further replies
+            return; // Return here, as showModal or interaction.reply has handled the interaction.
         } else if (customId.startsWith('delete_event_')) { // New: Delete button handler
             await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
             writeToLog(`Interaction deferred for delete button click: ${customId}`);
@@ -1047,10 +1062,19 @@ client.on('interactionCreate', async (interaction) => {
             const isCreator = user.id === eventToDelete.creator_id;
             const hasDeleteRole = DELETE_EVENT_ROLE_ID && member.roles.cache.has(DELETE_EVENT_ROLE_ID);
 
+            // --- Start: Added detailed logging for delete permission check ---
+            writeToLog(`[DeletePermissionCheck] User ${user.id} attempting to delete event ${eventId}.`);
+            writeToLog(`[DeletePermissionCheck] Event Creator ID: ${eventToDelete.creator_id}`);
+            writeToLog(`[DeletePermissionCheck] Is User the Creator? ${isCreator}`);
+            writeToLog(`[DeletePermissionCheck] Configured DELETE_EVENT_ROLE_ID: ${DELETE_EVENT_ROLE_ID}`);
+            writeToLog(`[DeletePermissionCheck] Does User Have Delete Role? ${hasDeleteRole}`);
+            // --- End: Added detailed logging for delete permission check ---
+
             if (!isCreator && !hasDeleteRole) {
-                writeToLog(`User ${user.id} attempted to delete event ${eventId} but is not the creator (${eventToDelete.creator_id}) and does not have the configured delete role.`);
+                writeToLog(`User ${user.id} DENIED deletion for event ${eventId}: Not creator and does not have delete role.`);
                 return await interaction.editReply({ content: 'You do not have permission to delete this event.', flags: [MessageFlags.Ephemeral] });
             }
+            writeToLog(`User ${user.id} GRANTED deletion for event ${eventId}.`);
 
             // Perform deletion
             try {
@@ -1084,6 +1108,7 @@ client.on('interactionCreate', async (interaction) => {
         }
     } else if (interaction.isStringSelectMenu()) {
         await interaction.deferUpdate();
+        // Use customIdLog which is safely determined at the top of the handler
         writeToLog(`Interaction deferred (update) for select menu: ${customIdLog}`);
     }
 
@@ -1276,8 +1301,8 @@ client.on('interactionCreate', async (interaction) => {
                     threadOpenedAt: res.rows[0].thread_opened_at,
                     threadRosterMessageId: res.rows[0].thread_roster_message_id,
                     creatorId: res.rows[0].creator_id,
-                    attendees: res.rows[0].attendees,
-                    roles: res.rows[0].roles
+                    attendees: res.rows[0].attendees, // JSONB comes out as JS object
+                    roles: res.rows[0].roles // JSONB comes out as JS object
                 };
                 events[eventId] = event; // Update in-memory cache
             } catch (dbError) {
@@ -1287,21 +1312,28 @@ client.on('interactionCreate', async (interaction) => {
                 return;
             }
 
-            const attendeeIndex = event.attendees.findIndex(a => a.userId === user.id);
+            // Ensure currentAttendees is defined in this scope
+            let currentAttendees = [...event.attendees];
+            const attendeeIndex = currentAttendees.findIndex(a => a.userId === user.id);
+            let attendee;
+
             if (attendeeIndex === -1) {
-                await interaction.editReply({ content: 'Could not find your RSVP for this event. Please try RSVPing again.', components: [] });
-                writeToLog(`Could not find attendee ${user.id} for event ${eventId} during select menu interaction.`);
-                return;
+                // This case should ideally not happen if user already RSVP'd (Accepted) to get to this menu.
+                // But robustly handle by adding them, assuming "Attending".
+                attendee = { userId, rsvpStatus: 'Attending', primaryRole: null, className: null, emoji: null };
+                currentAttendees.push(attendee);
+                writeToLog(`[select menu] New attendee ${user.id} added (via select menu, assumed Accepted) for event ${eventId}.`);
+            } else {
+                attendee = currentAttendees[attendeeIndex];
             }
 
-            const attendee = event.attendees[attendeeIndex];
             const member = await guild.members.fetch(user.id);
 
             // --- Handle Primary Role Selection ---
             if (customId.startsWith('select_role_')) {
                 attendee.primaryRole = selectedValue;
                 attendee.className = null;
-                attendee.emoji = null;
+                attendee.emoji = null; // Clear class emoji when primary role changes
                 attendee.rsvpStatus = 'Attending';
 
 
@@ -1348,11 +1380,11 @@ client.on('interactionCreate', async (interaction) => {
                         await interaction.editReply({ content: `You have selected **${selectedValue}**. Now, please select your specific class:`, components: [selectClassMenu] });
                         writeToLog(`User ${user.id} prompted for ${selectedValue} class selection for event "${event.title}".`);
                     } else {
+                        // If no classes are available, the primary role emoji should be used
+                        const primaryRoleObj = event.roles.find(r => r.primaryRole === selectedValue);
+                        if (primaryRoleObj) attendee.emoji = primaryRoleObj.emoji; // Set primary role emoji
                         await interaction.editReply({ content: `You accepted **${attendee.primaryRole}** for event "${event.title}". No specific class was selected as none were available for you. Your RSVP is confirmed!`, components: [] });
                         writeToLog(`User ${user.id} accepted ${attendee.primaryRole} but no classes were available. RSVP confirmed without class.`);
-
-                        const primaryRoleObj = event.roles.find(r => r.primaryRole === selectedValue);
-                        if (primaryRoleObj) attendee.emoji = primaryRoleObj.emoji;
 
                         try {
                             const dmChannel = await user.createDM();
@@ -1365,7 +1397,7 @@ client.on('interactionCreate', async (interaction) => {
                     }
                 } else { // For Commander and Recon, which have no nested classes
                     const primaryRoleObj = event.roles.find(r => r.primaryRole === selectedValue);
-                    if (primaryRoleObj) attendee.emoji = primaryRoleObj.emoji;
+                    if (primaryRoleObj) attendee.emoji = primaryRoleObj.emoji; // Set primary role emoji
 
                     await interaction.editReply({ content: `Your RSVP for event "${event.title}" is confirmed as **${selectedValue}**!`, components: [] });
                     writeToLog(`User ${user.id} confirmed RSVP for event "${event.title}" with primary role "${selectedValue}".`);
@@ -1379,6 +1411,7 @@ client.on('interactionCreate', async (interaction) => {
                         writeToLog(`Failed to send DM to user ${user.tag}: ${dmError.message}`);
                     }
                 }
+
             } else if (customId.startsWith('select_class_')) {
                 attendee.className = selectedValue;
                 attendee.rsvpStatus = 'Attending';
@@ -1386,7 +1419,7 @@ client.on('interactionCreate', async (interaction) => {
                 const primaryRoleObj = event.roles.find(r => r.primaryRole === attendee.primaryRole);
                 if (primaryRoleObj) {
                     const classObj = primaryRoleObj.classes.find(c => c.className === selectedValue);
-                    if (classObj) attendee.emoji = classObj.emoji;
+                    if (classObj) attendee.emoji = classObj.emoji; // Set class emoji for display
                     writeToLog(`[select_class] Setting attendee emoji to ${attendee.emoji} for class ${selectedValue}.`);
                 }
 
@@ -1403,20 +1436,13 @@ client.on('interactionCreate', async (interaction) => {
                 }
             }
             
-            let attendeesArray = [...event.attendees];
-            const updatedAttendeeIndex = attendeesArray.findIndex(a => a.userId === user.id);
-            if (updatedAttendeeIndex !== -1) {
-                attendeesArray[updatedAttendeeIndex] = attendee;
-            } else {
-                attendeesArray.push(attendee);
-            }
-
+            // Save the updated currentAttendees array to PostgreSQL
             try {
                 await pgPool.query(
                     `UPDATE events SET attendees = $1 WHERE id = $2`,
-                    [JSON.stringify(attendeesArray), eventId]
+                    [JSON.stringify(currentAttendees), eventId]
                 );
-                events[eventId].attendees = attendeesArray; // Update in-memory cache
+                events[eventId].attendees = currentAttendees; // Update in-memory cache
                 writeToLog(`PostgreSQL updated with attendee ${user.id} for event ${eventId} after select menu interaction. Current attendees in cache after update: ${JSON.stringify(events[eventId].attendees.map(a => a.userId + ':' + a.rsvpStatus + ':' + a.primaryRole + ':' + a.className + ':' + a.emoji))}`);
 
             } catch (pgError) {

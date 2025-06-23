@@ -283,7 +283,7 @@ const updateEventRosterEmbed = async (eventId, guild) => {
                     .setStyle(ButtonStyle.Success),
                 new ButtonBuilder()
                     .setCustomId(`rsvp_tentative_${eventId}`)
-                    .setLabel('Tentative �')
+                    .setLabel('Tentative 🤔')
                     .setStyle(ButtonStyle.Primary),
                 new ButtonBuilder()
                     .setCustomId(`rsvp_decline_${eventId}`)
@@ -292,7 +292,7 @@ const updateEventRosterEmbed = async (eventId, guild) => {
                 // New: Add Edit Event button
                 new ButtonBuilder()
                     .setCustomId(`edit_event_${eventId}`)
-                    .setLabel('Edit Event 📝')
+                    .setLabel('Edit Event �')
                     .setStyle(ButtonStyle.Secondary),
                 new ButtonBuilder()
                     .setCustomId(`delete_event_${eventId}`) // New: Delete button
@@ -317,13 +317,14 @@ const updateEventRosterEmbed = async (eventId, guild) => {
  * @param {object} guild - The Discord Guild object where the event is created.
  */
 const scheduleThreadOpening = (eventId, eventDetails, guild) => {
-    const eventDateTime = moment(`${eventDetails.date} ${eventDetails.startTime}`, 'DD-MM-YYYY HH:mm');
-    const openTime = moment(eventDateTime).subtract(eventDetails.threadOpenHoursBefore, 'hours');
-    const now = moment();
+    // Parse event date and time as UTC
+    const eventDateTime = moment.utc(`${eventDetails.date} ${eventDetails.startTime}`, 'DD-MM-YYYY HH:mm');
+    const openTime = moment.utc(eventDateTime).subtract(eventDetails.threadOpenHoursBefore, 'hours');
+    const now = moment.utc(); // Get current UTC time
 
     const delay = Math.max(0, openTime.diff(now));
 
-    writeToLog(`Scheduling thread opening for event ${eventId} in ${delay / 1000} seconds (at ${openTime.format('YYYY-MM-DD HH:mm:ss')})`);
+    writeToLog(`Scheduling thread opening for event ${eventId} in ${delay / 1000} seconds (at ${openTime.format('YYYY-MM-DD HH:mm:ss')} UTC)`);
 
     setTimeout(async () => {
         try {
@@ -371,7 +372,7 @@ const scheduleThreadOpening = (eventId, eventDetails, guild) => {
 
 
             events[eventId].threadId = thread.id;
-            events[eventId].threadOpenedAt = moment().toISOString();
+            events[eventId].threadOpenedAt = moment.utc().toISOString(); // Store as UTC ISO string
             // Update PostgreSQL with thread details
             await pgPool.query(
                 `UPDATE events SET "thread_id" = $1, "thread_opened_at" = $2, "thread_roster_message_id" = $3 WHERE id = $4`,
@@ -424,13 +425,15 @@ const scheduleThreadOpening = (eventId, eventDetails, guild) => {
  * @param {object} guild - The Discord Guild object where the event is created.
  */
 const scheduleThreadDeletion = (eventId, eventDetails, threadId, guild) => {
-    const eventEndDateTime = moment(`${eventDetails.date} ${eventDetails.endTime}`, 'DD-MM-YYYY HH:mm');
-    const deleteTime = moment(eventEndDateTime).add(1, 'day').startOf('day').add(1, 'minute');
-    const now = moment();
+    // Parse event end date and time as UTC
+    const eventEndDateTime = moment.utc(`${eventDetails.date} ${eventDetails.endTime}`, 'DD-MM-YYYY HH:mm');
+    // Calculate deletion time based on UTC
+    const deleteTime = moment.utc(eventEndDateTime).add(1, 'day').startOf('day').add(1, 'minute');
+    const now = moment.utc(); // Get current UTC time
 
     const delay = Math.max(0, deleteTime.diff(now));
 
-    writeToLog(`Scheduling thread deletion for event ${eventId} in ${delay / 1000} seconds (at ${deleteTime.format('YYYY-MM-DD HH:mm:ss')})`);
+    writeToLog(`Scheduling thread deletion for event ${eventId} in ${delay / 1000} seconds (at ${deleteTime.format('YYYY-MM-DD HH:mm:ss')} UTC)`);
 
     setTimeout(async () => {
         try {
@@ -1359,6 +1362,7 @@ client.on('interactionCreate', async (interaction) => {
                             classesForSelection = classesForSelection.filter(c => c.className !== 'Tank Commander');
                             writeToLog(`User ${user.id} is not TC certified (or role ID not configured), "Tank Commander" class filtered out for Armour selection.`);
                         }
+                        return; // Add a return statement here to exit the function
                     }
 
                     writeToLog(`[select_role] After class filtering for ${selectedValue} - classes: ${JSON.stringify(classesForSelection.map(c => c.className))}`);
@@ -1687,9 +1691,10 @@ client.once('ready', async () => {
 
             // Re-schedule threads for events that were in progress before bot restart
             if (events[dbEvent.id].threadOpenHoursBefore > 0) {
-                const eventDateTime = moment(`${events[dbEvent.id].date} ${events[dbEvent.id].startTime}`, 'DD-MM-YYYY HH:mm');
-                const openTime = moment(eventDateTime).subtract(events[dbEvent.id].threadOpenHoursBefore, 'hours');
-                const now = moment();
+                // Parse event date and time as UTC
+                const eventDateTime = moment.utc(`${events[dbEvent.id].date} ${events[dbEvent.id].startTime}`, 'DD-MM-YYYY HH:mm');
+                const openTime = moment.utc(eventDateTime).subtract(events[dbEvent.id].threadOpenHoursBefore, 'hours');
+                const now = moment.utc(); // Get current UTC time
 
                 if (openTime.isAfter(now)) { // If thread opening is still in the future
                     writeToLog(`Re-scheduling thread opening for future event ${dbEvent.id}.`);
@@ -1707,9 +1712,12 @@ client.once('ready', async () => {
             }
              // Re-schedule thread deletion for events whose threads are open and not yet deleted
             if (events[dbEvent.id].threadId && events[dbEvent.id].threadOpenedAt) {
-                 const eventEndDateTime = moment(`${events[dbEvent.id].date} ${events[dbEvent.id].endTime}`, 'DD-MM-YYYY HH:mm');
-                 const deleteTime = moment(eventEndDateTime).add(1, 'day').startOf('day').add(1, 'minute');
-                 if (deleteTime.isAfter(moment())) {
+                 // Parse event end date and time as UTC
+                 const eventEndDateTime = moment.utc(`${events[dbEvent.id].date} ${events[dbEvent.id].endTime}`, 'DD-MM-YYYY HH:mm');
+                 // Calculate deletion time based on UTC
+                 const deleteTime = moment.utc(eventEndDateTime).add(1, 'day').startOf('day').add(1, 'minute');
+                 const now = moment.utc(); // Get current UTC time
+                 if (deleteTime.isAfter(now)) {
                     writeToLog(`Re-scheduling thread deletion for event ${dbEvent.id}.`);
                     const guild = client.guilds.cache.get(process.env.GUILD_ID);
                     if (guild) scheduleThreadDeletion(dbEvent.id, events[dbEvent.id], events[dbEvent.id].threadId, guild);

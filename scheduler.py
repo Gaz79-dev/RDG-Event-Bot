@@ -1,7 +1,7 @@
 import discord
 from discord.ext import tasks, commands
 import datetime
-from utils.database import Database
+from utils.database import Database, RsvpStatus
 
 class Scheduler(commands.Cog):
     """Cog for handling scheduled background tasks."""
@@ -33,16 +33,49 @@ class Scheduler(commands.Cog):
                 try:
                     # Fetch the original event message to create the thread on
                     message = await channel.fetch_message(event['message_id'])
-                    thread = await message.create_thread(name=event['title'])
                     
-                    # Update database to mark the thread as created
+                    # --- NEW LOGIC: Create a private thread ---
+                    # The bot needs the "Manage Threads" permission for this to work.
+                    thread = await message.create_thread(name=event['title'], type=discord.ChannelType.private_thread)
+                    
+                    # Update database immediately to mark thread as created and prevent duplicates
                     await self.db.update_event_thread_id(event['event_id'], thread.id)
+                    await self.db.mark_thread_as_created(event['event_id'])
                     
-                    print(f"Created thread for event {event['event_id']} ('{event['title']}') in guild {guild.id}.")
+                    print(f"Created private thread for event {event['event_id']} ('{event['title']}') in guild {guild.id}.")
+
+                    # --- NEW LOGIC: Fetch and add accepted members ---
+                    signups = await self.db.get_signups_for_event(event['event_id'])
+                    accepted_user_ids = {
+                        signup['user_id'] for signup in signups
+                        if signup['rsvp_status'] == RsvpStatus.ACCEPTED
+                    }
+                    
+                    # Always ensure the event creator is in the thread
+                    accepted_user_ids.add(event['creator_id'])
+                    
+                    # Send a welcome message to the new thread
+                    await thread.send(f"Welcome to the private discussion for **{event['title']}**! This thread is for confirmed attendees.")
+
+                    # Add each accepted user to the thread
+                    for user_id in accepted_user_ids:
+                        try:
+                            member = await guild.fetch_member(user_id)
+                            await thread.add_user(member)
+                        except discord.NotFound:
+                            print(f"Scheduler: Could not find member with ID {user_id} in guild {guild.id} to add to thread.")
+                        except discord.HTTPException as e:
+                            print(f"Scheduler: Failed to add user {user_id} to thread for event {event['event_id']}. Error: {e}")
+
+                    print(f"Added {len(accepted_user_ids)} members to thread for event {event['event_id']}.")
+
 
                 except discord.NotFound:
                     print(f"Scheduler: Could not find message {event['message_id']} for event {event['event_id']}. Marking as failed to prevent retries.")
                     # Mark as created to prevent the loop from constantly trying to fetch a deleted message
+                    await self.db.mark_thread_as_created(event['event_id'])
+                except discord.Forbidden:
+                    print(f"Scheduler: **PERMISSION ERROR** creating thread for event {event['event_id']}. Ensure the bot has 'Manage Threads' permission. Marking as failed.")
                     await self.db.mark_thread_as_created(event['event_id'])
                 except discord.HTTPException as e:
                     print(f"Scheduler: HTTP error creating thread for event {event['event_id']}: {e}")

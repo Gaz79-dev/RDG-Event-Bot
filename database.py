@@ -35,7 +35,7 @@ class Database:
     async def _initial_setup(self):
         async with self.pool.acquire() as connection:
             async with connection.transaction():
-                # Add new columns if they don't exist, to support migration
+                # Guilds table setup
                 await connection.execute("""
                     CREATE TABLE IF NOT EXISTS guilds (
                         guild_id BIGINT PRIMARY KEY,
@@ -49,6 +49,7 @@ class Database:
                 """)
                 await connection.execute("ALTER TABLE guilds ADD COLUMN IF NOT EXISTS thread_creation_hours INT DEFAULT 24;")
 
+                # Roles and Subclasses tables setup
                 await connection.execute("""
                     CREATE TABLE IF NOT EXISTS roles ( role_id SERIAL PRIMARY KEY, name VARCHAR(100) UNIQUE NOT NULL );
                 """)
@@ -56,7 +57,9 @@ class Database:
                     CREATE TABLE IF NOT EXISTS subclasses ( subclass_id SERIAL PRIMARY KEY, role_id INT REFERENCES roles(role_id) ON DELETE CASCADE, name VARCHAR(100) NOT NULL );
                 """)
                 
-                # Overhaul events table for new features
+                # Events table setup with multi-role support
+                await connection.execute("ALTER TABLE events DROP COLUMN IF EXISTS mention_role_id;")
+                await connection.execute("ALTER TABLE events DROP COLUMN IF EXISTS restrict_to_role_id;")
                 await connection.execute("""
                     CREATE TABLE IF NOT EXISTS events (
                         event_id SERIAL PRIMARY KEY, guild_id BIGINT NOT NULL, creator_id BIGINT NOT NULL,
@@ -69,18 +72,13 @@ class Database:
                         thread_created BOOLEAN DEFAULT FALSE,
                         is_recurring BOOLEAN DEFAULT FALSE,
                         recurrence_rule VARCHAR(50),
-                        mention_role_id BIGINT,
-                        restrict_to_role_id BIGINT
+                        mention_role_ids BIGINT[],
+                        restrict_to_role_ids BIGINT[]
                     );
                 """)
-                # Add columns individually for migration safety
-                await connection.execute("ALTER TABLE events ADD COLUMN IF NOT EXISTS end_time TIMESTAMP WITH TIME ZONE;")
-                await connection.execute("ALTER TABLE events ADD COLUMN IF NOT EXISTS timezone VARCHAR(100);")
-                await connection.execute("ALTER TABLE events ADD COLUMN IF NOT EXISTS is_recurring BOOLEAN DEFAULT FALSE;")
-                await connection.execute("ALTER TABLE events ADD COLUMN IF NOT EXISTS recurrence_rule VARCHAR(50);")
-                await connection.execute("ALTER TABLE events ADD COLUMN IF NOT EXISTS mention_role_id BIGINT;")
-                await connection.execute("ALTER TABLE events ADD COLUMN IF NOT EXISTS restrict_to_role_id BIGINT;")
-                await connection.execute("ALTER TABLE events ADD COLUMN IF NOT EXISTS thread_created BOOLEAN DEFAULT FALSE;")
+                await connection.execute("ALTER TABLE events ADD COLUMN IF NOT EXISTS mention_role_ids BIGINT[];")
+                await connection.execute("ALTER TABLE events ADD COLUMN IF NOT EXISTS restrict_to_role_ids BIGINT[];")
+
 
                 await connection.execute("""
                     CREATE TABLE IF NOT EXISTS signups (
@@ -102,16 +100,14 @@ class Database:
                                 await connection.execute("INSERT INTO subclasses (role_id, name) VALUES ($1, $2);", role_id, subclass_name)
                 print("Database setup is complete.")
 
-    # --- New method for creating events with all the new details ---
     async def create_event(self, guild_id: int, channel_id: int, creator_id: int, data: dict) -> int:
-        """Creates a new event in the database from a dictionary of data."""
         async with self.pool.acquire() as connection:
             return await connection.fetchval(
                 """
                 INSERT INTO events (
                     guild_id, channel_id, creator_id, title, description, 
                     event_time, end_time, timezone, is_recurring, recurrence_rule,
-                    mention_role_id, restrict_to_role_id
+                    mention_role_ids, restrict_to_role_ids
                 )
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                 RETURNING event_id;
@@ -119,23 +115,22 @@ class Database:
                 guild_id, channel_id, creator_id, data.get('title'), data.get('description'),
                 data.get('start_time'), data.get('end_time'), data.get('timezone'),
                 data.get('is_recurring', False), data.get('recurrence_rule'),
-                data.get('mention_role_id'), data.get('restrict_to_role_id')
+                data.get('mention_role_ids'), data.get('restrict_to_role_ids')
             )
 
     async def update_event(self, event_id: int, data: dict):
-        """Updates an existing event from a dictionary of data."""
         async with self.pool.acquire() as connection:
             await connection.execute(
                 """
                 UPDATE events SET
                     title = $1, description = $2, event_time = $3, end_time = $4,
                     timezone = $5, is_recurring = $6, recurrence_rule = $7,
-                    mention_role_id = $8, restrict_to_role_id = $9
+                    mention_role_ids = $8, restrict_to_role_ids = $9
                 WHERE event_id = $10;
                 """,
                 data.get('title'), data.get('description'), data.get('start_time'), data.get('end_time'),
                 data.get('timezone'), data.get('is_recurring', False), data.get('recurrence_rule'),
-                data.get('mention_role_id'), data.get('restrict_to_role_id'),
+                data.get('mention_role_ids'), data.get('restrict_to_role_ids'),
                 event_id
             )
 

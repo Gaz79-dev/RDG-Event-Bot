@@ -341,12 +341,13 @@ class Conversation:
         if self.event_id:
             event_data = await self.db.get_event_by_id(self.event_id)
             self.data = dict(event_data) if event_data else {}
+            # The prompt now correctly asks for the title first during an edit
             await self.user.send(f"Now editing event: **{self.data.get('title', 'Unknown')}**.\nLet's start with the title. What should it be? (Current: `{self.data.get('title', '')}`)")
-            self.prompts.pop(0) # Start with timezone when editing
-            await self.ask_next_question()
         else:
             await self.user.send("Let's create a new event! You can type `cancel` at any time to stop.")
-            await self.ask_next_question()
+        
+        # This will now correctly ask the first question from the prompts list
+        await self.ask_next_question()
 
     async def ask_next_question(self):
         if self.stage < len(self.prompts):
@@ -361,7 +362,7 @@ class Conversation:
         _, processor = self.prompts[self.stage]
         if await processor(message):
             self.stage += 1
-            if self.stage == 5 and self.data.get('is_recurring') == False:
+            if self.stage == 6 and self.data.get('is_recurring') == False:
                  await self.user.send("Do you want to mention a role in the event announcement? (Type the role name or mention, or `no`)")
                  self.prompts.insert(self.stage, ("Mention role", self.process_mention_role))
             

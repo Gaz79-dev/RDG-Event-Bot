@@ -28,7 +28,7 @@ EMOJI_MAPPING = {
     "Officer": os.getenv("EMOJI_OFFICER", "🫡"),
     "Rifleman": os.getenv("EMOJI_RIFLEMAN", "👤"),
     "Support": os.getenv("EMOJI_SUPPORT", "🔧"),
-    "Tank Commander": os.getenv("EMOJI_TANK_COMMANDER", "�‍✈️"),
+    "Tank Commander": os.getenv("EMOJI_TANK_COMMANDER", "🧑‍✈️"),
     "Crewman": os.getenv("EMOJI_CREWMAN", "👨‍🔧"),
     "Spotter": os.getenv("EMOJI_SPOTTER", "👀"),
     "Sniper": os.getenv("EMOJI_SNIPER", "🎯"),
@@ -97,20 +97,25 @@ async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> 
     return embed
 
 # --- Conversation and UI Components ---
-class RoleMultiSelect(ui.RoleSelect):
-    def __init__(self, placeholder: str):
-        super().__init__(placeholder=placeholder, min_values=0, max_values=25)
+class MultiRoleSelect(ui.Select):
+    def __init__(self, placeholder: str, guild_roles: list[discord.Role]):
+        options = [
+            discord.SelectOption(label=role.name, value=str(role.id))
+            for role in guild_roles if role.name != "@everyone"
+        ]
+        # Handle case with more than 25 roles
+        super().__init__(placeholder=placeholder, min_values=0, max_values=min(25, len(options)), options=options[:25])
 
     async def callback(self, interaction: discord.Interaction):
-        self.view.selection = [role.id for role in self.values]
+        self.view.selection = [int(val) for val in self.values]
         await interaction.response.defer()
         self.view.stop()
 
-class RoleMultiSelectView(ui.View):
-    def __init__(self, placeholder: str):
+class MultiRoleSelectView(ui.View):
+    def __init__(self, placeholder: str, guild_roles: list[discord.Role]):
         super().__init__(timeout=180)
         self.selection = None
-        self.add_item(RoleMultiSelect(placeholder))
+        self.add_item(MultiRoleSelect(placeholder, guild_roles))
 
 class ConfirmationView(ui.View):
     def __init__(self):
@@ -216,13 +221,20 @@ class PersistentEventView(ui.View):
                 await interaction.response.send_message("This event could not be found.", ephemeral=True)
                 return
             if not await self.check_restrictions(interaction, event): return
+            
+            await interaction.response.send_message("I've sent you a DM to complete your signup!", ephemeral=True)
+            
             await self.db.set_rsvp(event['event_id'], interaction.user.id, RsvpStatus.ACCEPTED)
             new_embed = await create_event_embed(interaction.client, event['event_id'], self.db)
             await interaction.message.edit(embed=new_embed)
+            
             await interaction.user.send(f"To complete your signup for **{event['title']}**, please select your role below.", view=RoleSelectView(self.db, event['event_id']))
-            await interaction.response.send_message("I've sent you a DM to complete your signup!", ephemeral=True)
         except discord.Forbidden:
-            await interaction.response.send_message("I couldn't send you a DM. Please check your privacy settings to allow DMs from server members.", ephemeral=True)
+            # Check if interaction is already responded to before sending another response
+            if not interaction.response.is_done():
+                 await interaction.response.send_message("I couldn't send you a DM. Please check your privacy settings.", ephemeral=True)
+            else:
+                 await interaction.followup.send("I couldn't send you a DM. Please check your privacy settings.", ephemeral=True)
         except Exception as e:
             print(f"--- An error occurred in the 'Accept' button callback ---")
             traceback.print_exc()
@@ -259,44 +271,46 @@ class EventManagement(commands.Cog):
         if message.author.id in self.active_conversations:
             await self.active_conversations[message.author.id].handle_response(message)
 
-    @app_commands.command(name="create", description="Create a new event via DM.")
-    async def create(self, interaction: discord.Interaction):
+    async def start_conversation(self, interaction: discord.Interaction, event_id: int = None):
         if interaction.user.id in self.active_conversations:
             await interaction.response.send_message("You are already in an active event creation process. Please finish or `cancel` it first.", ephemeral=True)
             return
         try:
-            conversation = Conversation(self, interaction, self.db)
+            await interaction.response.send_message("I've sent you a DM to start the process!", ephemeral=True)
+            conversation = Conversation(self, interaction, self.db, event_id)
             self.active_conversations[interaction.user.id] = conversation
-            await conversation.start()
-            await interaction.response.send_message("I've sent you a DM to start creating the event!", ephemeral=True)
+            # Start the conversation as a background task to avoid blocking the interaction response
+            asyncio.create_task(conversation.start())
         except discord.Forbidden:
-            await interaction.response.send_message("I couldn't send you a DM. Please check your privacy settings.", ephemeral=True)
+            await interaction.followup.send("I couldn't send you a DM. Please check your privacy settings.", ephemeral=True)
+        except Exception as e:
+            print(f"Error starting conversation: {e}")
+            traceback.print_exc()
+
+
+    @app_commands.command(name="create", description="Create a new event via DM.")
+    async def create(self, interaction: discord.Interaction):
+        await self.start_conversation(interaction)
 
     @app_commands.command(name="edit", description="Edit an existing event via DM.")
     @app_commands.describe(event_id="The ID of the event to edit.")
     async def edit(self, interaction: discord.Interaction, event_id: int):
-        if interaction.user.id in self.active_conversations:
-            await interaction.response.send_message("You are already in an active event creation process. Please finish or `cancel` it first.", ephemeral=True)
-            return
         event = await self.db.get_event_by_id(event_id)
         if not event or event['guild_id'] != interaction.guild_id:
             await interaction.response.send_message("Event not found.", ephemeral=True)
             return
-        manager_role_id = await self.db.get_manager_role_id(interaction.guild.id)
+        
         member = await interaction.guild.fetch_member(interaction.user.id)
+        manager_role_id = await self.db.get_manager_role_id(interaction.guild.id)
         is_creator = interaction.user.id == event['creator_id']
         is_manager = manager_role_id and manager_role_id in [r.id for r in member.roles]
         is_admin = member.guild_permissions.administrator
+        
         if not (is_creator or is_manager or is_admin):
             await interaction.response.send_message("You don't have permission to edit this event.", ephemeral=True)
             return
-        try:
-            conversation = Conversation(self, interaction, self.db, event_id)
-            self.active_conversations[interaction.user.id] = conversation
-            await conversation.start()
-            await interaction.response.send_message("I've sent you a DM to start editing the event!", ephemeral=True)
-        except discord.Forbidden:
-            await interaction.response.send_message("I couldn't send you a DM. Please check your privacy settings.", ephemeral=True)
+        
+        await self.start_conversation(interaction, event_id)
 
 async def setup(bot: commands.Bot, db: Database):
     if not hasattr(db, 'get_event_by_id'):
@@ -318,13 +332,17 @@ class Conversation:
         self.data = {}
     
     async def start(self):
-        if self.event_id:
-            event_data = await self.db.get_event_by_id(self.event_id)
-            self.data = dict(event_data) if event_data else {}
-            await self.user.send(f"Now editing event: **{self.data.get('title', 'Unknown')}**.")
-        else:
-            await self.user.send("Let's create a new event! You can type `cancel` at any time to stop.")
-        await self.run_conversation()
+        try:
+            if self.event_id:
+                event_data = await self.db.get_event_by_id(self.event_id)
+                self.data = dict(event_data) if event_data else {}
+                await self.user.send(f"Now editing event: **{self.data.get('title', 'Unknown')}**.")
+            else:
+                await self.user.send("Let's create a new event! You can type `cancel` at any time to stop.")
+            await self.run_conversation()
+        except Exception as e:
+            print(f"Error at start of conversation for {self.user.id}")
+            traceback.print_exc()
 
     async def run_conversation(self):
         steps = [
@@ -338,13 +356,11 @@ class Conversation:
         ]
         
         for prompt, processor, data_key in steps:
-            if not await processor(prompt, data_key):
-                # Conversation was cancelled or timed out
-                return
+            if not await processor(prompt, data_key): return
         await self.finish()
 
     async def process_text(self, prompt, data_key):
-        if self.event_id: prompt += f"\n(Current: `{self.data.get(data_key, '')}`)"
+        if self.event_id and self.data.get(data_key): prompt += f"\n(Current: `{self.data.get(data_key)}`)"
         await self.user.send(prompt)
         try:
             msg = await self.bot.wait_for('message', check=lambda m: m.author == self.user and isinstance(m.channel, discord.DMChannel), timeout=300.0)
@@ -356,7 +372,7 @@ class Conversation:
 
     async def process_timezone(self, prompt, data_key):
         while True:
-            if self.event_id: prompt += f"\n(Current: `{self.data.get(data_key, '')}`)"
+            if self.event_id and self.data.get(data_key): prompt += f"\n(Current: `{self.data.get(data_key)}`)"
             await self.user.send(prompt)
             try:
                 msg = await self.bot.wait_for('message', check=lambda m: m.author == self.user and isinstance(m.channel, discord.DMChannel), timeout=300.0)
@@ -370,7 +386,8 @@ class Conversation:
 
     async def process_start_time(self, prompt, data_key):
         while True:
-            if self.event_id: prompt += f"\n(Current: `{self.data.get(data_key).strftime('%d-%m-%Y %H:%M') if self.data.get(data_key) else ''}`)"
+            current_val = self.data.get(data_key).strftime('%d-%m-%Y %H:%M') if self.data.get(data_key) else ''
+            if self.event_id: prompt += f"\n(Current: `{current_val}`)"
             await self.user.send(prompt)
             try:
                 msg = await self.bot.wait_for('message', check=lambda m: m.author == self.user and isinstance(m.channel, discord.DMChannel), timeout=300.0)
@@ -384,7 +401,8 @@ class Conversation:
                 await self.user.send("You took too long to respond. Conversation cancelled."); await self.cancel(); return False
 
     async def process_end_time(self, prompt, data_key):
-        if self.event_id: prompt += f"\n(Current: `{self.data.get(data_key).strftime('%d-%m-%Y %H:%M') if self.data.get(data_key) else 'Not set'}`)"
+        current_val = self.data.get(data_key).strftime('%d-%m-%Y %H:%M') if self.data.get(data_key) else 'Not set'
+        if self.event_id: prompt += f"\n(Current: `{current_val}`)"
         await self.user.send(prompt)
         try:
             msg = await self.bot.wait_for('message', check=lambda m: m.author == self.user and isinstance(m.channel, discord.DMChannel), timeout=300.0)
@@ -402,9 +420,10 @@ class Conversation:
         view = ConfirmationView()
         msg = await self.user.send("Do you want to mention any roles in the event announcement?", view=view)
         await view.wait()
+        if view.value is None: await msg.delete(); return False
         await msg.delete()
         if view.value:
-            select_view = RoleMultiSelectView("Select roles to mention...")
+            select_view = MultiRoleSelectView("Select roles to mention...", self.interaction.guild.roles)
             msg = await self.user.send("Please select the roles to mention below.", view=select_view)
             await select_view.wait()
             await msg.delete()
@@ -417,9 +436,10 @@ class Conversation:
         view = ConfirmationView()
         msg = await self.user.send("Do you want to restrict sign-ups to specific roles?", view=view)
         await view.wait()
+        if view.value is None: await msg.delete(); return False
         await msg.delete()
         if view.value:
-            select_view = RoleMultiSelectView("Select roles to restrict sign-ups to...")
+            select_view = MultiRoleSelectView("Select roles to restrict sign-ups to...", self.interaction.guild.roles)
             msg = await self.user.send("Please select the roles to restrict sign-ups to below.", view=select_view)
             await select_view.wait()
             await msg.delete()
@@ -456,4 +476,3 @@ class Conversation:
         if self.user.id in self.cog.active_conversations:
             del self.cog.active_conversations[self.user.id]
         await self.user.send("Event creation/editing cancelled.")
-�

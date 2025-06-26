@@ -99,11 +99,7 @@ async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> 
 # --- Conversation and UI Components ---
 class MultiRoleSelect(ui.Select):
     def __init__(self, placeholder: str, guild_roles: list[discord.Role]):
-        options = [
-            discord.SelectOption(label=role.name, value=str(role.id))
-            for role in guild_roles if role.name != "@everyone"
-        ]
-        # Handle case with more than 25 roles
+        options = [discord.SelectOption(label=role.name, value=str(role.id)) for role in guild_roles if role.name != "@everyone"]
         super().__init__(placeholder=placeholder, min_values=0, max_values=min(25, len(options)), options=options[:25])
 
     async def callback(self, interaction: discord.Interaction):
@@ -265,7 +261,6 @@ class ConfirmDeleteView(ui.View):
         self.original_interaction = interaction
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        # Only allow the original user to interact
         return interaction.user.id == self.original_interaction.user.id
 
     @ui.button(label="Confirm Delete", style=discord.ButtonStyle.danger)
@@ -355,7 +350,6 @@ class EventManagement(commands.Cog):
 
         if view.value:
             try:
-                # Delete the original message
                 channel = self.bot.get_channel(event['channel_id'])
                 if channel:
                     message = await channel.fetch_message(event['message_id'])
@@ -367,11 +361,41 @@ class EventManagement(commands.Cog):
             except Exception as e:
                 print(f"Error deleting message: {e}")
 
-            # Delete the event from the database
             await self.db.delete_event(event_id)
             await interaction.followup.send("Event has been deleted.", ephemeral=True)
         else:
             await interaction.followup.send("Deletion cancelled.", ephemeral=True)
+
+    # --- Setup Command Group ---
+    setup = app_commands.Group(name="setup", description="Commands for setting up the bot.")
+
+    @setup.command(name="manager_role", description="Set the role that can manage events.")
+    @app_commands.describe(role="The role to designate as Event Manager")
+    async def set_manager_role(self, interaction: discord.Interaction, role: discord.Role):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("You must be an administrator to use this command.", ephemeral=True)
+            return
+        await self.db.set_manager_role(interaction.guild.id, role.id)
+        await interaction.response.send_message(f"**{role.name}** has been set as the Event Manager role.", ephemeral=True)
+
+    @setup.command(name="restricted_role", description="Set the required Discord role for an in-game role.")
+    @app_commands.describe(ingame_role="The in-game role to restrict", discord_role="The Discord role required")
+    @app_commands.choices(ingame_role=[app_commands.Choice(name=r, value=r) for r in RESTRICTED_ROLES])
+    async def set_restricted_role(self, interaction: discord.Interaction, ingame_role: app_commands.Choice[str], discord_role: discord.Role):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("You must be an administrator to use this command.", ephemeral=True)
+            return
+        await self.db.set_restricted_role(interaction.guild.id, ingame_role.value, discord_role.id)
+        await interaction.response.send_message(f"Users now need the **{discord_role.name}** role to sign up as **{ingame_role.name}**.", ephemeral=True)
+    
+    @setup.command(name="thread_schedule", description="Set how many hours before an event its discussion thread is created.")
+    @app_commands.describe(hours="Number of hours before the event (e.g., 24)")
+    async def set_thread_schedule(self, interaction: discord.Interaction, hours: app_commands.Range[int, 1, 168]):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("You must be an administrator to use this command.", ephemeral=True)
+            return
+        await self.db.set_thread_creation_hours(interaction.guild.id, hours)
+        await interaction.response.send_message(f"Event threads will now be created **{hours}** hour(s) before the event starts.", ephemeral=True)
 
 
 async def setup(bot: commands.Bot, db: Database):

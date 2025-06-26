@@ -230,7 +230,6 @@ class PersistentEventView(ui.View):
             
             await interaction.user.send(f"To complete your signup for **{event['title']}**, please select your role below.", view=RoleSelectView(self.db, event['event_id']))
         except discord.Forbidden:
-            # Check if interaction is already responded to before sending another response
             if not interaction.response.is_done():
                  await interaction.response.send_message("I couldn't send you a DM. Please check your privacy settings.", ephemeral=True)
             else:
@@ -259,6 +258,28 @@ class PersistentEventView(ui.View):
         new_embed = await create_event_embed(interaction.client, event['event_id'], self.db)
         await interaction.message.edit(embed=new_embed)
 
+class ConfirmDeleteView(ui.View):
+    def __init__(self, interaction: discord.Interaction):
+        super().__init__(timeout=60)
+        self.value = None
+        self.original_interaction = interaction
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        # Only allow the original user to interact
+        return interaction.user.id == self.original_interaction.user.id
+
+    @ui.button(label="Confirm Delete", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: ui.Button):
+        self.value = True
+        await interaction.response.defer()
+        self.stop()
+
+    @ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: ui.Button):
+        self.value = False
+        await interaction.response.defer()
+        self.stop()
+
 class EventManagement(commands.Cog):
     def __init__(self, bot: commands.Bot, db: Database):
         self.bot = bot
@@ -279,14 +300,12 @@ class EventManagement(commands.Cog):
             await interaction.response.send_message("I've sent you a DM to start the process!", ephemeral=True)
             conversation = Conversation(self, interaction, self.db, event_id)
             self.active_conversations[interaction.user.id] = conversation
-            # Start the conversation as a background task to avoid blocking the interaction response
             asyncio.create_task(conversation.start())
         except discord.Forbidden:
             await interaction.followup.send("I couldn't send you a DM. Please check your privacy settings.", ephemeral=True)
         except Exception as e:
             print(f"Error starting conversation: {e}")
             traceback.print_exc()
-
 
     @app_commands.command(name="create", description="Create a new event via DM.")
     async def create(self, interaction: discord.Interaction):
@@ -311,6 +330,49 @@ class EventManagement(commands.Cog):
             return
         
         await self.start_conversation(interaction, event_id)
+
+    @app_commands.command(name="delete", description="Delete an existing event by its ID.")
+    @app_commands.describe(event_id="The ID of the event to delete.")
+    async def delete(self, interaction: discord.Interaction, event_id: int):
+        event = await self.db.get_event_by_id(event_id)
+        if not event or event['guild_id'] != interaction.guild_id:
+            await interaction.response.send_message("Event not found in this server.", ephemeral=True)
+            return
+        
+        member = await interaction.guild.fetch_member(interaction.user.id)
+        manager_role_id = await self.db.get_manager_role_id(interaction.guild.id)
+        is_creator = interaction.user.id == event['creator_id']
+        is_manager = manager_role_id and manager_role_id in [r.id for r in member.roles]
+        is_admin = member.guild_permissions.administrator
+
+        if not (is_creator or is_manager or is_admin):
+            await interaction.response.send_message("You don't have permission to delete this event.", ephemeral=True)
+            return
+
+        view = ConfirmDeleteView(interaction)
+        await interaction.response.send_message(f"Are you sure you want to permanently delete the event: **{event['title']}** (ID: {event_id})?", view=view, ephemeral=True)
+        await view.wait()
+
+        if view.value:
+            try:
+                # Delete the original message
+                channel = self.bot.get_channel(event['channel_id'])
+                if channel:
+                    message = await channel.fetch_message(event['message_id'])
+                    await message.delete()
+            except discord.NotFound:
+                print(f"Could not find message {event['message_id']} to delete.")
+            except discord.Forbidden:
+                print(f"Missing permissions to delete message {event['message_id']}.")
+            except Exception as e:
+                print(f"Error deleting message: {e}")
+
+            # Delete the event from the database
+            await self.db.delete_event(event_id)
+            await interaction.followup.send("Event has been deleted.", ephemeral=True)
+        else:
+            await interaction.followup.send("Deletion cancelled.", ephemeral=True)
+
 
 async def setup(bot: commands.Bot, db: Database):
     if not hasattr(db, 'get_event_by_id'):

@@ -38,7 +38,6 @@ EMOJI_MAPPING = {
 def create_google_calendar_link(event: dict) -> str:
     base_url = "https://www.google.com/calendar/render?action=TEMPLATE"
     
-    # Format dates to Google's required format (YYYYMMDDTHHMMSSZ)
     start_time_utc = event['event_time'].astimezone(pytz.utc)
     end_time_utc = (event['end_time'] or (start_time_utc + datetime.timedelta(hours=2))).astimezone(pytz.utc)
     
@@ -51,10 +50,14 @@ def create_google_calendar_link(event: dict) -> str:
     return f"{base_url}&{urlencode(params)}"
 
 # --- Helper function to generate the event embed ---
-async def create_event_embed(interaction: discord.Interaction, event_id: int, db: Database) -> discord.Embed:
+async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> discord.Embed:
     event = await db.get_event_by_id(event_id)
     if not event:
         return discord.Embed(title="Error", description="Event not found.", color=discord.Color.red())
+
+    guild = bot.get_guild(event['guild_id'])
+    if not guild:
+        return discord.Embed(title="Error", description="Could not find the server for this event.", color=discord.Color.red())
 
     signups = await db.get_signups_for_event(event_id)
     
@@ -75,14 +78,14 @@ async def create_event_embed(interaction: discord.Interaction, event_id: int, db
         
     embed.add_field(name="Time", value=time_str, inline=False)
     
-    creator = interaction.guild.get_member(event['creator_id']) or (await interaction.client.fetch_user(event['creator_id']))
+    creator = guild.get_member(event['creator_id']) or (await bot.fetch_user(event['creator_id']))
     embed.set_footer(text=f"Event ID: {event_id} | Created by: {creator.display_name}")
 
     accepted_signups, tentative_users, declined_users = {}, [], []
     for r in ROLES: accepted_signups[r] = []
 
     for signup in signups:
-        user = interaction.guild.get_member(signup['user_id']) or (await interaction.client.fetch_user(signup['user_id']))
+        user = guild.get_member(signup['user_id']) or (await bot.fetch_user(signup['user_id']))
         if not user: continue
 
         if signup['rsvp_status'] == RsvpStatus.ACCEPTED:
@@ -108,7 +111,7 @@ async def create_event_embed(interaction: discord.Interaction, event_id: int, db
     if declined_users: embed.add_field(name=f"❌ Declined ({len(declined_users)})", value=", ".join(declined_users), inline=False)
     
     if event['restrict_to_role_id']:
-        role = interaction.guild.get_role(event['restrict_to_role_id'])
+        role = guild.get_role(event['restrict_to_role_id'])
         embed.add_field(name="🔒 Restricted Event", value=f"Sign-ups are restricted to members with the **{role.name if role else 'Unknown Role'}** role.", inline=False)
 
     return embed
@@ -116,7 +119,6 @@ async def create_event_embed(interaction: discord.Interaction, event_id: int, db
 # --- UI Components for DM Conversations ---
 
 class RoleSelect(ui.Select):
-    """Dropdown for selecting a primary role in a DM."""
     def __init__(self, db: Database, event_id: int):
         self.db = db
         self.event_id = event_id
@@ -127,7 +129,6 @@ class RoleSelect(ui.Select):
         await interaction.response.defer()
         selected_role = self.values[0]
 
-        # Since this is in a DM, we need to fetch the guild from the bot to check roles
         event_record = await self.db.get_event_by_id(self.event_id)
         guild = interaction.client.get_guild(event_record['guild_id'])
         member = await guild.fetch_member(interaction.user.id)
@@ -142,16 +143,14 @@ class RoleSelect(ui.Select):
         else:
             await self.db.update_signup_role(self.event_id, interaction.user.id, selected_role)
             await interaction.followup.send(f"You have signed up as **{selected_role}**! The event in the server has been updated.", ephemeral=True)
-            # Update the original event embed
             original_channel = guild.get_channel(event_record['channel_id'])
             original_message = await original_channel.fetch_message(event_record['message_id'])
-            new_embed = await create_event_embed(interaction, self.event_id, self.db)
+            new_embed = await create_event_embed(interaction.client, self.event_id, self.db)
             await original_message.edit(embed=new_embed)
         
         await interaction.message.delete()
 
 class SubclassSelect(ui.Select):
-    """Dropdown for selecting a subclass in a DM."""
     def __init__(self, db: Database, parent_role: str, event_id: int):
         self.db = db
         self.parent_role = parent_role
@@ -177,11 +176,10 @@ class SubclassSelect(ui.Select):
 
         original_channel = guild.get_channel(event_record['channel_id'])
         original_message = await original_channel.fetch_message(event_record['message_id'])
-        new_embed = await create_event_embed(interaction, self.event_id, self.db)
+        new_embed = await create_event_embed(interaction.client, self.event_id, self.db)
         await original_message.edit(embed=new_embed)
         
         await interaction.message.delete()
-
 
 class RoleSelectView(ui.View):
     def __init__(self, db: Database, event_id: int):
@@ -193,7 +191,6 @@ class SubclassSelectView(ui.View):
         super().__init__(timeout=180)
         self.add_item(SubclassSelect(db, parent_role, event_id))
 
-
 # --- Main Persistent View for the Event Embed ---
 class PersistentEventView(ui.View):
     def __init__(self, db: Database):
@@ -201,6 +198,7 @@ class PersistentEventView(ui.View):
         self.db = db
 
     async def check_restrictions(self, interaction: discord.Interaction, event: dict) -> bool:
+        # In a view, interaction.user is a Member object, so .roles is available
         if event['restrict_to_role_id']:
             role = interaction.guild.get_role(event['restrict_to_role_id'])
             if role and role not in interaction.user.roles:
@@ -218,19 +216,18 @@ class PersistentEventView(ui.View):
             
             if not await self.check_restrictions(interaction, event): return
 
+            await self.db.set_rsvp(event['event_id'], interaction.user.id, RsvpStatus.ACCEPTED)
+            new_embed = await create_event_embed(interaction.client, event['event_id'], self.db)
+            await interaction.message.edit(embed=new_embed)
+            
             await interaction.user.send(f"To complete your signup for **{event['title']}**, please select your role below.", view=RoleSelectView(self.db, event['event_id']))
             await interaction.response.send_message("I've sent you a DM to complete your signup!", ephemeral=True)
-            
-            await self.db.set_rsvp(event['event_id'], interaction.user.id, RsvpStatus.ACCEPTED)
-            new_embed = await create_event_embed(interaction, event['event_id'], self.db)
-            await interaction.message.edit(embed=new_embed)
 
         except discord.Forbidden:
             await interaction.response.send_message("I couldn't send you a DM. Please check your privacy settings to allow DMs from server members.", ephemeral=True)
         except Exception as e:
             print(f"--- An error occurred in the 'Accept' button callback ---")
             traceback.print_exc()
-            print("--- End of error ---")
             if not interaction.response.is_done():
                 await interaction.response.send_message("An unexpected error occurred. Please check the bot's logs.", ephemeral=True)
 
@@ -240,7 +237,7 @@ class PersistentEventView(ui.View):
         if not event or not await self.check_restrictions(interaction, event): return
         await self.db.set_rsvp(event['event_id'], interaction.user.id, RsvpStatus.TENTATIVE)
         await interaction.response.defer()
-        new_embed = await create_event_embed(interaction, event['event_id'], self.db)
+        new_embed = await create_event_embed(interaction.client, event['event_id'], self.db)
         await interaction.message.edit(embed=new_embed)
 
     @ui.button(label="Decline", style=discord.ButtonStyle.danger, custom_id="persistent_view:decline")
@@ -249,7 +246,7 @@ class PersistentEventView(ui.View):
         if not event: return
         await self.db.set_rsvp(event['event_id'], interaction.user.id, RsvpStatus.DECLINED)
         await interaction.response.defer()
-        new_embed = await create_event_embed(interaction, event['event_id'], self.db)
+        new_embed = await create_event_embed(interaction.client, event['event_id'], self.db)
         await interaction.message.edit(embed=new_embed)
 
 # --- Main Cog ---
@@ -292,9 +289,10 @@ class EventManagement(commands.Cog):
             return
         
         manager_role_id = await self.db.get_manager_role_id(interaction.guild.id)
+        member = interaction.guild.get_member(interaction.user.id)
         is_creator = interaction.user.id == event['creator_id']
-        is_manager = manager_role_id and manager_role_id in [r.id for r in interaction.user.roles]
-        is_admin = interaction.user.guild_permissions.administrator
+        is_manager = manager_role_id and manager_role_id in [r.id for r in member.roles]
+        is_admin = member.guild_permissions.administrator
 
         if not (is_creator or is_manager or is_admin):
             await interaction.response.send_message("You don't have permission to edit this event.", ephemeral=True)
@@ -308,7 +306,6 @@ class EventManagement(commands.Cog):
         except discord.Forbidden:
             await interaction.response.send_message("I couldn't send you a DM. Please check your privacy settings.", ephemeral=True)
 
-
 async def setup(bot: commands.Bot, db: Database):
     """Sets up the cog and adds the persistent view."""
     if not hasattr(db, 'get_event_by_id'):
@@ -319,7 +316,6 @@ async def setup(bot: commands.Bot, db: Database):
     
     bot.add_view(PersistentEventView(db))
     await bot.add_cog(EventManagement(bot, db))
-
 
 # --- The Conversation Class (nested to simplify file structure) ---
 class Conversation:
@@ -346,6 +342,8 @@ class Conversation:
             event_data = await self.db.get_event_by_id(self.event_id)
             self.data = dict(event_data) if event_data else {}
             await self.user.send(f"Now editing event: **{self.data.get('title', 'Unknown')}**.\nLet's start with the title. What should it be? (Current: `{self.data.get('title', '')}`)")
+            self.prompts.pop(0) # Start with timezone when editing
+            await self.ask_next_question()
         else:
             await self.user.send("Let's create a new event! You can type `cancel` at any time to stop.")
             await self.ask_next_question()
@@ -358,15 +356,12 @@ class Conversation:
             await self.finish()
             
     async def handle_response(self, message: discord.Message):
-        if message.content.lower() == 'cancel':
-            await self.cancel()
-            return
+        if message.content.lower() == 'cancel': await self.cancel(); return
         
         _, processor = self.prompts[self.stage]
         if await processor(message):
             self.stage += 1
-            # Special handling for conditional prompts
-            if self.stage == 6 and self.data.get('is_recurring') == False:
+            if self.stage == 5 and self.data.get('is_recurring') == False:
                  await self.user.send("Do you want to mention a role in the event announcement? (Type the role name or mention, or `no`)")
                  self.prompts.insert(self.stage, ("Mention role", self.process_mention_role))
             
@@ -377,17 +372,14 @@ class Conversation:
 
     async def process_timezone(self, message):
         try:
-            pytz.timezone(message.content)
-            self.data['timezone'] = message.content
-            return True
+            pytz.timezone(message.content); self.data['timezone'] = message.content; return True
         except pytz.UnknownTimeZoneError:
             await self.user.send("That's not a valid timezone. Please try again (e.g., `UTC`, `America/New_York`)."); return False
 
     async def process_start_time(self, message):
         try:
             tz = pytz.timezone(self.data.get('timezone', 'UTC'))
-            self.data['start_time'] = tz.localize(datetime.datetime.strptime(message.content, "%d-%m-%Y %H:%M"))
-            return True
+            self.data['start_time'] = tz.localize(datetime.datetime.strptime(message.content, "%d-%m-%Y %H:%M")); return True
         except ValueError:
             await self.user.send("Invalid date format. Please use `DD-MM-YYYY HH:MM`."); return False
 
@@ -395,27 +387,22 @@ class Conversation:
         if not message.content: self.data['end_time'] = None; return True
         try:
             tz = pytz.timezone(self.data.get('timezone', 'UTC'))
-            self.data['end_time'] = tz.localize(datetime.datetime.strptime(message.content, "%d-%m-%Y %H:%M"))
-            return True
+            self.data['end_time'] = tz.localize(datetime.datetime.strptime(message.content, "%d-%m-%Y %H:%M")); return True
         except ValueError:
             await self.user.send("Invalid date format. Please use `DD-MM-YYYY HH:MM`."); return False
 
     async def process_is_recurring(self, message):
-        if message.content.lower() in ['yes', 'y']:
-            self.data['is_recurring'] = True
+        self.data['is_recurring'] = message.content.lower() in ['yes', 'y']
+        if self.data['is_recurring']:
             await self.user.send("How often should it recur? (`weekly`, `monthly`, `yearly`)")
             self.prompts.insert(self.stage + 1, ("Recurrence rule", self.process_recurrence_rule))
-        else:
-            self.data['is_recurring'] = False
         return True
 
     async def process_recurrence_rule(self, message):
         rule = message.content.lower()
-        if rule in ['weekly', 'monthly', 'yearly']:
-            self.data['recurrence_rule'] = rule
-        else:
+        if rule not in ['weekly', 'monthly', 'yearly']:
             await self.user.send("Invalid recurrence rule. Please enter `weekly`, `monthly`, or `yearly`."); return False
-        
+        self.data['recurrence_rule'] = rule
         await self.user.send("Do you want to mention a role in the event announcement? (Type the role name or mention, or `no`)")
         self.prompts.insert(self.stage + 1, ("Mention role", self.process_mention_role))
         return True
@@ -424,11 +411,9 @@ class Conversation:
         if message.content.lower() in ['no', 'n', 'none']: self.data['mention_role_id'] = None
         else:
             try:
-                role = await commands.RoleConverter().convert(self.interaction, message.content)
-                self.data['mention_role_id'] = role.id
+                role = await commands.RoleConverter().convert(self.interaction, message.content); self.data['mention_role_id'] = role.id
             except commands.RoleNotFound:
                 await self.user.send("I couldn't find that role. Please try again."); return False
-        
         await self.user.send("Do you want to restrict sign-ups to a specific role? (Type the role name or mention, or `no`)")
         self.prompts.insert(self.stage + 1, ("Restrict role", self.process_restrict_role))
         return True
@@ -437,32 +422,31 @@ class Conversation:
         if message.content.lower() in ['no', 'n', 'none']: self.data['restrict_to_role_id'] = None
         else:
             try:
-                role = await commands.RoleConverter().convert(self.interaction, message.content)
-                self.data['restrict_to_role_id'] = role.id
+                role = await commands.RoleConverter().convert(self.interaction, message.content); self.data['restrict_to_role_id'] = role.id
             except commands.RoleNotFound:
                 await self.user.send("I couldn't find that role. Please try again."); return False
         return True
 
     async def finish(self):
         del self.cog.active_conversations[self.user.id]
+        guild = self.interaction.guild
         if self.event_id:
             await self.db.update_event(self.event_id, self.data)
             await self.user.send("Event updated successfully!")
             event_record = await self.db.get_event_by_id(self.event_id)
-            original_message = await self.interaction.guild.get_channel(event_record['channel_id']).fetch_message(event_record['message_id'])
-            new_embed = await create_event_embed(self.interaction, self.event_id, self.db)
+            original_channel = guild.get_channel(event_record['channel_id'])
+            original_message = await original_channel.fetch_message(event_record['message_id'])
+            new_embed = await create_event_embed(self.bot, self.event_id, self.db)
             await original_message.edit(embed=new_embed)
         else:
-            event_id = await self.db.create_event(self.interaction.guild.id, self.interaction.channel.id, self.user.id, self.data)
+            event_id = await self.db.create_event(guild.id, self.interaction.channel.id, self.user.id, self.data)
             await self.user.send("Event created successfully! Posting it now.")
             view = PersistentEventView(self.db)
-            embed = await create_event_embed(self.interaction, event_id, self.db)
-            
+            embed = await create_event_embed(self.bot, event_id, self.db)
             content = ""
             if self.data.get('mention_role_id'):
-                role = self.interaction.guild.get_role(self.data['mention_role_id'])
+                role = guild.get_role(self.data['mention_role_id'])
                 if role: content = role.mention
-
             msg = await self.interaction.channel.send(content=content, embed=embed, view=view)
             await self.db.update_event_message_id(event_id, msg.id)
 

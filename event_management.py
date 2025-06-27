@@ -108,9 +108,6 @@ class MultiRoleSelectView(ui.View):
 
     def __init__(self, placeholder: str):
         super().__init__(timeout=180)
-        # The select menu is defined by the decorator below.
-        # We access it via its `__discord_ui_model_type__` attribute to set the placeholder.
-        # This ensures the placeholder is set correctly on the component.
         for child in self.children:
             if isinstance(child, ui.RoleSelect):
                 child.placeholder = placeholder
@@ -513,4 +510,4 @@ class Conversation:
         self.is_finished = True
         if self.user.id in self.cog.active_conversations:
             del self.cog.active_conversations[self.user.id]
-        await self.user.send("Event creation/editing cancelled
+        await self.user.send("Event creation/editing cancelled")

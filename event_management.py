@@ -101,20 +101,32 @@ async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> 
     return embed
 
 # --- UI Components ---
-class MultiRoleSelect(ui.Select):
-    def __init__(self, placeholder: str, guild_roles: list[discord.Role]):
-        options = [discord.SelectOption(label=role.name, value=str(role.id)) for role in guild_roles if role.name != "@everyone"]
-        super().__init__(placeholder=placeholder, min_values=0, max_values=min(25, len(options)), options=options[:25])
+
+# --- CORRECTED MultiRoleSelect using ui.RoleSelect ---
+class MultiRoleSelect(ui.RoleSelect):
+    """A multi-select dropdown for Discord roles."""
+    def __init__(self, placeholder: str):
+        # Use the dedicated RoleSelect component.
+        # It handles populating the roles automatically.
+        super().__init__(
+            placeholder=placeholder,
+            min_values=1,
+            max_values=25 # Allows selecting up to 25 roles.
+        )
+    
     async def callback(self, interaction: discord.Interaction):
-        self.view.selection = [int(val) for val in self.values]
+        # self.values is now a list of discord.Role objects.
+        self.view.selection = [role.id for role in self.values]
         await interaction.response.defer()
         self.view.stop()
 
 class MultiRoleSelectView(ui.View):
-    def __init__(self, placeholder: str, guild_roles: list[discord.Role]):
+    """A view containing the MultiRoleSelect dropdown."""
+    def __init__(self, placeholder: str):
         super().__init__(timeout=180)
         self.selection = None
-        self.add_item(MultiRoleSelect(placeholder, guild_roles))
+        # No longer needs guild_roles passed to it.
+        self.add_item(MultiRoleSelect(placeholder))
 
 class ConfirmationView(ui.View):
     def __init__(self):
@@ -240,10 +252,9 @@ async def is_event_manager(interaction: discord.Interaction) -> bool:
     if interaction.user.guild_permissions.administrator:
         return True
     
-    # This check assumes the cog is attached to a bot with a 'db' attribute
     cog = interaction.client.get_cog("EventManagement")
     if not cog:
-        return False # Should not happen
+        return False
         
     manager_roles = await cog.db.get_manager_role_ids(interaction.guild.id)
     if not manager_roles:
@@ -287,7 +298,6 @@ class EventManagement(commands.Cog):
         event = await self.db.get_event_by_id(event_id)
         if not event or event['guild_id'] != interaction.guild_id:
             await interaction.response.send_message("Event not found.", ephemeral=True); return
-        # The is_event_manager check already covers permissions, but we can keep creator check as an extra.
         if not interaction.user.guild_permissions.administrator and event['creator_id'] != interaction.user.id:
              manager_roles = await self.db.get_manager_role_ids(interaction.guild.id)
              user_role_ids = {role.id for role in interaction.user.roles}
@@ -318,7 +328,6 @@ class EventManagement(commands.Cog):
         else:
             await interaction.followup.send("Deletion cancelled.", ephemeral=True)
 
-    # --- Setup Command Group ---
     setup = app_commands.Group(name="setup", description="Commands for setting up the bot.", default_permissions=discord.Permissions(administrator=True))
 
     @setup.command(name="manager_roles", description="Set the roles that can manage events.")
@@ -326,7 +335,8 @@ class EventManagement(commands.Cog):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("You must be an administrator to use this command.", ephemeral=True); return
         
-        view = MultiRoleSelectView("Select one or more Event Manager roles", interaction.guild.roles)
+        # Use the corrected MultiRoleSelectView
+        view = MultiRoleSelectView("Select one or more Event Manager roles")
         await interaction.response.send_message("Please select the roles that should be allowed to manage events.", view=view, ephemeral=True)
         await view.wait()
 
@@ -358,7 +368,6 @@ async def setup(bot: commands.Bot, db: Database):
     bot.add_view(PersistentEventView(db))
     await bot.add_cog(EventManagement(bot, db))
 
-# --- Conversation Class (largely unchanged) ---
 class Conversation:
     def __init__(self, cog: EventManagement, interaction: discord.Interaction, db: Database, event_id: int = None):
         self.cog, self.bot, self.interaction, self.user, self.db, self.event_id = cog, cog.bot, interaction, interaction.user, db, event_id
@@ -472,7 +481,8 @@ class Conversation:
         if view.value is None: await msg.delete(); return False
         await msg.delete()
         if view.value:
-            select_view = MultiRoleSelectView(f"Select roles for: {data_key}", self.interaction.guild.roles)
+            # Use the corrected RoleSelect-based view
+            select_view = MultiRoleSelectView(f"Select roles for: {data_key}")
             m = await self.user.send("Please select roles below.", view=select_view)
             await select_view.wait(); await m.delete(); self.data[data_key] = select_view.selection
         else: self.data[data_key] = None
@@ -483,7 +493,9 @@ class Conversation:
         return await self._ask_roles(prompt, data_key, "Restrict sign-ups to specific roles?")
     async def finish(self):
         if self.is_finished: return
-        self.is_finished = True; del self.cog.active_conversations[self.user.id]
+        self.is_finished = True; 
+        if self.user.id in self.cog.active_conversations:
+            del self.cog.active_conversations[self.user.id]
         if self.event_id:
             await self.db.update_event(self.event_id, self.data)
             await self.user.send("Event updated successfully!")

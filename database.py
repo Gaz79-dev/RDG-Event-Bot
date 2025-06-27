@@ -47,7 +47,7 @@ class Database:
                 await connection.execute("""
                     CREATE TABLE IF NOT EXISTS guilds (
                         guild_id BIGINT PRIMARY KEY,
-                        event_manager_role_id BIGINT,
+                        event_manager_role_ids BIGINT[],
                         commander_role_id BIGINT,
                         recon_role_id BIGINT,
                         officer_role_id BIGINT,
@@ -55,6 +55,14 @@ class Database:
                         thread_creation_hours INT DEFAULT 24
                     );
                 """)
+                # Migration from single to multiple manager roles
+                try:
+                    await connection.execute("ALTER TABLE guilds RENAME COLUMN event_manager_role_id TO event_manager_role_ids;")
+                    await connection.execute("ALTER TABLE guilds ALTER COLUMN event_manager_role_ids TYPE BIGINT[];")
+                except asyncpg.PostgresError:
+                    # This will fail if the columns are already correct, which is fine.
+                    await connection.execute("ALTER TABLE guilds ADD COLUMN IF NOT EXISTS event_manager_role_ids BIGINT[];")
+
                 await connection.execute("ALTER TABLE guilds ADD COLUMN IF NOT EXISTS thread_creation_hours INT DEFAULT 24;")
 
                 # Roles and Subclasses tables setup
@@ -91,7 +99,6 @@ class Database:
                     );
                 """)
                 
-                # Add new columns for recurrence if they don't exist
                 await connection.execute("ALTER TABLE events ADD COLUMN IF NOT EXISTS recreation_hours INT;")
                 await connection.execute("ALTER TABLE events ADD COLUMN IF NOT EXISTS parent_event_id INT REFERENCES events(event_id) ON DELETE SET NULL;")
                 await connection.execute("ALTER TABLE events ADD COLUMN IF NOT EXISTS last_recreated_at TIMESTAMP WITH TIME ZONE;")
@@ -119,11 +126,8 @@ class Database:
                 print("Database setup is complete.")
 
     async def create_event(self, guild_id: int, channel_id: int, creator_id: int, data: dict) -> int:
-        """Creates a new event in the database."""
         async with self.pool.acquire() as connection:
-            # When creating a recurring event for the first time, its parent_event_id is NULL
             parent_id = data.get('parent_event_id')
-
             return await connection.fetchval(
                 """
                 INSERT INTO events (
@@ -142,7 +146,6 @@ class Database:
             )
 
     async def update_event(self, event_id: int, data: dict):
-        """Updates an existing event in the database."""
         async with self.pool.acquire() as connection:
             await connection.execute(
                 """
@@ -159,7 +162,6 @@ class Database:
             )
 
     async def get_events_for_recreation(self):
-        """Fetches recurring events that have passed and are due for recreation."""
         query = """
             SELECT * FROM events
             WHERE is_recurring = TRUE
@@ -169,15 +171,23 @@ class Database:
         async with self.pool.acquire() as connection:
             return await connection.fetch(query)
 
+    async def get_events_for_deletion(self):
+        query = """
+            SELECT event_id, guild_id, channel_id, message_id, thread_id
+            FROM events
+            WHERE is_recurring = FALSE
+            AND COALESCE(end_time, event_time + INTERVAL '2 hours') < (NOW() AT TIME ZONE 'utc');
+        """
+        async with self.pool.acquire() as connection:
+            return await connection.fetch(query)
+
     async def update_last_recreated_at(self, event_id: int):
-        """Updates the last_recreated_at timestamp for an event."""
         async with self.pool.acquire() as connection:
             await connection.execute(
                 "UPDATE events SET last_recreated_at = (NOW() AT TIME ZONE 'utc') WHERE event_id = $1;",
                 event_id
             )
 
-    # --- Other existing database functions ---
     async def _ensure_guild_exists(self, connection, guild_id: int):
         await connection.execute("INSERT INTO guilds (guild_id) VALUES ($1) ON CONFLICT (guild_id) DO NOTHING;", guild_id)
 
@@ -202,14 +212,17 @@ class Database:
         async with self.pool.acquire() as connection:
             await connection.execute("UPDATE events SET thread_created = TRUE WHERE event_id = $1;", event_id)
 
-    async def set_manager_role(self, guild_id: int, discord_role_id: int):
+    async def set_manager_roles(self, guild_id: int, role_ids: List[int]):
+        """Sets the event manager roles for a guild."""
         async with self.pool.acquire() as connection:
             await self._ensure_guild_exists(connection, guild_id)
-            await connection.execute("UPDATE guilds SET event_manager_role_id = $1 WHERE guild_id = $2;", discord_role_id, guild_id)
+            await connection.execute("UPDATE guilds SET event_manager_role_ids = $1 WHERE guild_id = $2;", role_ids, guild_id)
 
-    async def get_manager_role_id(self, guild_id: int) -> int | None:
+    async def get_manager_role_ids(self, guild_id: int) -> List[int]:
+        """Gets the list of event manager role IDs for a guild."""
         async with self.pool.acquire() as connection:
-            return await connection.fetchval("SELECT event_manager_role_id FROM guilds WHERE guild_id = $1;", guild_id)
+            role_ids = await connection.fetchval("SELECT event_manager_role_ids FROM guilds WHERE guild_id = $1;", guild_id)
+            return role_ids or []
 
     async def set_restricted_role(self, guild_id: int, role_name: str, discord_role_id: int):
         column_name = role_name.lower().replace(" ", "_") + "_role_id"

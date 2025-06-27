@@ -47,7 +47,6 @@ class Database:
                 await connection.execute("""
                     CREATE TABLE IF NOT EXISTS guilds (
                         guild_id BIGINT PRIMARY KEY,
-                        event_manager_role_ids BIGINT[],
                         commander_role_id BIGINT,
                         recon_role_id BIGINT,
                         officer_role_id BIGINT,
@@ -55,13 +54,30 @@ class Database:
                         thread_creation_hours INT DEFAULT 24
                     );
                 """)
-                # Migration from single to multiple manager roles
-                try:
-                    await connection.execute("ALTER TABLE guilds RENAME COLUMN event_manager_role_id TO event_manager_role_ids;")
-                    await connection.execute("ALTER TABLE guilds ALTER COLUMN event_manager_role_ids TYPE BIGINT[];")
-                except asyncpg.PostgresError:
-                    # This will fail if the columns are already correct, which is fine.
+
+                # --- CORRECTED MIGRATION LOGIC ---
+                # This block handles the migration from a single manager role to a list of manager roles.
+                old_col_exists = await connection.fetchval("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.columns 
+                        WHERE table_name = 'guilds' AND column_name = 'event_manager_role_id'
+                    );
+                """)
+
+                if old_col_exists:
+                    print("Database Schema Update: Migrating 'event_manager_role_id' to 'event_manager_role_ids'...")
+                    # Add the new array-based column
                     await connection.execute("ALTER TABLE guilds ADD COLUMN IF NOT EXISTS event_manager_role_ids BIGINT[];")
+                    # Copy any existing data from the old column into the new one, wrapping it in an array
+                    await connection.execute("UPDATE guilds SET event_manager_role_ids = ARRAY[event_manager_role_id] WHERE event_manager_role_id IS NOT NULL;")
+                    # Remove the old column
+                    await connection.execute("ALTER TABLE guilds DROP COLUMN event_manager_role_id;")
+                    print("Migration successful.")
+                else:
+                    # If the old column doesn't exist, it's a fresh install or already migrated.
+                    # Just ensure the new column exists.
+                    await connection.execute("ALTER TABLE guilds ADD COLUMN IF NOT EXISTS event_manager_role_ids BIGINT[];")
+
 
                 await connection.execute("ALTER TABLE guilds ADD COLUMN IF NOT EXISTS thread_creation_hours INT DEFAULT 24;")
 

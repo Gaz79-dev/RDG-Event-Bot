@@ -15,21 +15,23 @@ class Scheduler(commands.Cog):
         self.bot = bot
         self.db = db
         self.create_event_threads.start()
-        self.recreate_recurring_events.start() # Start the new task
+        self.recreate_recurring_events.start()
+        self.cleanup_finished_events.start()
 
     def cog_unload(self):
         """Cleanly cancels all tasks when the cog is unloaded."""
         self.create_event_threads.cancel()
         self.recreate_recurring_events.cancel()
+        self.cleanup_finished_events.cancel()
 
     @tasks.loop(minutes=1)
     async def create_event_threads(self):
         """Periodically checks for events that need a discussion thread created."""
-        print("Scheduler: Running check for events needing threads...")
+        # This loop runs frequently, so we comment out the print to avoid spamming logs.
+        # print("Scheduler: Running check for events needing threads...")
         try:
             events_to_process = await self.db.get_events_for_thread_creation()
             if not events_to_process:
-                print("Scheduler: No events are due for thread creation at this time.")
                 return
             
             print(f"Scheduler: Found {len(events_to_process)} event(s) to process for thread creation.")
@@ -53,6 +55,7 @@ class Scheduler(commands.Cog):
             return
         
         try:
+            # Fetch the full message object to attach the thread to.
             message = await channel.fetch_message(event['message_id'])
             
             try:
@@ -67,7 +70,10 @@ class Scheduler(commands.Cog):
             if len(thread_name) > 100:
                 thread_name = thread_name[:97] + "..."
 
-            thread = await message.create_thread(name=thread_name, type=discord.ChannelType.private_thread)
+            # --- CORRECTED THREAD CREATION ---
+            # Use channel.create_thread and pass the message object to it.
+            # This is more robust and avoids the PartialMessage error.
+            thread = await channel.create_thread(name=thread_name, message=message, type=discord.ChannelType.private_thread)
             
             await self.db.update_event_thread_id(event['event_id'], thread.id)
             await self.db.mark_thread_as_created(event['event_id'])
@@ -100,11 +106,10 @@ class Scheduler(commands.Cog):
     @tasks.loop(minutes=5)
     async def recreate_recurring_events(self):
         """Periodically checks for recurring events that need to be recreated."""
-        print("Scheduler: Running check for recurring events to recreate...")
+        # print("Scheduler: Running check for recurring events to recreate...")
         try:
             events_to_recreate = await self.db.get_events_for_recreation()
             if not events_to_recreate:
-                print("Scheduler: No recurring events are due for recreation at this time.")
                 return
 
             print(f"Scheduler: Found {len(events_to_recreate)} recurring event(s) to process for recreation.")
@@ -134,21 +139,18 @@ class Scheduler(commands.Cog):
             return
 
         time_until_next = next_event_time - datetime.datetime.now(pytz.utc)
-        recreation_delta = datetime.timedelta(hours=event.get('recreation_hours', 24*7)) # Default to 7 days if not set
+        recreation_delta = datetime.timedelta(hours=event.get('recreation_hours', 24*7))
 
         if time_until_next <= recreation_delta:
             print(f"Scheduler: Event {event['event_id']} is within the recreation window. Creating new event.")
             
-            # Prepare data for the new event
             new_event_data = dict(event)
             new_event_data['start_time'] = next_event_time
             
-            # Calculate new end_time if original had a duration
             if event['end_time']:
                 duration = event['end_time'] - event['event_time']
                 new_event_data['end_time'] = next_event_time + duration
             
-            # Set the parent ID to the original event's ID, or its parent's ID if it's already a child
             new_event_data['parent_event_id'] = event.get('parent_event_id') or event['event_id']
 
             guild = self.bot.get_guild(event['guild_id'])
@@ -158,11 +160,9 @@ class Scheduler(commands.Cog):
                 print(f"Scheduler: Could not find guild or channel for event {event['event_id']}. Cannot recreate."); return
 
             try:
-                # Create the new event in the database
                 new_event_id = await self.db.create_event(guild.id, channel.id, event['creator_id'], new_event_data)
                 print(f"Scheduler: Created new event record {new_event_id} for original event {event['event_id']}.")
 
-                # Post the new embed to the channel
                 view = PersistentEventView(self.db)
                 embed = await create_event_embed(self.bot, new_event_id, self.db)
                 content = " ".join([f"<@&{rid}>" for rid in event.get('mention_role_ids', [])])
@@ -171,7 +171,6 @@ class Scheduler(commands.Cog):
                 await self.db.update_event_message_id(new_event_id, msg.id)
                 print(f"Scheduler: Posted new message {msg.id} for new event {new_event_id}.")
 
-                # Mark the old event as processed to prevent it from being recreated again immediately
                 await self.db.update_last_recreated_at(event['event_id'])
                 print(f"Scheduler: Marked original event {event['event_id']} as recreated.")
 
@@ -179,13 +178,68 @@ class Scheduler(commands.Cog):
                 print(f"Scheduler: FAILED to recreate event {event['event_id']}. Error: {e}")
                 traceback.print_exc()
 
+    @tasks.loop(time=datetime.time(hour=0, minute=1, tzinfo=pytz.utc))
+    async def cleanup_finished_events(self):
+        """Runs once daily to delete old, non-recurring events and their threads."""
+        print("Scheduler: Running daily cleanup of finished events...")
+        try:
+            events_to_delete = await self.db.get_events_for_deletion()
+            if not events_to_delete:
+                print("Scheduler: No old events found to delete.")
+                return
+
+            print(f"Scheduler: Found {len(events_to_delete)} old event(s) to delete.")
+            deleted_count = 0
+            for event in events_to_delete:
+                print(f"Scheduler: Deleting event ID {event['event_id']}...")
+                guild = self.bot.get_guild(event['guild_id'])
+                if not guild:
+                    print(f"  - Guild {event['guild_id']} not found. Deleting DB record only.")
+                    await self.db.delete_event(event['event_id'])
+                    deleted_count += 1
+                    continue
+
+                if event['thread_id']:
+                    try:
+                        thread = guild.get_thread(event['thread_id'])
+                        if thread:
+                            await thread.delete()
+                            print(f"  - Deleted thread {event['thread_id']}.")
+                    except discord.Forbidden:
+                        print(f"  - PERMISSION ERROR: Could not delete thread {event['thread_id']}.")
+                    except Exception as e:
+                        print(f"  - Unexpected error deleting thread {event['thread_id']}: {e}")
+
+                if event['message_id']:
+                    try:
+                        channel = guild.get_channel(event['channel_id'])
+                        if channel:
+                            message = channel.get_partial_message(event['message_id'])
+                            await message.delete()
+                            print(f"  - Deleted message {event['message_id']}.")
+                    except discord.NotFound:
+                        pass
+                    except discord.Forbidden:
+                        print(f"  - PERMISSION ERROR: Could not delete message {event['message_id']}.")
+                    except Exception as e:
+                        print(f"  - Unexpected error deleting message {event['message_id']}: {e}")
+                
+                await self.db.delete_event(event['event_id'])
+                deleted_count += 1
+                print(f"  - Deleted event record {event['event_id']} from database.")
+            
+            print(f"Scheduler: Cleanup complete. Deleted {deleted_count} event(s).")
+
+        except Exception as e:
+            print(f"An error occurred in the cleanup_finished_events loop: {e}")
+            traceback.print_exc()
+
     @create_event_threads.before_loop
     @recreate_recurring_events.before_loop
+    @cleanup_finished_events.before_loop
     async def before_tasks(self):
         """Waits until the bot is fully logged in and ready before starting loops."""
         await self.bot.wait_until_ready()
-        print(f"Scheduler: Cog is ready, task loops are starting.")
-
 
 async def setup(bot: commands.Bot, db: Database):
     """Sets up the scheduler cog."""

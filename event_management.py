@@ -108,7 +108,6 @@ class RoleMultiSelect(ui.RoleSelect):
         super().__init__(placeholder=placeholder, min_values=1, max_values=25)
 
     async def callback(self, interaction: discord.Interaction):
-        # Pass the selection back to the parent view and stop it.
         self.view.selection = [role.id for role in self.values]
         await interaction.response.defer()
         self.view.stop()
@@ -482,11 +481,13 @@ class Conversation:
         return await self._ask_roles(prompt, data_key, "Mention roles in the announcement?")
     async def ask_restrict_roles(self, prompt, data_key):
         return await self._ask_roles(prompt, data_key, "Restrict sign-ups to specific roles?")
+        
     async def finish(self):
         if self.is_finished: return
-        self.is_finished = True; 
+        self.is_finished = True
         if self.user.id in self.cog.active_conversations:
             del self.cog.active_conversations[self.user.id]
+
         if self.event_id:
             await self.db.update_event(self.event_id, self.data)
             await self.user.send("Event updated successfully!")
@@ -496,15 +497,43 @@ class Conversation:
                     channel = self.interaction.guild.get_channel(event_record['channel_id'])
                     msg = await channel.fetch_message(event_record['message_id'])
                     await msg.edit(embed=await create_event_embed(self.bot, self.event_id, self.db))
-                except (discord.NotFound, discord.Forbidden): print(f"Could not edit message for event {self.event_id}")
+                except (discord.NotFound, discord.Forbidden):
+                    print(f"Could not edit message for event {self.event_id}")
         else:
-            event_id = await self.db.create_event(self.interaction.guild.id, self.interaction.channel.id, self.user.id, self.data)
-            await self.user.send("Event created successfully! Posting it now.")
-            view = PersistentEventView(self.db)
-            embed = await create_event_embed(self.bot, event_id, self.db)
-            content = " ".join([f"<@&{rid}>" for rid in self.data.get('mention_role_ids', [])])
-            msg = await self.interaction.channel.send(content=content, embed=embed, view=view)
-            await self.db.update_event_message_id(event_id, msg.id)
+            event_id = None
+            try:
+                event_id = await self.db.create_event(self.interaction.guild.id, self.interaction.channel.id, self.user.id, self.data)
+                await self.user.send(f"Event created successfully! (ID: {event_id}). Posting it in the channel now...")
+
+                target_channel = self.bot.get_channel(self.interaction.channel.id)
+                if not target_channel:
+                    await self.user.send("Error: I could not find the original channel to post the event in. Please check my permissions.")
+                    print(f"Error: Could not find channel with ID {self.interaction.channel.id} to post event {event_id}.")
+                    return
+
+                view = PersistentEventView(self.db)
+                embed = await create_event_embed(self.bot, event_id, self.db)
+                content = " ".join([f"<@&{rid}>" for rid in self.data.get('mention_role_ids', [])])
+
+                msg = await target_channel.send(content=content, embed=embed, view=view)
+                await self.db.update_event_message_id(event_id, msg.id)
+                print(f"Successfully posted event {event_id} with message ID {msg.id} in channel {target_channel.id}.")
+
+            except discord.Forbidden:
+                error_message = "I don't have permission to send messages or embeds in that channel. Please ask an administrator to check my permissions."
+                await self.user.send(f"Error: Could not post the event. {error_message}")
+                print(f"Error: discord.Forbidden when trying to post event. Check bot permissions for channel {self.interaction.channel.id}.")
+                if event_id:
+                    await self.db.delete_event(event_id)
+                    print(f"Cleaned up dangling event record {event_id}.")
+            except Exception as e:
+                await self.user.send("An unexpected error occurred while trying to post the event. Please let the bot administrator know.")
+                print("--- UNEXPECTED ERROR IN CONVERSATION FINISH ---")
+                traceback.print_exc()
+                if event_id:
+                    await self.db.delete_event(event_id)
+                    print(f"Cleaned up dangling event record {event_id} due to unexpected error.")
+
     async def cancel(self):
         if self.is_finished: return
         self.is_finished = True

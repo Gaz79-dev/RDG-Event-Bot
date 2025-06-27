@@ -469,13 +469,19 @@ class Conversation:
         view = ConfirmationView()
         msg = await self.user.send(question, view=view)
         await view.wait()
-        if view.value is None: await msg.delete(); return False
+        if view.value is None: # Timeout
+            await msg.delete()
+            return False
         await msg.delete()
-        if view.value:
+        if view.value: # User clicked "Yes"
             select_view = MultiRoleSelectView(f"Select roles for: {data_key}")
             m = await self.user.send("Please select roles below.", view=select_view)
-            await select_view.wait(); await m.delete(); self.data[data_key] = select_view.selection
-        else: self.data[data_key] = None
+            await select_view.wait()
+            await m.delete()
+            # If the view times out, selection is None. Default to empty list.
+            self.data[data_key] = select_view.selection or [] 
+        else: # User clicked "No"
+            self.data[data_key] = [] # Set to empty list instead of None
         return True
     async def ask_mention_roles(self, prompt, data_key):
         return await self._ask_roles(prompt, data_key, "Mention roles in the announcement?")

@@ -102,24 +102,24 @@ async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> 
 
 # --- UI Components ---
 
+class RoleMultiSelect(ui.RoleSelect):
+    """A dedicated multi-select component for roles."""
+    def __init__(self, placeholder: str):
+        super().__init__(placeholder=placeholder, min_values=1, max_values=25)
+
+    async def callback(self, interaction: discord.Interaction):
+        # Pass the selection back to the parent view and stop it.
+        self.view.selection = [role.id for role in self.values]
+        await interaction.response.defer()
+        self.view.stop()
+
 class MultiRoleSelectView(ui.View):
-    """A view containing a multi-select role dropdown, using a decorator for the callback."""
+    """A view that holds the RoleMultiSelect component."""
     selection: List[int] = None
 
     def __init__(self, placeholder: str):
         super().__init__(timeout=180)
-        for child in self.children:
-            if isinstance(child, ui.RoleSelect):
-                child.placeholder = placeholder
-                break
-
-    @ui.select(cls=ui.RoleSelect, min_values=1, max_values=25)
-    async def role_select(self, interaction: discord.Interaction, select: ui.RoleSelect):
-        """Callback for when the user selects roles."""
-        self.selection = [role.id for role in select.values]
-        await interaction.response.defer()
-        self.stop()
-
+        self.add_item(RoleMultiSelect(placeholder=placeholder))
 
 class ConfirmationView(ui.View):
     def __init__(self):

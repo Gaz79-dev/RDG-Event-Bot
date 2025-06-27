@@ -2,5 +2,4 @@ discord.py
 asyncpg
 python-dotenv
 pytz
-gspread
-google-auth-oauthlib
+python-dateutil

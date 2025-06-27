@@ -102,31 +102,27 @@ async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> 
 
 # --- UI Components ---
 
-# --- CORRECTED MultiRoleSelect using ui.RoleSelect ---
-class MultiRoleSelect(ui.RoleSelect):
-    """A multi-select dropdown for Discord roles."""
-    def __init__(self, placeholder: str):
-        # Use the dedicated RoleSelect component.
-        # It handles populating the roles automatically.
-        super().__init__(
-            placeholder=placeholder,
-            min_values=1,
-            max_values=25 # Allows selecting up to 25 roles.
-        )
-    
-    async def callback(self, interaction: discord.Interaction):
-        # self.values is now a list of discord.Role objects.
-        self.view.selection = [role.id for role in self.values]
-        await interaction.response.defer()
-        self.view.stop()
-
 class MultiRoleSelectView(ui.View):
-    """A view containing the MultiRoleSelect dropdown."""
+    """A view containing a multi-select role dropdown, using a decorator for the callback."""
+    selection: List[int] = None
+
     def __init__(self, placeholder: str):
         super().__init__(timeout=180)
-        self.selection = None
-        # No longer needs guild_roles passed to it.
-        self.add_item(MultiRoleSelect(placeholder))
+        # The select menu is defined by the decorator below.
+        # We access it via its `__discord_ui_model_type__` attribute to set the placeholder.
+        # This ensures the placeholder is set correctly on the component.
+        for child in self.children:
+            if isinstance(child, ui.RoleSelect):
+                child.placeholder = placeholder
+                break
+
+    @ui.select(cls=ui.RoleSelect, min_values=1, max_values=25)
+    async def role_select(self, interaction: discord.Interaction, select: ui.RoleSelect):
+        """Callback for when the user selects roles."""
+        self.selection = [role.id for role in select.values]
+        await interaction.response.defer()
+        self.stop()
+
 
 class ConfirmationView(ui.View):
     def __init__(self):
@@ -335,7 +331,6 @@ class EventManagement(commands.Cog):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("You must be an administrator to use this command.", ephemeral=True); return
         
-        # Use the corrected MultiRoleSelectView
         view = MultiRoleSelectView("Select one or more Event Manager roles")
         await interaction.response.send_message("Please select the roles that should be allowed to manage events.", view=view, ephemeral=True)
         await view.wait()
@@ -481,7 +476,6 @@ class Conversation:
         if view.value is None: await msg.delete(); return False
         await msg.delete()
         if view.value:
-            # Use the corrected RoleSelect-based view
             select_view = MultiRoleSelectView(f"Select roles for: {data_key}")
             m = await self.user.send("Please select roles below.", view=select_view)
             await select_view.wait(); await m.delete(); self.data[data_key] = select_view.selection
@@ -519,4 +513,4 @@ class Conversation:
         self.is_finished = True
         if self.user.id in self.cog.active_conversations:
             del self.cog.active_conversations[self.user.id]
-        await self.user.send("Event creation/editing cancelled.")
+        await self.user.send("Event creation/editing cancelled

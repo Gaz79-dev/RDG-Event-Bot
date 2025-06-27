@@ -7,6 +7,7 @@ import os
 import pytz
 from urllib.parse import urlencode
 import asyncio
+from typing import List
 
 # Adjust the import path based on your project structure
 from utils.database import Database, RsvpStatus, ROLES, SUBCLASSES, RESTRICTED_ROLES
@@ -233,9 +234,33 @@ class ConfirmDeleteView(ui.View):
     async def cancel(self, interaction: discord.Interaction, button: ui.Button):
         self.value = False; await interaction.response.defer(); self.stop()
 
+# --- Permission Checks ---
+async def is_event_manager(interaction: discord.Interaction) -> bool:
+    """Check if the user is an administrator or has an event manager role."""
+    if interaction.user.guild_permissions.administrator:
+        return True
+    
+    # This check assumes the cog is attached to a bot with a 'db' attribute
+    cog = interaction.client.get_cog("EventManagement")
+    if not cog:
+        return False # Should not happen
+        
+    manager_roles = await cog.db.get_manager_role_ids(interaction.guild.id)
+    if not manager_roles:
+        await interaction.response.send_message("No Event Manager roles are configured for this server.", ephemeral=True)
+        return False
+
+    user_role_ids = {role.id for role in interaction.user.roles}
+    if not any(role_id in user_role_ids for role_id in manager_roles):
+        await interaction.response.send_message("You do not have the required Event Manager role to use this command.", ephemeral=True)
+        return False
+        
+    return True
+
 class EventManagement(commands.Cog):
     def __init__(self, bot: commands.Bot, db: Database):
         self.bot, self.db, self.active_conversations = bot, db, {}
+        
     async def start_conversation(self, interaction: discord.Interaction, event_id: int = None):
         if interaction.user.id in self.active_conversations:
             await interaction.response.send_message("You are already in an active event creation process.", ephemeral=True)
@@ -249,36 +274,35 @@ class EventManagement(commands.Cog):
             await interaction.followup.send("I couldn't send you a DM. Please check your privacy settings.", ephemeral=True)
         except Exception as e:
             print(f"Error starting conversation: {e}"); traceback.print_exc()
+
     @app_commands.command(name="create", description="Create a new event via DM.")
+    @app_commands.check(is_event_manager)
     async def create(self, interaction: discord.Interaction):
         await self.start_conversation(interaction)
+
     @app_commands.command(name="edit", description="Edit an existing event via DM.")
     @app_commands.describe(event_id="The ID of the event to edit.")
+    @app_commands.check(is_event_manager)
     async def edit(self, interaction: discord.Interaction, event_id: int):
         event = await self.db.get_event_by_id(event_id)
         if not event or event['guild_id'] != interaction.guild_id:
             await interaction.response.send_message("Event not found.", ephemeral=True); return
-        member = await interaction.guild.fetch_member(interaction.user.id)
-        manager_role_id = await self.db.get_manager_role_id(interaction.guild.id)
-        is_creator = interaction.user.id == event['creator_id']
-        is_manager = manager_role_id and manager_role_id in [r.id for r in member.roles]
-        is_admin = member.guild_permissions.administrator
-        if not (is_creator or is_manager or is_admin):
-            await interaction.response.send_message("You don't have permission to edit this event.", ephemeral=True); return
+        # The is_event_manager check already covers permissions, but we can keep creator check as an extra.
+        if not interaction.user.guild_permissions.administrator and event['creator_id'] != interaction.user.id:
+             manager_roles = await self.db.get_manager_role_ids(interaction.guild.id)
+             user_role_ids = {role.id for role in interaction.user.roles}
+             if not any(role_id in user_role_ids for role_id in manager_roles):
+                await interaction.response.send_message("You can only edit events you have created.", ephemeral=True); return
         await self.start_conversation(interaction, event_id)
+
     @app_commands.command(name="delete", description="Delete an existing event by its ID.")
     @app_commands.describe(event_id="The ID of the event to delete.")
+    @app_commands.check(is_event_manager)
     async def delete(self, interaction: discord.Interaction, event_id: int):
         event = await self.db.get_event_by_id(event_id)
         if not event or event['guild_id'] != interaction.guild_id:
             await interaction.response.send_message("Event not found in this server.", ephemeral=True); return
-        member = await interaction.guild.fetch_member(interaction.user.id)
-        manager_role_id = await self.db.get_manager_role_id(interaction.guild.id)
-        is_creator = interaction.user.id == event['creator_id']
-        is_manager = manager_role_id and manager_role_id in [r.id for r in member.roles]
-        is_admin = member.guild_permissions.administrator
-        if not (is_creator or is_manager or is_admin):
-            await interaction.response.send_message("You don't have permission to delete this event.", ephemeral=True); return
+        
         view = ConfirmDeleteView(interaction)
         await interaction.response.send_message(f"Are you sure you want to permanently delete event: **{event['title']}** (ID: {event_id})?", view=view, ephemeral=True)
         await view.wait()
@@ -293,14 +317,26 @@ class EventManagement(commands.Cog):
             await interaction.followup.send("Event has been deleted.", ephemeral=True)
         else:
             await interaction.followup.send("Deletion cancelled.", ephemeral=True)
-    setup = app_commands.Group(name="setup", description="Commands for setting up the bot.")
-    @setup.command(name="manager_role", description="Set the role that can manage events.")
-    @app_commands.describe(role="The role to designate as Event Manager")
-    async def set_manager_role(self, interaction: discord.Interaction, role: discord.Role):
+
+    # --- Setup Command Group ---
+    setup = app_commands.Group(name="setup", description="Commands for setting up the bot.", default_permissions=discord.Permissions(administrator=True))
+
+    @setup.command(name="manager_roles", description="Set the roles that can manage events.")
+    async def set_manager_roles(self, interaction: discord.Interaction):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("You must be an administrator to use this command.", ephemeral=True); return
-        await self.db.set_manager_role(interaction.guild.id, role.id)
-        await interaction.response.send_message(f"**{role.name}** has been set as the Event Manager role.", ephemeral=True)
+        
+        view = MultiRoleSelectView("Select one or more Event Manager roles", interaction.guild.roles)
+        await interaction.response.send_message("Please select the roles that should be allowed to manage events.", view=view, ephemeral=True)
+        await view.wait()
+
+        if view.selection is not None:
+            await self.db.set_manager_roles(interaction.guild.id, view.selection)
+            role_mentions = [f"<@&{role_id}>" for role_id in view.selection]
+            await interaction.followup.send(f"Event Manager roles have been set to: {', '.join(role_mentions) if role_mentions else 'None'}.", ephemeral=True)
+        else:
+            await interaction.followup.send("No roles selected. The operation was cancelled or timed out.", ephemeral=True)
+
     @setup.command(name="restricted_role", description="Set the required Discord role for an in-game role.")
     @app_commands.describe(ingame_role="The in-game role to restrict", discord_role="The Discord role required")
     @app_commands.choices(ingame_role=[app_commands.Choice(name=r, value=r) for r in RESTRICTED_ROLES])
@@ -309,6 +345,7 @@ class EventManagement(commands.Cog):
             await interaction.response.send_message("You must be an administrator to use this command.", ephemeral=True); return
         await self.db.set_restricted_role(interaction.guild.id, ingame_role.value, discord_role.id)
         await interaction.response.send_message(f"Users now need the **{discord_role.name}** role to sign up as **{ingame_role.name}**.", ephemeral=True)
+
     @setup.command(name="thread_schedule", description="Set how many hours before an event its discussion thread is created.")
     @app_commands.describe(hours="Number of hours before the event (e.g., 24)")
     async def set_thread_schedule(self, interaction: discord.Interaction, hours: app_commands.Range[int, 1, 168]):
@@ -321,6 +358,7 @@ async def setup(bot: commands.Bot, db: Database):
     bot.add_view(PersistentEventView(db))
     await bot.add_cog(EventManagement(bot, db))
 
+# --- Conversation Class (largely unchanged) ---
 class Conversation:
     def __init__(self, cog: EventManagement, interaction: discord.Interaction, db: Database, event_id: int = None):
         self.cog, self.bot, self.interaction, self.user, self.db, self.event_id = cog, cog.bot, interaction, interaction.user, db, event_id
@@ -466,5 +504,7 @@ class Conversation:
             await self.db.update_event_message_id(event_id, msg.id)
     async def cancel(self):
         if self.is_finished: return
-        self.is_finished = True; del self.cog.active_conversations[self.user.id]
+        self.is_finished = True
+        if self.user.id in self.cog.active_conversations:
+            del self.cog.active_conversations[self.user.id]
         await self.user.send("Event creation/editing cancelled.")

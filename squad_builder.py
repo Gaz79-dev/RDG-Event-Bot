@@ -28,7 +28,15 @@ class SquadBuilderModal(ui.Modal, title="Build Squads"):
     recon_squads = ui.TextInput(label="Number of Recon Squads", placeholder="e.g., 2", required=True, default="0")
     arty_squads = ui.TextInput(label="Number of Arty Squads", placeholder="e.g., 1", required=True, default="0")
 
+    def __init__(self, cog: 'SquadBuilder', event_id: int):
+        super().__init__()
+        self.cog = cog
+        self.event_id = event_id
+
     async def on_submit(self, interaction: discord.Interaction):
+        # Acknowledge the modal submission immediately
+        await interaction.response.send_message("Processing your squad build request. This may take a moment...", ephemeral=True)
+        
         try:
             # Validate and store values from the modal
             self.infantry_squad_size_val = int(self.infantry_squad_size.value)
@@ -38,13 +46,16 @@ class SquadBuilderModal(ui.Modal, title="Build Squads"):
             self.armour_squads_val = int(self.armour_squads.value)
             self.recon_squads_val = int(self.recon_squads.value)
             self.arty_squads_val = int(self.arty_squads.value)
-            
-            # Immediately acknowledge the interaction to prevent timeout
-            await interaction.response.send_message("Squad build initiated. This may take a moment...", ephemeral=True)
+
+            # Kick off the background task from the modal itself
+            asyncio.create_task(self.cog.run_draft_and_post_workshop(interaction, self.event_id, self))
+
         except ValueError:
-            await interaction.response.send_message("All squad counts must be valid numbers.", ephemeral=True)
-        finally:
-            self.stop()
+            await interaction.followup.send("All squad counts must be valid numbers.", ephemeral=True)
+        except Exception as e:
+            print(f"Error in modal submission: {e}")
+            await interaction.followup.send("An unexpected error occurred.", ephemeral=True)
+
 
 # --- Main Cog ---
 class SquadBuilder(commands.Cog):
@@ -66,18 +77,14 @@ class SquadBuilder(commands.Cog):
             await interaction.response.send_message(f"Event with ID {event_id} not found.", ephemeral=True)
             return
 
-        modal = SquadBuilderModal()
+        # The command's only job is to send the modal. The logic continues in the modal's on_submit.
+        modal = SquadBuilderModal(cog=self, event_id=event_id)
         await interaction.response.send_modal(modal)
-        await modal.wait()
-
-        if modal.is_stopped() and hasattr(modal, 'infantry_squad_size_val'):
-            # --- FIX: Run the heavy lifting as a background task ---
-            asyncio.create_task(self.run_draft_and_post_workshop(interaction, event_id, modal))
 
     async def run_draft_and_post_workshop(self, interaction: discord.Interaction, event_id: int, modal: SquadBuilderModal):
         """A new method to handle the long-running process in the background."""
         try:
-            await self._run_automated_draft(interaction, event_id, modal)
+            await self._run_automated_draft(interaction.guild, event_id, modal)
             
             workshop_embed = await self._generate_workshop_embed(interaction.guild, event_id)
             # workshop_view = WorkshopView(event_id, self.db, self.bot) # The interactive view would go here
@@ -128,10 +135,10 @@ class SquadBuilder(commands.Cog):
         
         return player_pools
 
-    async def _run_automated_draft(self, interaction: discord.Interaction, event_id: int, modal: SquadBuilderModal):
+    async def _run_automated_draft(self, guild: discord.Guild, event_id: int, modal: SquadBuilderModal):
         await self.db.delete_squads_for_event(event_id)
         signups = await self.db.get_signups_for_event(event_id)
-        pools = await self._get_player_pools(interaction.guild, signups)
+        pools = await self._get_player_pools(guild, signups)
         
         reserves = []
 
@@ -144,21 +151,21 @@ class SquadBuilder(commands.Cog):
         # 2. Arty
         for i in range(modal.arty_squads_val):
             squad_id = await self.db.create_squad(event_id, f"Arty {get_squad_letter(i)}", "Arty")
-            if pools['arty']['Officer']:
+            if pools['arty'].get('Officer'):
                 await self.db.add_squad_member(squad_id, pools['arty']['Officer'].pop(0)['user_id'], "Officer")
 
         # 3. Recon
         for i in range(modal.recon_squads_val):
             squad_id = await self.db.create_squad(event_id, f"Recon {get_squad_letter(i)}", "Recon")
-            if pools['recon']['Spotter']: await self.db.add_squad_member(squad_id, pools['recon']['Spotter'].pop(0)['user_id'], "Spotter")
-            if pools['recon']['Sniper']: await self.db.add_squad_member(squad_id, pools['recon']['Sniper'].pop(0)['user_id'], "Sniper")
+            if pools['recon'].get('Spotter'): await self.db.add_squad_member(squad_id, pools['recon']['Spotter'].pop(0)['user_id'], "Spotter")
+            if pools['recon'].get('Sniper'): await self.db.add_squad_member(squad_id, pools['recon']['Sniper'].pop(0)['user_id'], "Sniper")
 
         # 4. Armour
         for i in range(modal.armour_squads_val):
             squad_id = await self.db.create_squad(event_id, f"Armour {get_squad_letter(i)}", "Armour")
-            if pools['armour']['Tank Commander']: await self.db.add_squad_member(squad_id, pools['armour']['Tank Commander'].pop(0)['user_id'], "Tank Commander")
+            if pools['armour'].get('Tank Commander'): await self.db.add_squad_member(squad_id, pools['armour']['Tank Commander'].pop(0)['user_id'], "Tank Commander")
             for _ in range(2):
-                if pools['armour']['Crewman']: await self.db.add_squad_member(squad_id, pools['armour']['Crewman'].pop(0)['user_id'], "Crewman")
+                if pools['armour'].get('Crewman'): await self.db.add_squad_member(squad_id, pools['armour']['Crewman'].pop(0)['user_id'], "Crewman")
 
         # 5. Infantry
         inf_pools = {'Attack': modal.attack_squads_val, 'Defence': modal.defence_squads_val, 'Flex': modal.flex_squads_val}

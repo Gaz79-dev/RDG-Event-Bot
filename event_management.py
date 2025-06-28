@@ -28,7 +28,7 @@ EMOJI_MAPPING = {
     "Officer": os.getenv("EMOJI_OFFICER", "🫡"),
     "Rifleman": os.getenv("EMOJI_RIFLEMAN", "👤"),
     "Support": os.getenv("EMOJI_SUPPORT", "🔧"),
-    "Tank Commander": os.getenv("EMOJI_TANK_COMMANDER", "�‍✈️"),
+    "Tank Commander": os.getenv("EMOJI_TANK_COMMANDER", "🧑‍✈️"),
     "Crewman": os.getenv("EMOJI_CREWMAN", "👨‍🔧"),
     "Spotter": os.getenv("EMOJI_SPOTTER", "👀"),
     "Sniper": os.getenv("EMOJI_SNIPER", "🎯"),
@@ -402,4 +402,3 @@ class EventManagement(commands.Cog):
 async def setup(bot: commands.Bot, db: Database):
     await bot.add_cog(EventManagement(bot, db))
     bot.add_view(PersistentEventView(db))
-�

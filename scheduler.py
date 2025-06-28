@@ -7,7 +7,6 @@ from dateutil.relativedelta import relativedelta
 
 # Adjust the import path based on your project structure
 from utils.database import Database, RsvpStatus
-# We will import from event_management locally to avoid circular imports
 
 class Scheduler(commands.Cog):
     """Cog for handling scheduled background tasks."""
@@ -100,6 +99,7 @@ class Scheduler(commands.Cog):
     @tasks.loop(minutes=5)
     async def recreate_recurring_events(self):
         """Periodically checks for recurring events that need to be recreated."""
+        from .event_management import create_event_embed, PersistentEventView
         try:
             events_to_recreate = await self.db.get_events_for_recreation()
             if not events_to_recreate:
@@ -107,7 +107,7 @@ class Scheduler(commands.Cog):
 
             print(f"Scheduler: Found {len(events_to_recreate)} recurring event(s) to process for recreation.")
             for event in events_to_recreate:
-                await self.process_event_recreation(event)
+                await self.process_event_recreation(event, create_event_embed, PersistentEventView)
         except Exception as e:
             print(f"An error occurred in the recreate_recurring_events loop: {e}")
             traceback.print_exc()
@@ -122,11 +122,8 @@ class Scheduler(commands.Cog):
             return last_event_time + relativedelta(months=1)
         return None
 
-    async def process_event_recreation(self, event: dict):
+    async def process_event_recreation(self, event: dict, create_event_embed_func, persistent_view_class):
         """Handles the logic for recreating a single recurring event."""
-        # --- FIX: Local import to prevent circular dependency ---
-        from .event_management import create_event_embed, PersistentEventView
-
         print(f"Scheduler: Processing event ID {event['event_id']} ('{event['title']}') for recreation.")
         
         next_event_time = self.calculate_next_occurrence(event['event_time'], event['recurrence_rule'])
@@ -159,8 +156,8 @@ class Scheduler(commands.Cog):
                 new_event_id = await self.db.create_event(guild.id, channel.id, event['creator_id'], new_event_data)
                 print(f"Scheduler: Created new event record {new_event_id} for original event {event['event_id']}.")
 
-                view = PersistentEventView(self.db)
-                embed = await create_event_embed(self.bot, new_event_id, self.db)
+                view = persistent_view_class(self.db)
+                embed = await create_event_embed_func(self.bot, new_event_id, self.db)
                 content = " ".join([f"<@&{rid}>" for rid in event.get('mention_role_ids', [])])
                 
                 msg = await channel.send(content=content, embed=embed, view=view)

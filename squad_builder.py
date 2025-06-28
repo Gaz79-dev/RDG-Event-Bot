@@ -8,7 +8,6 @@ from collections import defaultdict
 
 # Adjust the import path based on your project structure
 from utils.database import Database, RsvpStatus, ROLES, SUBCLASSES
-# We will need to import this from event_management to update the public embed
 from .event_management import create_event_embed
 
 # --- Helper ---
@@ -31,6 +30,7 @@ class SquadBuilderModal(ui.Modal, title="Build Squads"):
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
+            # Validate and store values from the modal
             self.infantry_squad_size_val = int(self.infantry_squad_size.value)
             self.attack_squads_val = int(self.attack_squads.value)
             self.defence_squads_val = int(self.defence_squads.value)
@@ -38,74 +38,13 @@ class SquadBuilderModal(ui.Modal, title="Build Squads"):
             self.armour_squads_val = int(self.armour_squads.value)
             self.recon_squads_val = int(self.recon_squads.value)
             self.arty_squads_val = int(self.arty_squads.value)
+            
+            # Immediately acknowledge the interaction to prevent timeout
+            await interaction.response.send_message("Squad build initiated. This may take a moment...", ephemeral=True)
         except ValueError:
             await interaction.response.send_message("All squad counts must be valid numbers.", ephemeral=True)
+        finally:
             self.stop()
-            return
-
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        self.stop()
-
-# --- Interactive Workshop View ---
-class WorkshopView(ui.View):
-    def __init__(self, event_id: int, db: Database, bot: commands.Bot):
-        super().__init__(timeout=None)
-        self.event_id = event_id
-        self.db = db
-        self.bot = bot
-
-    async def refresh_embed(self, interaction: discord.Interaction):
-        """Helper to refresh the workshop embed."""
-        new_embed = await _generate_workshop_embed(interaction.guild, self.event_id, self.db)
-        await interaction.message.edit(embed=new_embed, view=self)
-
-    @ui.button(label="Refresh Roster", style=discord.ButtonStyle.primary, row=0)
-    async def refresh_roster(self, interaction: discord.Interaction, button: ui.Button):
-        await interaction.response.defer(thinking=True)
-        # Add logic here to sync players
-        await interaction.followup.send("Roster refreshed!", ephemeral=True)
-        await self.refresh_embed(interaction)
-
-    @ui.button(label="Move Player", style=discord.ButtonStyle.secondary, row=0)
-    async def move_player(self, interaction: discord.Interaction, button: ui.Button):
-        # Add logic to open a modal for moving players
-        await interaction.response.send_message("Move player functionality not yet implemented.", ephemeral=True)
-
-    @ui.button(label="Re-assign Role", style=discord.ButtonStyle.secondary, row=0)
-    async def reassign_role(self, interaction: discord.Interaction, button: ui.Button):
-        # Add logic to open a modal for re-assigning roles
-        await interaction.response.send_message("Re-assign role functionality not yet implemented.", ephemeral=True)
-
-    @ui.button(label="Add Squad", style=discord.ButtonStyle.green, row=1)
-    async def add_squad(self, interaction: discord.Interaction, button: ui.Button):
-        # Add logic to open a modal for adding a squad
-        await interaction.response.send_message("Add squad functionality not yet implemented.", ephemeral=True)
-
-    @ui.button(label="Delete Squad", style=discord.ButtonStyle.danger, row=1)
-    async def delete_squad(self, interaction: discord.Interaction, button: ui.Button):
-        # Add logic to open a modal for deleting a squad
-        await interaction.response.send_message("Delete squad functionality not yet implemented.", ephemeral=True)
-        
-    @ui.button(label="Publish to Event Thread", style=discord.ButtonStyle.success, row=2)
-    async def publish(self, interaction: discord.Interaction, button: ui.Button):
-        await interaction.response.defer()
-        event = await self.db.get_event_by_id(self.event_id)
-        if not event or not event['thread_id']:
-            await interaction.followup.send("This event does not have a discussion thread yet.", ephemeral=True)
-            return
-            
-        thread = interaction.guild.get_thread(event['thread_id'])
-        if not thread:
-            await interaction.followup.send("Could not find the event discussion thread.", ephemeral=True)
-            return
-
-        final_embed = await _generate_workshop_embed(interaction.guild, self.event_id, self.db)
-        final_embed.title = f"Final Team Sheet for: {event['title']}"
-        final_embed.description = "The teams have been set. Good luck!"
-        final_embed.color = discord.Color.green()
-
-        await thread.send(embed=final_embed)
-        await interaction.followup.send("Final team sheet has been published to the event thread!", ephemeral=True)
 
 # --- Main Cog ---
 class SquadBuilder(commands.Cog):
@@ -132,20 +71,26 @@ class SquadBuilder(commands.Cog):
         await modal.wait()
 
         if modal.is_stopped() and hasattr(modal, 'infantry_squad_size_val'):
-            await modal.interaction.followup.send("Building squads based on your input...", ephemeral=True, thinking=True)
-            try:
-                await self._run_automated_draft(interaction, event_id, modal)
-                
-                workshop_embed = await _generate_workshop_embed(interaction.guild, event_id, self.db)
-                workshop_view = WorkshopView(event_id, self.db, self.bot)
-                
-                await interaction.channel.send(embed=workshop_embed, view=workshop_view)
-                await modal.interaction.followup.send("Squad builder initiated! The workshop has been posted in this channel.", ephemeral=True)
+            # --- FIX: Run the heavy lifting as a background task ---
+            asyncio.create_task(self.run_draft_and_post_workshop(interaction, event_id, modal))
 
-            except Exception as e:
-                print(f"Error during squad build process: {e}")
-                traceback.print_exc()
-                await modal.interaction.followup.send(f"An error occurred while building the squads: {e}", ephemeral=True)
+    async def run_draft_and_post_workshop(self, interaction: discord.Interaction, event_id: int, modal: SquadBuilderModal):
+        """A new method to handle the long-running process in the background."""
+        try:
+            await self._run_automated_draft(interaction, event_id, modal)
+            
+            workshop_embed = await self._generate_workshop_embed(interaction.guild, event_id)
+            # workshop_view = WorkshopView(event_id, self.db, self.bot) # The interactive view would go here
+            
+            # Send the result to the channel where the command was run
+            await interaction.channel.send(embed=workshop_embed) #, view=workshop_view)
+            await interaction.followup.send("✅ Squads have been built and the workshop is posted above.", ephemeral=True)
+
+        except Exception as e:
+            print(f"Error during background squad build process: {e}")
+            traceback.print_exc()
+            await interaction.followup.send(f"An error occurred while building the squads: {e}", ephemeral=True)
+
 
     async def _get_player_pools(self, guild: discord.Guild, signups: List[Dict]) -> Dict[str, Dict[str, List[Dict]]]:
         squad_roles = await self.db.get_squad_config_roles(guild.id)
@@ -223,13 +168,11 @@ class SquadBuilder(commands.Cog):
             for i in range(count):
                 squad_id = await self.db.create_squad(event_id, f"{squad_type} {get_squad_letter(i)}", squad_type)
                 placed_officer = False
-                # Find officer from appropriate pools
                 for pool_name in inf_player_map[squad_type]:
-                    if pools[pool_name]['Officer']:
+                    if pools[pool_name].get('Officer'):
                         await self.db.add_squad_member(squad_id, pools[pool_name]['Officer'].pop(0)['user_id'], "Officer")
                         placed_officer = True
                         break
-                # Fill remaining slots
                 if placed_officer:
                     # ... complex logic to fill remaining infantry slots based on class limits ...
                     pass
@@ -242,35 +185,33 @@ class SquadBuilder(commands.Cog):
         if reserves:
             reserve_squad_id = await self.db.create_squad(event_id, "Reserves", "Reserves")
             for user_id in reserves:
-                # Find original role from signup to display
                 signup = next((s for s in signups if s['user_id'] == user_id), None)
                 role_display = signup['subclass_name'] if signup and signup['subclass_name'] else signup['role_name']
                 await self.db.add_squad_member(reserve_squad_id, user_id, role_display)
 
-async def _generate_workshop_embed(guild: discord.Guild, event_id: int, db: Database) -> discord.Embed:
-    event = await db.get_event_by_id(event_id)
-    squads = await db.get_squads_for_event(event_id)
-    
-    embed = discord.Embed(
-        title=f"🛠️ Squad Workshop for: {event['title']}",
-        description="This is your private workshop to finalize the team.",
-        color=discord.Color.gold()
-    )
+    async def _generate_workshop_embed(self, guild: discord.Guild, event_id: int) -> discord.Embed:
+        event = await self.db.get_event_by_id(event_id)
+        squads = await self.db.get_squads_for_event(event_id)
+        
+        embed = discord.Embed(
+            title=f"🛠️ Squad Workshop for: {event['title']}",
+            description="This is your private workshop to finalize the team.",
+            color=discord.Color.gold()
+        )
 
-    for squad in squads:
-        members = await db.get_squad_members(squad['squad_id'])
-        member_list = []
-        for member_data in members:
-            member_obj = guild.get_member(member_data['user_id'])
-            member_name = member_obj.display_name if member_obj else f"ID: {member_data['user_id']}"
-            member_list.append(f"**{member_data['assigned_role_name']}:** {member_name}")
+        for squad in squads:
+            members = await self.db.get_squad_members(squad['squad_id'])
+            member_list = []
+            for member_data in members:
+                member_obj = guild.get_member(member_data['user_id'])
+                member_name = member_obj.display_name if member_obj else f"ID: {member_data['user_id']}"
+                member_list.append(f"**{member_data['assigned_role_name']}:** {member_name}")
         
-        value = "\n".join(member_list) or "Empty"
-        embed.add_field(name=f"__**{squad['name']}**__", value=value, inline=False)
-        
-    embed.set_footer(text=f"Event ID: {event_id} | Use the buttons below to manage.")
-    return embed
+            value = "\n".join(member_list) or "Empty"
+            embed.add_field(name=f"__**{squad['name']}**__", value=value, inline=False)
+            
+        embed.set_footer(text=f"Event ID: {event_id} | Use the buttons below to manage.")
+        return embed
 
 async def setup(bot: commands.Bot, db: Database):
     await bot.add_cog(SquadBuilder(bot, db))
-

@@ -28,7 +28,7 @@ EMOJI_MAPPING = {
     "Officer": os.getenv("EMOJI_OFFICER", "🫡"),
     "Rifleman": os.getenv("EMOJI_RIFLEMAN", "👤"),
     "Support": os.getenv("EMOJI_SUPPORT", "🔧"),
-    "Tank Commander": os.getenv("EMOJI_TANK_COMMANDER", "🧑‍✈️"),
+    "Tank Commander": os.getenv("EMOJI_TANK_COMMANDER", "�‍✈️"),
     "Crewman": os.getenv("EMOJI_CREWMAN", "👨‍🔧"),
     "Spotter": os.getenv("EMOJI_SPOTTER", "👀"),
     "Sniper": os.getenv("EMOJI_SNIPER", "🎯"),
@@ -310,10 +310,23 @@ class Conversation:
             try:
                 event_id = await self.db.create_event(self.interaction.guild.id, self.interaction.channel.id, self.user.id, self.data)
                 await self.user.send(f"Event created successfully! (ID: {event_id}). Posting it in the channel now...")
-                # ... post new embed ...
+                
+                target_channel = self.bot.get_channel(self.interaction.channel.id)
+                if not target_channel:
+                    await self.user.send("Error: I could not find the original channel to post the event in.")
+                    return
+
+                view = PersistentEventView(self.db)
+                embed = await create_event_embed(self.bot, event_id, self.db)
+                content = " ".join([f"<@&{rid}>" for rid in self.data.get('mention_role_ids', [])])
+
+                msg = await target_channel.send(content=content, embed=embed, view=view)
+                await self.db.update_event_message_id(event_id, msg.id)
+
             except Exception as e:
-                # ... error handling ...
-                pass
+                await self.user.send("An error occurred while posting the event.")
+                traceback.print_exc()
+                if event_id: await self.db.delete_event(event_id)
 
     async def cancel(self):
         if self.is_finished: return
@@ -389,3 +402,4 @@ class EventManagement(commands.Cog):
 async def setup(bot: commands.Bot, db: Database):
     await bot.add_cog(EventManagement(bot, db))
     bot.add_view(PersistentEventView(db))
+�

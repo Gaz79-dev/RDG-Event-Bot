@@ -102,17 +102,167 @@ async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> 
     
     return embed
 
-# --- Conversation Class ---
-class Conversation:
-    # ... (Full conversation class logic will be placed here) ...
-    pass
-
 # --- UI Components ---
+class RoleMultiSelect(ui.RoleSelect):
+    def __init__(self, placeholder: str):
+        super().__init__(placeholder=placeholder, min_values=1, max_values=25)
+
+    async def callback(self, interaction: discord.Interaction):
+        self.view.selection = [role.id for role in self.values]
+        await interaction.response.defer()
+        self.view.stop()
+
+class MultiRoleSelectView(ui.View):
+    selection: List[int] = None
+    def __init__(self, placeholder: str):
+        super().__init__(timeout=180)
+        self.add_item(RoleMultiSelect(placeholder=placeholder))
+
+class ConfirmationView(ui.View):
+    def __init__(self):
+        super().__init__(timeout=120)
+        self.value = None
+    @ui.button(label="Yes", style=discord.ButtonStyle.green)
+    async def confirm(self, interaction: discord.Interaction, button: ui.Button):
+        self.value = True; await interaction.response.defer(); self.stop()
+    @ui.button(label="No/Skip", style=discord.ButtonStyle.red)
+    async def cancel(self, interaction: discord.Interaction, button: ui.Button):
+        self.value = False; await interaction.response.defer(); self.stop()
+
 class PersistentEventView(ui.View):
     def __init__(self, db: Database):
         super().__init__(timeout=None)
         self.db = db
     # ... (button logic for accept, tentative, decline)
+
+# --- Conversation Class ---
+class Conversation:
+    def __init__(self, cog: 'EventManagement', interaction: discord.Interaction, db: Database, event_id: int = None):
+        self.cog, self.bot, self.interaction, self.user, self.db, self.event_id = cog, cog.bot, interaction, interaction.user, db, event_id
+        self.data, self.is_finished = {}, False
+    
+    async def start(self):
+        try:
+            if self.event_id:
+                event_data = await self.db.get_event_by_id(self.event_id)
+                self.data = dict(event_data) if event_data else {}
+                await self.user.send(f"Now editing event: **{self.data.get('title', 'Unknown')}**.\nYou can type `cancel` at any time to stop.")
+            else:
+                await self.user.send("Let's create a new event! You can type `cancel` at any time to stop.")
+            await self.run_conversation()
+        except Exception as e:
+            print(f"Error at start of conversation for {self.user.id}: {e}"); traceback.print_exc(); await self.cancel()
+
+    async def run_conversation(self):
+        steps = [
+            ("What is the title of the event?", self.process_text, 'title'),
+            ("What timezone should this event use? (e.g., `UTC`, `EST`, `Europe/London`).", self.process_timezone, 'timezone'),
+            ("What is the start date and time? Please use `DD-MM-YYYY HH:MM` format.", self.process_start_time, 'start_time'),
+            ("What is the end date and time? (Optional, press Enter to skip). Format: `DD-MM-YYYY HH:MM`.", self.process_end_time, 'end_time'),
+            ("Please provide a detailed description for the event.", self.process_text, 'description'),
+            (None, self.ask_mention_roles, 'mention_role_ids'),
+            (None, self.ask_restrict_roles, 'restrict_to_role_ids'),
+        ]
+        for prompt, processor, data_key in steps:
+            if not await processor(prompt, data_key): return
+        await self.finish()
+
+    async def _wait_for_message(self):
+        return await self.bot.wait_for('message', check=lambda m: m.author == self.user and isinstance(m.channel, discord.DMChannel), timeout=300.0)
+
+    async def process_text(self, prompt, data_key):
+        if self.event_id and self.data.get(data_key): prompt += f"\n(Current: `{self.data.get(data_key)}`)"
+        await self.user.send(prompt)
+        try:
+            msg = await self._wait_for_message()
+            if msg.content.lower() == 'cancel': await self.cancel(); return False
+            self.data[data_key] = msg.content; return True
+        except asyncio.TimeoutError: await self.user.send("You took too long. Conversation cancelled."); await self.cancel(); return False
+
+    async def process_timezone(self, prompt, data_key):
+        while True:
+            p = prompt + (f"\n(Current: `{self.data.get(data_key)}`)" if self.event_id and self.data.get(data_key) else "")
+            await self.user.send(p)
+            try:
+                msg = await self._wait_for_message()
+                if msg.content.lower() == 'cancel': await self.cancel(); return False
+                try: pytz.timezone(msg.content); self.data[data_key] = msg.content; return True
+                except pytz.UnknownTimeZoneError: await self.user.send("Invalid timezone. Please try again.")
+            except asyncio.TimeoutError: await self.user.send("You took too long. Conversation cancelled."); await self.cancel(); return False
+
+    async def process_start_time(self, prompt, data_key):
+        while True:
+            val = self.data.get(data_key).strftime('%d-%m-%Y %H:%M') if self.data.get(data_key) else ''
+            p = prompt + (f"\n(Current: `{val}`)" if self.event_id and val else "")
+            await self.user.send(p)
+            try:
+                msg = await self._wait_for_message()
+                if msg.content.lower() == 'cancel': await self.cancel(); return False
+                try:
+                    tz = pytz.timezone(self.data.get('timezone', 'UTC'))
+                    self.data[data_key] = tz.localize(datetime.datetime.strptime(msg.content, "%d-%m-%Y %H:%M")); return True
+                except ValueError: await self.user.send("Invalid date format. Use `DD-MM-YYYY HH:MM`.")
+            except asyncio.TimeoutError: await self.user.send("You took too long. Conversation cancelled."); await self.cancel(); return False
+
+    async def process_end_time(self, prompt, data_key):
+        val = self.data.get(data_key).strftime('%d-%m-%Y %H:%M') if self.data.get(data_key) else 'Not set'
+        p = prompt + (f"\n(Current: `{val}`)" if self.event_id else "")
+        await self.user.send(p)
+        try:
+            msg = await self._wait_for_message()
+            if msg.content.lower() == 'cancel': await self.cancel(); return False
+            if not msg.content: self.data[data_key] = None; return True
+            try:
+                tz = pytz.timezone(self.data.get('timezone', 'UTC'))
+                self.data[data_key] = tz.localize(datetime.datetime.strptime(msg.content, "%d-%m-%Y %H:%M")); return True
+            except ValueError:
+                await self.user.send("Invalid date format. Use `DD-MM-YYYY HH:MM`."); return await self.process_end_time(prompt, data_key)
+        except asyncio.TimeoutError: await self.user.send("You took too long. Conversation cancelled."); await self.cancel(); return False
+
+    async def _ask_roles(self, prompt, data_key, question):
+        view = ConfirmationView()
+        msg = await self.user.send(question, view=view)
+        await view.wait()
+        if view.value is None: await msg.delete(); return False
+        await msg.delete()
+        if view.value:
+            select_view = MultiRoleSelectView(f"Select roles for: {data_key}")
+            m = await self.user.send("Please select roles below.", view=select_view)
+            await select_view.wait(); await m.delete(); self.data[data_key] = select_view.selection or []
+        else: self.data[data_key] = []
+        return True
+
+    async def ask_mention_roles(self, prompt, data_key):
+        return await self._ask_roles(prompt, data_key, "Mention roles in the announcement?")
+    async def ask_restrict_roles(self, prompt, data_key):
+        return await self._ask_roles(prompt, data_key, "Restrict sign-ups to specific roles?")
+        
+    async def finish(self):
+        if self.is_finished: return
+        self.is_finished = True
+        if self.user.id in self.cog.active_conversations:
+            del self.cog.active_conversations[self.user.id]
+
+        if self.event_id:
+            await self.db.update_event(self.event_id, self.data)
+            await self.user.send("Event updated successfully!")
+            # ... update existing embed ...
+        else:
+            event_id = None
+            try:
+                event_id = await self.db.create_event(self.interaction.guild.id, self.interaction.channel.id, self.user.id, self.data)
+                await self.user.send(f"Event created successfully! (ID: {event_id}). Posting it in the channel now...")
+                # ... post new embed ...
+            except Exception as e:
+                # ... error handling ...
+                pass
+
+    async def cancel(self):
+        if self.is_finished: return
+        self.is_finished = True
+        if self.user.id in self.cog.active_conversations:
+            del self.cog.active_conversations[self.user.id]
+        await self.user.send("Event creation/editing cancelled")
 
 # --- Main Cog ---
 class EventManagement(commands.Cog):
@@ -152,7 +302,6 @@ class EventManagement(commands.Cog):
     @event_group.command(name="delete", description="Delete an existing event by its ID.")
     @app_commands.describe(event_id="The ID of the event to delete.")
     async def delete(self, interaction: discord.Interaction, event_id: int):
-        # ... delete logic with confirmation view ...
         await interaction.response.send_message("Delete functionality placeholder.", ephemeral=True)
 
     # --- Setup Command Group ---

@@ -34,11 +34,9 @@ class SquadBuilderModal(ui.Modal, title="Build Squads"):
         self.event_id = event_id
 
     async def on_submit(self, interaction: discord.Interaction):
-        # Acknowledge the modal submission immediately
-        await interaction.response.send_message("Processing your squad build request. This may take a moment...", ephemeral=True)
+        await interaction.response.send_message("Processing your squad build request...", ephemeral=True)
         
         try:
-            # Validate and store values from the modal
             self.infantry_squad_size_val = int(self.infantry_squad_size.value)
             self.attack_squads_val = int(self.attack_squads.value)
             self.defence_squads_val = int(self.defence_squads.value)
@@ -47,7 +45,6 @@ class SquadBuilderModal(ui.Modal, title="Build Squads"):
             self.recon_squads_val = int(self.recon_squads.value)
             self.arty_squads_val = int(self.arty_squads.value)
 
-            # Kick off the background task from the modal itself
             asyncio.create_task(self.cog.run_draft_and_post_workshop(interaction, self.event_id, self))
 
         except ValueError:
@@ -55,7 +52,6 @@ class SquadBuilderModal(ui.Modal, title="Build Squads"):
         except Exception as e:
             print(f"Error in modal submission: {e}")
             await interaction.followup.send("An unexpected error occurred.", ephemeral=True)
-
 
 # --- Main Cog ---
 class SquadBuilder(commands.Cog):
@@ -77,19 +73,16 @@ class SquadBuilder(commands.Cog):
             await interaction.response.send_message(f"Event with ID {event_id} not found.", ephemeral=True)
             return
 
-        # The command's only job is to send the modal. The logic continues in the modal's on_submit.
         modal = SquadBuilderModal(cog=self, event_id=event_id)
         await interaction.response.send_modal(modal)
 
     async def run_draft_and_post_workshop(self, interaction: discord.Interaction, event_id: int, modal: SquadBuilderModal):
-        """A new method to handle the long-running process in the background."""
         try:
             await self._run_automated_draft(interaction.guild, event_id, modal)
             
             workshop_embed = await self._generate_workshop_embed(interaction.guild, event_id)
-            # workshop_view = WorkshopView(event_id, self.db, self.bot) # The interactive view would go here
+            # workshop_view = WorkshopView(event_id, self.db, self.bot)
             
-            # Send the result to the channel where the command was run
             await interaction.channel.send(embed=workshop_embed) #, view=workshop_view)
             await interaction.followup.send("✅ Squads have been built and the workshop is posted above.", ephemeral=True)
 
@@ -97,7 +90,6 @@ class SquadBuilder(commands.Cog):
             print(f"Error during background squad build process: {e}")
             traceback.print_exc()
             await interaction.followup.send(f"An error occurred while building the squads: {e}", ephemeral=True)
-
 
     async def _get_player_pools(self, guild: discord.Guild, signups: List[Dict]) -> Dict[str, Dict[str, List[Dict]]]:
         squad_roles = await self.db.get_squad_config_roles(guild.id)

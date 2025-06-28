@@ -99,6 +99,41 @@ class Database:
                 """)
                 print("Database setup is complete.")
 
+    # --- Scheduler Functions ---
+    async def get_events_for_thread_creation(self):
+        query = """
+            SELECT e.*
+            FROM events e
+            JOIN guilds g ON e.guild_id = g.guild_id
+            WHERE e.thread_created = FALSE
+            AND e.event_time IS NOT NULL
+            AND (e.event_time - (g.thread_creation_hours * INTERVAL '1 hour')) <= (NOW() AT TIME ZONE 'utc');
+        """
+        async with self.pool.acquire() as connection:
+            return await connection.fetch(query)
+
+    async def get_events_for_recreation(self):
+        """Fetches recurring events that have passed and are due for recreation."""
+        query = """
+            SELECT * FROM events
+            WHERE is_recurring = TRUE
+            AND event_time < (NOW() AT TIME ZONE 'utc')
+            AND (last_recreated_at IS NULL OR last_recreated_at < (NOW() - INTERVAL '1 hour'));
+        """
+        async with self.pool.acquire() as connection:
+            return await connection.fetch(query)
+
+    async def get_events_for_deletion(self):
+        """Fetches non-recurring events that have finished and are ready for cleanup."""
+        query = """
+            SELECT event_id, guild_id, channel_id, message_id, thread_id
+            FROM events
+            WHERE is_recurring = FALSE
+            AND COALESCE(end_time, event_time + INTERVAL '2 hours') < (NOW() AT TIME ZONE 'utc');
+        """
+        async with self.pool.acquire() as connection:
+            return await connection.fetch(query)
+            
     # --- Squad Config Functions ---
     async def set_squad_config_role(self, guild_id: int, role_type: str, role_id: int):
         column_name = f"squad_{role_type}_role_id"
@@ -160,5 +195,47 @@ class Database:
         async with self.pool.acquire() as connection:
             await connection.execute("INSERT INTO guilds (guild_id) VALUES ($1) ON CONFLICT (guild_id) DO NOTHING;", guild_id)
             await connection.execute("UPDATE guilds SET event_manager_role_ids = $1 WHERE guild_id = $2;", role_ids, guild_id)
-    
-    # ... other existing functions like update_event, delete_event, etc.
+            
+    async def mark_thread_as_created(self, event_id: int):
+        async with self.pool.acquire() as connection:
+            await connection.execute("UPDATE events SET thread_created = TRUE WHERE event_id = $1;", event_id)
+            
+    async def update_last_recreated_at(self, event_id: int):
+        """Updates the last_recreated_at timestamp for an event."""
+        async with self.pool.acquire() as connection:
+            await connection.execute(
+                "UPDATE events SET last_recreated_at = (NOW() AT TIME ZONE 'utc') WHERE event_id = $1;",
+                event_id
+            )
+            
+    async def delete_event(self, event_id: int):
+        async with self.pool.acquire() as connection:
+            await connection.execute("DELETE FROM events WHERE event_id = $1;", event_id)
+            
+    async def create_event(self, guild_id: int, channel_id: int, creator_id: int, data: dict) -> int:
+        async with self.pool.acquire() as connection:
+            parent_id = data.get('parent_event_id')
+            return await connection.fetchval(
+                """
+                INSERT INTO events (
+                    guild_id, channel_id, creator_id, title, description, 
+                    event_time, end_time, timezone, is_recurring, recurrence_rule,
+                    mention_role_ids, restrict_to_role_ids, recreation_hours, parent_event_id
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                RETURNING event_id;
+                """,
+                guild_id, channel_id, creator_id, data.get('title'), data.get('description'),
+                data.get('start_time'), data.get('end_time'), data.get('timezone'),
+                data.get('is_recurring', False), data.get('recurrence_rule'),
+                data.get('mention_role_ids'), data.get('restrict_to_role_ids'),
+                data.get('recreation_hours'), parent_id
+            )
+            
+    async def update_event_message_id(self, event_id: int, message_id: int):
+        async with self.pool.acquire() as connection:
+            await connection.execute("UPDATE events SET message_id = $1 WHERE event_id = $2;", message_id, event_id)
+            
+    async def update_event_thread_id(self, event_id: int, thread_id: int):
+        async with self.pool.acquire() as connection:
+            await connection.execute("UPDATE events SET thread_id = $1 WHERE event_id = $2;", thread_id, event_id)

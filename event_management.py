@@ -129,6 +129,29 @@ class ConfirmationView(ui.View):
     async def cancel(self, interaction: discord.Interaction, button: ui.Button):
         self.value = False; await interaction.response.defer(); self.stop()
 
+class TimezoneSelect(ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="UTC (Coordinated Universal Time)", value="UTC"),
+            discord.SelectOption(label="GMT (Greenwich Mean Time)", value="GMT"),
+            discord.SelectOption(label="EST (Eastern Standard Time)", value="EST"),
+            discord.SelectOption(label="PST (Pacific Standard Time)", value="PST"),
+            discord.SelectOption(label="CET (Central European Time)", value="CET"),
+            discord.SelectOption(label="AEST (Australian Eastern Standard Time)", value="Australia/Sydney"),
+        ]
+        super().__init__(placeholder="Choose a timezone...", min_values=1, max_values=1, options=options)
+    
+    async def callback(self, interaction: discord.Interaction):
+        self.view.selection = self.values[0]
+        await interaction.response.defer()
+        self.view.stop()
+
+class TimezoneSelectView(ui.View):
+    selection: str = None
+    def __init__(self):
+        super().__init__(timeout=180)
+        self.add_item(TimezoneSelect())
+
 class PersistentEventView(ui.View):
     def __init__(self, db: Database):
         super().__init__(timeout=None)
@@ -156,10 +179,11 @@ class Conversation:
     async def run_conversation(self):
         steps = [
             ("What is the title of the event?", self.process_text, 'title'),
-            ("What timezone should this event use? (e.g., `UTC`, `EST`, `Europe/London`).", self.process_timezone, 'timezone'),
+            (None, self.process_timezone, 'timezone'),
             ("What is the start date and time? Please use `DD-MM-YYYY HH:MM` format.", self.process_start_time, 'start_time'),
             ("What is the end date and time? (Optional, press Enter to skip). Format: `DD-MM-YYYY HH:MM`.", self.process_end_time, 'end_time'),
             ("Please provide a detailed description for the event.", self.process_text, 'description'),
+            (None, self.ask_is_recurring, 'is_recurring'),
             (None, self.ask_mention_roles, 'mention_role_ids'),
             (None, self.ask_restrict_roles, 'restrict_to_role_ids'),
         ]
@@ -180,15 +204,17 @@ class Conversation:
         except asyncio.TimeoutError: await self.user.send("You took too long. Conversation cancelled."); await self.cancel(); return False
 
     async def process_timezone(self, prompt, data_key):
-        while True:
-            p = prompt + (f"\n(Current: `{self.data.get(data_key)}`)" if self.event_id and self.data.get(data_key) else "")
-            await self.user.send(p)
-            try:
-                msg = await self._wait_for_message()
-                if msg.content.lower() == 'cancel': await self.cancel(); return False
-                try: pytz.timezone(msg.content); self.data[data_key] = msg.content; return True
-                except pytz.UnknownTimeZoneError: await self.user.send("Invalid timezone. Please try again.")
-            except asyncio.TimeoutError: await self.user.send("You took too long. Conversation cancelled."); await self.cancel(); return False
+        view = TimezoneSelectView()
+        msg = await self.user.send("Please select a timezone for the event.", view=view)
+        await view.wait()
+        if view.selection:
+            self.data[data_key] = view.selection
+            await msg.edit(content=f"Timezone set to **{view.selection}**.", view=None)
+            return True
+        else:
+            await msg.edit(content="Timezone selection timed out. Conversation cancelled.", view=None)
+            await self.cancel()
+            return False
 
     async def process_start_time(self, prompt, data_key):
         while True:
@@ -217,6 +243,38 @@ class Conversation:
                 self.data[data_key] = tz.localize(datetime.datetime.strptime(msg.content, "%d-%m-%Y %H:%M")); return True
             except ValueError:
                 await self.user.send("Invalid date format. Use `DD-MM-YYYY HH:MM`."); return await self.process_end_time(prompt, data_key)
+        except asyncio.TimeoutError: await self.user.send("You took too long. Conversation cancelled."); await self.cancel(); return False
+
+    async def ask_is_recurring(self, prompt, data_key):
+        view = ConfirmationView()
+        msg = await self.user.send("Is this a recurring event?", view=view)
+        await view.wait()
+        if view.value is None: await msg.delete(); await self.user.send("Timed out."); await self.cancel(); return False
+        await msg.delete(); self.data['is_recurring'] = view.value
+        if view.value: return await self.process_recurrence_rule(None, 'recurrence_rule')
+        else: self.data['recurrence_rule'], self.data['recreation_hours'] = None, None; return True
+
+    async def process_recurrence_rule(self, prompt, data_key):
+        p = "How often should it recur? (`daily`, `weekly`, `monthly`)"
+        await self.user.send(p)
+        try:
+            msg = await self._wait_for_message()
+            if msg.content.lower() == 'cancel': await self.cancel(); return False
+            rule = msg.content.lower()
+            if rule not in ['daily', 'weekly', 'monthly']:
+                await self.user.send("Invalid input."); return await self.process_recurrence_rule(prompt, data_key)
+            self.data[data_key] = rule
+            return await self.process_recreation_hours(None, 'recreation_hours')
+        except asyncio.TimeoutError: await self.user.send("You took too long. Conversation cancelled."); await self.cancel(); return False
+
+    async def process_recreation_hours(self, prompt, data_key):
+        p = "How many hours before the event should the new embed be created? (e.g., `168` for 7 days)"
+        await self.user.send(p)
+        try:
+            msg = await self._wait_for_message()
+            if msg.content.lower() == 'cancel': await self.cancel(); return False
+            try: self.data[data_key] = int(msg.content); return True
+            except ValueError: await self.user.send("Please enter a valid number."); return await self.process_recreation_hours(prompt, data_key)
         except asyncio.TimeoutError: await self.user.send("You took too long. Conversation cancelled."); await self.cancel(); return False
 
     async def _ask_roles(self, prompt, data_key, question):

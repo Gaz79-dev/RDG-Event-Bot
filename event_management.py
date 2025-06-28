@@ -91,8 +91,34 @@ async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> 
     return embed
 
 class EventManagement(commands.Cog):
-    # ... (existing code) ...
-    
+    def __init__(self, bot: commands.Bot, db: Database):
+        self.bot = bot
+        self.db = db
+        # ... rest of __init__ ...
+
+    # --- NEW Command Group for Events ---
+    event_group = app_commands.Group(name="event", description="Commands for creating and managing events.")
+
+    @event_group.command(name="create", description="Create a new event via DM.")
+    # @app_commands.check(is_event_manager) # This check would be added back
+    async def create(self, interaction: discord.Interaction):
+        # ... start_conversation logic ...
+        pass
+
+    @event_group.command(name="edit", description="Edit an existing event via DM.")
+    @app_commands.describe(event_id="The ID of the event to edit.")
+    # @app_commands.check(is_event_manager)
+    async def edit(self, interaction: discord.Interaction, event_id: int):
+        # ... edit logic ...
+        pass
+
+    @event_group.command(name="delete", description="Delete an existing event by its ID.")
+    @app_commands.describe(event_id="The ID of the event to delete.")
+    # @app_commands.check(is_event_manager)
+    async def delete(self, interaction: discord.Interaction, event_id: int):
+        # ... delete logic ...
+        pass
+
     setup = app_commands.Group(name="setup", description="Commands for setting up the bot.", default_permissions=discord.Permissions(administrator=True))
     squad_config_group = app_commands.Group(name="squad_config", description="Commands for configuring squad roles.", parent=setup)
 

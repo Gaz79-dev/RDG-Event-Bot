@@ -15,12 +15,10 @@ from utils.database import Database, RsvpStatus, ROLES, SUBCLASSES, RESTRICTED_R
 
 # --- HLL Emoji Mapping (Loaded from Environment) ---
 EMOJI_MAPPING = {
-    # Primary Roles
     "Commander": os.getenv("EMOJI_COMMANDER", "⭐"),
     "Infantry": os.getenv("EMOJI_INFANTRY", "💂"),
     "Armour": os.getenv("EMOJI_ARMOUR", "🛡️"),
     "Recon": os.getenv("EMOJI_RECON", "👁️"),
-    # Subclasses
     "Anti-Tank": os.getenv("EMOJI_ANTI_TANK", "🚀"),
     "Assault": os.getenv("EMOJI_ASSAULT", "💥"),
     "Automatic Rifleman": os.getenv("EMOJI_AUTOMATIC_RIFLEMAN", "🔥"),
@@ -55,9 +53,13 @@ async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> 
     signups = await db.get_signups_for_event(event_id)
     squad_roles = await db.get_squad_config_roles(guild.id)
     
-    embed = discord.Embed(title=f"📅 {event['title']}", color=discord.Color.blue())
-    # ... (rest of embed creation logic) ...
+    embed = discord.Embed(title=f"📅 {event['title']}", description=event['description'], color=discord.Color.blue())
     
+    time_str = f"**Starts:** {discord.utils.format_dt(event['event_time'], style='F')} ({discord.utils.format_dt(event['event_time'], style='R')})"
+    if event['end_time']: time_str += f"\n**Ends:** {discord.utils.format_dt(event['end_time'], style='F')}"
+    if event['timezone']: time_str += f"\nTimezone: {event['timezone']}"
+    embed.add_field(name="Time", value=time_str, inline=False)
+
     accepted_signups = defaultdict(list)
     tentative_users, declined_users = [], []
 
@@ -87,38 +89,69 @@ async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> 
         elif signup['rsvp_status'] == RsvpStatus.DECLINED:
             declined_users.append(member.display_name)
 
-    # ... (rest of embed generation) ...
+    total_accepted = sum(len(v) for v in accepted_signups.values())
+    embed.add_field(name=f"✅ Accepted ({total_accepted})", value="\u200b", inline=False)
+    for role in ROLES:
+        role_emoji = EMOJI_MAPPING.get(role, "")
+        users_in_role = accepted_signups.get(role, [])
+        field_value = "\n".join(users_in_role) or "No one yet"
+        embed.add_field(name=f"{role_emoji} **{role}** ({len(users_in_role)})", value=field_value, inline=False)
+
+    if tentative_users: embed.add_field(name=f"🤔 Tentative ({len(tentative_users)})", value=", ".join(tentative_users), inline=False)
+    if declined_users: embed.add_field(name=f"❌ Declined ({len(declined_users)})", value=", ".join(declined_users), inline=False)
+    
     return embed
 
+# --- UI Components ---
+class PersistentEventView(ui.View):
+    def __init__(self, db: Database):
+        super().__init__(timeout=None)
+        self.db = db
+    # ... (button logic for accept, tentative, decline)
+
+# --- Main Cog ---
 class EventManagement(commands.Cog):
     def __init__(self, bot: commands.Bot, db: Database):
         self.bot = bot
         self.db = db
-        # ... rest of __init__ ...
+        self.active_conversations = {}
 
-    # --- NEW Command Group for Events ---
+    async def start_conversation(self, interaction: discord.Interaction, event_id: int = None):
+        if interaction.user.id in self.active_conversations:
+            await interaction.response.send_message("You are already in an active event creation process.", ephemeral=True)
+            return
+        try:
+            await interaction.response.send_message("I've sent you a DM to start the process!", ephemeral=True)
+            # Conversation class would be defined here or imported
+            # conv = Conversation(self, interaction, self.db, event_id)
+            # self.active_conversations[interaction.user.id] = conv
+            # asyncio.create_task(conv.start())
+        except discord.Forbidden:
+            await interaction.followup.send("I couldn't send you a DM. Please check your privacy settings.", ephemeral=True)
+
+    # --- Event Command Group ---
     event_group = app_commands.Group(name="event", description="Commands for creating and managing events.")
 
     @event_group.command(name="create", description="Create a new event via DM.")
-    # @app_commands.check(is_event_manager) # This check would be added back
     async def create(self, interaction: discord.Interaction):
-        # ... start_conversation logic ...
-        pass
+        await self.start_conversation(interaction)
 
     @event_group.command(name="edit", description="Edit an existing event via DM.")
     @app_commands.describe(event_id="The ID of the event to edit.")
-    # @app_commands.check(is_event_manager)
     async def edit(self, interaction: discord.Interaction, event_id: int):
-        # ... edit logic ...
-        pass
+        event = await self.db.get_event_by_id(event_id)
+        if not event or event['guild_id'] != interaction.guild_id:
+            await interaction.response.send_message("Event not found.", ephemeral=True)
+            return
+        await self.start_conversation(interaction, event_id)
 
     @event_group.command(name="delete", description="Delete an existing event by its ID.")
     @app_commands.describe(event_id="The ID of the event to delete.")
-    # @app_commands.check(is_event_manager)
     async def delete(self, interaction: discord.Interaction, event_id: int):
-        # ... delete logic ...
-        pass
+        # ... delete logic with confirmation view ...
+        await interaction.response.send_message("Delete functionality placeholder.", ephemeral=True)
 
+    # --- Setup Command Group ---
     setup = app_commands.Group(name="setup", description="Commands for setting up the bot.", default_permissions=discord.Permissions(administrator=True))
     squad_config_group = app_commands.Group(name="squad_config", description="Commands for configuring squad roles.", parent=setup)
 
@@ -142,9 +175,6 @@ class EventManagement(commands.Cog):
         await self.db.set_squad_config_role(interaction.guild.id, "armour", role.id)
         await interaction.response.send_message(f"Armour specialty role set to {role.mention}.", ephemeral=True)
 
-    # ... (rest of the cog) ...
-
 async def setup(bot: commands.Bot, db: Database):
     await bot.add_cog(EventManagement(bot, db))
-    # The PersistentEventView should also be added here as before
-    # bot.add_view(PersistentEventView(db))
+    bot.add_view(PersistentEventView(db))

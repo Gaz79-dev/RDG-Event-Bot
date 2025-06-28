@@ -100,6 +100,9 @@ async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> 
     if tentative_users: embed.add_field(name=f"🤔 Tentative ({len(tentative_users)})", value=", ".join(tentative_users), inline=False)
     if declined_users: embed.add_field(name=f"❌ Declined ({len(declined_users)})", value=", ".join(declined_users), inline=False)
     
+    creator = await bot.fetch_user(event['creator_id'])
+    embed.set_footer(text=f"Event ID: {event_id} | Created by: {creator.display_name}")
+    
     return embed
 
 # --- UI Components ---
@@ -156,7 +159,44 @@ class PersistentEventView(ui.View):
     def __init__(self, db: Database):
         super().__init__(timeout=None)
         self.db = db
-    # ... (button logic for accept, tentative, decline)
+
+    async def update_embed(self, interaction: discord.Interaction, event_id: int):
+        new_embed = await create_event_embed(interaction.client, event_id, self.db)
+        await interaction.message.edit(embed=new_embed)
+
+    @ui.button(label="Accept", style=discord.ButtonStyle.success, custom_id="persistent_view:accept")
+    async def accept(self, interaction: discord.Interaction, button: ui.Button):
+        try:
+            event = await self.db.get_event_by_message_id(interaction.message.id)
+            if not event:
+                await interaction.response.send_message("This event could not be found.", ephemeral=True)
+                return
+            
+            await self.db.set_rsvp(event['event_id'], interaction.user.id, RsvpStatus.ACCEPTED)
+            await interaction.response.defer()
+            await self.update_embed(interaction, event['event_id'])
+            
+            # DM logic for role selection would go here
+            await interaction.followup.send("You have accepted the event!", ephemeral=True)
+
+        except Exception as e:
+            print(f"Error in 'Accept' button: {e}"); traceback.print_exc()
+
+    @ui.button(label="Tentative", style=discord.ButtonStyle.secondary, custom_id="persistent_view:tentative")
+    async def tentative(self, interaction: discord.Interaction, button: ui.Button):
+        event = await self.db.get_event_by_message_id(interaction.message.id)
+        if not event: return
+        await self.db.set_rsvp(event['event_id'], interaction.user.id, RsvpStatus.TENTATIVE)
+        await interaction.response.defer()
+        await self.update_embed(interaction, event['event_id'])
+
+    @ui.button(label="Decline", style=discord.ButtonStyle.danger, custom_id="persistent_view:decline")
+    async def decline(self, interaction: discord.Interaction, button: ui.Button):
+        event = await self.db.get_event_by_message_id(interaction.message.id)
+        if not event: return
+        await self.db.set_rsvp(event['event_id'], interaction.user.id, RsvpStatus.DECLINED)
+        await interaction.response.defer()
+        await self.update_embed(interaction, event['event_id'])
 
 # --- Conversation Class ---
 class Conversation:

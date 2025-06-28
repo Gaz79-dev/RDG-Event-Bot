@@ -102,6 +102,11 @@ async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> 
     
     return embed
 
+# --- Conversation Class ---
+class Conversation:
+    # ... (Full conversation class logic will be placed here) ...
+    pass
+
 # --- UI Components ---
 class PersistentEventView(ui.View):
     def __init__(self, db: Database):
@@ -122,10 +127,9 @@ class EventManagement(commands.Cog):
             return
         try:
             await interaction.response.send_message("I've sent you a DM to start the process!", ephemeral=True)
-            # Conversation class would be defined here or imported
-            # conv = Conversation(self, interaction, self.db, event_id)
-            # self.active_conversations[interaction.user.id] = conv
-            # asyncio.create_task(conv.start())
+            conv = Conversation(self, interaction, self.db, event_id)
+            self.active_conversations[interaction.user.id] = conv
+            asyncio.create_task(conv.start())
         except discord.Forbidden:
             await interaction.followup.send("I couldn't send you a DM. Please check your privacy settings.", ephemeral=True)
 

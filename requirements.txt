@@ -1,6 +1,16 @@
+# Discord Bot
 discord.py
 asyncpg
 python-dotenv
 pytz
-gspread
-google-auth-oauthlib
+python-dateutil
+
+# Web Server & API
+fastapi
+uvicorn[standard]
+jinja2
+
+# Authentication
+passlib[bcrypt]
+python-jose[cryptography]
+python-multipart

@@ -2,6 +2,8 @@ import discord
 from discord.ext import commands
 import os
 import asyncio
+import traceback
+from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 import uvicorn
 from fastapi import FastAPI, Request
@@ -16,8 +18,44 @@ from .api import auth
 # Load environment variables
 load_dotenv()
 
+# --- App State ---
+# Define a dictionary to hold our state, like the bot and db instances
+state = {}
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Handles application startup and shutdown events.
+    Connects to the database and starts the Discord bot.
+    """
+    print("Application startup...")
+    # Initialize and connect to the database
+    db_instance = Database()
+    await db_instance.connect()
+    
+    # Initialize the bot
+    intents = discord.Intents.default()
+    intents.members = True
+    intents.message_content = True
+    bot_instance = EventBot(db=db_instance, web_app=app, command_prefix="!", intents=intents)
+
+    # Store instances in the app state
+    app.state.db = db_instance
+    app.state.bot = bot_instance
+    
+    # Start the bot in a background task
+    asyncio.create_task(bot_instance.start(os.getenv("DISCORD_TOKEN")))
+    
+    yield # The application is now running
+    
+    # --- Shutdown logic ---
+    print("Application shutdown...")
+    await bot_instance.close()
+    await db_instance.close()
+
+
 # --- FastAPI App Setup ---
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
 
 # Mount static files and templates
 app.mount("/static", StaticFiles(directory="bot/web/static"), name="static")
@@ -29,19 +67,16 @@ app.include_router(users.router)
 app.include_router(events.router)
 
 # --- Discord Bot Setup ---
-intents = discord.Intents.default()
-intents.members = True
-intents.message_content = True
-
 class EventBot(commands.Bot):
     """Custom Bot class to hold the database connection and FastAPI app."""
     def __init__(self, db: Database, web_app: FastAPI, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.db = db
         self.web_app = web_app
-        # Make the bot instance and db available to the FastAPI app state
-        self.web_app.state.bot = self
-        self.web_app.state.db = db
+
+    async def on_ready(self):
+        print(f'Logged in as {self.user} (ID: {self.user.id})')
+        print('------')
 
     async def setup_hook(self):
         """The setup_hook is called when the bot logs in."""
@@ -57,7 +92,7 @@ class EventBot(commands.Bot):
                 await self.load_extension(cog)
                 print(f"Successfully loaded cog: {cog}")
             except Exception as e:
-                print(f"Failed to load cog {cog}: {e}")
+                print(f"Failed to load cog {cog}:")
                 traceback.print_exc()
         
         # Sync commands
@@ -72,6 +107,7 @@ class EventBot(commands.Bot):
         except Exception as e:
             print(f"Failed to sync commands: {e}")
 
+
 # --- Web Page Routes ---
 @app.get("/login")
 async def login_page(request: Request):
@@ -85,57 +121,6 @@ async def main_page(request: Request):
 async def admin_page(request: Request):
     return templates.TemplateResponse("admin.html", {"request": request})
 
-
-# --- Main Application Logic ---
-db_instance = Database()
-bot_instance = EventBot(db=db_instance, web_app=app, command_prefix="!", intents=intents)
-
-async def run_bot():
-    """Coroutine to run the Discord bot."""
-    token = os.getenv("DISCORD_TOKEN")
-    if not token:
-        print("Error: DISCORD_TOKEN not found in .env file.")
-        return
-    await bot_instance.start(token)
-
-async def run_web_server():
-    """Coroutine to run the FastAPI web server."""
-    config = uvicorn.Config("bot.main:app", host="0.0.0.0", port=8000, log_level="info")
-    server = uvicorn.Server(config)
-    await server.serve()
-
-async def main():
-    """Main entry point to run both bot and web server concurrently."""
-    print("Connecting to database...")
-    await db_instance.connect()
-    
-    # Run both tasks concurrently
-    await asyncio.gather(
-        run_web_server(),
-        run_bot()
-    )
-
+# This check allows running with `python -m bot.main` for local dev if needed
 if __name__ == "__main__":
-    # This part is crucial for running with `python -m bot.main`
-    # but uvicorn will handle the loop when run from docker-compose.
-    # The main() function is defined for clarity and potential direct execution.
-    pass
-
-# The uvicorn command in docker-compose.yml will target `app`, 
-# which is the FastAPI instance. The bot will be started via the `run_bot`
-# coroutine which we will now launch from the main script body.
-
-# To ensure the bot starts when uvicorn runs the app, we need a startup event.
-# However, a simple startup event can be blocking. The `main` function with `gather`
-# is the most robust way. We need to adjust the docker-compose command.
-
-# Let's redefine the startup logic to be simpler and non-blocking for uvicorn.
-
-@app.on_event("startup")
-async def startup():
-    asyncio.create_task(db_instance.connect())
-    asyncio.create_task(bot_instance.start(os.getenv("DISCORD_TOKEN")))
-
-# With this new startup event, the `main` function and `gather` are not needed for Docker.
-# The `uvicorn` command in your docker-compose will now work as intended.
-# I'll remove the more complex `main` function to avoid confusion.
+    uvicorn.run("bot.main:app", host="0.0.0.0", port=8000, reload=True)

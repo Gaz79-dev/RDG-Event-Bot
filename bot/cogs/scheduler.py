@@ -9,13 +9,13 @@ from dateutil.relativedelta import relativedelta
 from ..utils.database import Database, RsvpStatus
 
 class Scheduler(commands.Cog):
-    # ... (rest of the class) ...
-    @tasks.loop(minutes=5)
-    async def recreate_recurring_events(self):
-        """Periodically checks for recurring events that need to be recreated."""
-        # Use relative import for the cog as well
-        from .event_management import create_event_embed, PersistentEventView
-        try:
+    """Cog for handling scheduled background tasks."""
+    def __init__(self, bot: commands.Bot, db: Database):
+        self.bot = bot
+        self.db = db
+        self.create_event_threads.start()
+        self.recreate_recurring_events.start()
+        self.cleanup_finished_events.start()
 
     def cog_unload(self):
         """Cleanly cancels all tasks when the cog is unloaded."""
@@ -99,6 +99,7 @@ class Scheduler(commands.Cog):
     @tasks.loop(minutes=5)
     async def recreate_recurring_events(self):
         """Periodically checks for recurring events that need to be recreated."""
+        # Use relative import for the cog as well
         from .event_management import create_event_embed, PersistentEventView
         try:
             events_to_recreate = await self.db.get_events_for_recreation()
@@ -234,6 +235,7 @@ class Scheduler(commands.Cog):
         """Waits until the bot is fully logged in and ready before starting loops."""
         await self.bot.wait_until_ready()
 
-async def setup(bot: commands.Bot, db: Database):
+async def setup(bot: commands.Bot):
     """Sets up the scheduler cog."""
+    db = bot.web_app.state.db
     await bot.add_cog(Scheduler(bot, db))

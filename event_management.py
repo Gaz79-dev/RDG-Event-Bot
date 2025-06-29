@@ -100,8 +100,24 @@ async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> 
     if tentative_users: embed.add_field(name=f"🤔 Tentative ({len(tentative_users)})", value=", ".join(tentative_users), inline=False)
     if declined_users: embed.add_field(name=f"❌ Declined ({len(declined_users)})", value=", ".join(declined_users), inline=False)
     
-    creator = await bot.fetch_user(event['creator_id'])
-    embed.set_footer(text=f"Event ID: {event_id} | Created by: {creator.display_name}")
+    creator_name = "Unknown User"
+    creator_id = event.get('creator_id')
+    if creator_id:
+        try:
+            # Try to get the member from the guild to access server-specific display name
+            creator = guild.get_member(creator_id) or await guild.fetch_member(creator_id)
+            if creator:
+                creator_name = creator.display_name
+        except discord.NotFound:
+            # If member not found in guild, fall back to fetching the user for their global name
+            try:
+                user = await bot.fetch_user(creator_id)
+                creator_name = user.name # .name is the global username
+            except discord.NotFound:
+                # If user can't be fetched at all, name remains "Unknown User"
+                pass
+
+    embed.set_footer(text=f"Event ID: {event_id} | Created by: {creator_name}")
     
     return embed
 
@@ -305,7 +321,7 @@ class PersistentEventView(ui.View):
         if not event: return
         
         await self.db.set_rsvp(event['event_id'], interaction.user.id, RsvpStatus.DECLINED)
-        await self.db.update_signup_role(event['event_id'], interaction.user.id, None, None) # Clear role if declined
+        await self.db.update_signup_role(event['event_id'], interaction.user.id, None, None) # Clear role if tentative
         await self.update_embed(interaction, event['event_id'])
 
 # --- Conversation Class ---

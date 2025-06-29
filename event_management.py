@@ -91,7 +91,9 @@ async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> 
 
     total_accepted = sum(len(v) for v in accepted_signups.values())
     embed.add_field(name=f"✅ Accepted ({total_accepted})", value="\u200b", inline=False)
-    for role in ROLES:
+    for role in ROLES + ["Unassigned"]: # Add Unassigned to the display list
+        if role == "Unassigned" and not accepted_signups.get("Unassigned"):
+            continue
         role_emoji = EMOJI_MAPPING.get(role, "")
         users_in_role = accepted_signups.get(role, [])
         field_value = "\n".join(users_in_role) or "No one yet"
@@ -104,17 +106,14 @@ async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> 
     creator_id = event.get('creator_id')
     if creator_id:
         try:
-            # Try to get the member from the guild to access server-specific display name
             creator = guild.get_member(creator_id) or await guild.fetch_member(creator_id)
             if creator:
                 creator_name = creator.display_name
         except discord.NotFound:
-            # If member not found in guild, fall back to fetching the user for their global name
             try:
                 user = await bot.fetch_user(creator_id)
-                creator_name = user.name # .name is the global username
+                creator_name = user.name
             except discord.NotFound:
-                # If user can't be fetched at all, name remains "Unknown User"
                 pass
 
     embed.set_footer(text=f"Event ID: {event_id} | Created by: {creator_name}")
@@ -172,7 +171,7 @@ class TimezoneSelectView(ui.View):
         super().__init__(timeout=180)
         self.add_item(TimezoneSelect())
 
-# --- NEW: Role Selection UI Components ---
+# --- Role Selection UI Components ---
 class RoleSelect(ui.Select):
     """The first dropdown for selecting a primary role."""
     def __init__(self, db: Database, event_id: int):
@@ -184,7 +183,6 @@ class RoleSelect(ui.Select):
     async def callback(self, interaction: discord.Interaction):
         self.view.role = self.values[0]
         
-        # Enable and populate the subclass dropdown based on the selected role
         subclass_options = SUBCLASSES.get(self.view.role, [])
         subclass_select = self.view.subclass_select
         subclass_select.disabled = not subclass_options
@@ -193,12 +191,11 @@ class RoleSelect(ui.Select):
             subclass_select.placeholder = "2. Choose your subclass..."
             subclass_select.options = [discord.SelectOption(label=sub, emoji=EMOJI_MAPPING.get(sub, "❔")) for sub in subclass_options]
         else:
-            # If no subclasses, update the DB directly and close the view
             await self.db.update_signup_role(self.event_id, interaction.user.id, self.view.role, None)
             for item in self.view.children: item.disabled = True
             await interaction.response.edit_message(content=f"Your role has been confirmed as **{self.view.role}**! You can dismiss this message.", view=self.view)
             self.view.stop()
-            asyncio.create_task(self.view.update_original_embed()) # Update the main event embed
+            asyncio.create_task(self.view.update_original_embed())
             return
 
         await interaction.response.edit_message(view=self.view)
@@ -220,21 +217,36 @@ class SubclassSelect(ui.Select):
             view=self.view
         )
         self.view.stop()
-        asyncio.create_task(self.view.update_original_embed()) # Update the main event embed
+        asyncio.create_task(self.view.update_original_embed())
 
 class RoleSelectionView(ui.View):
     """The view sent in a DM to the user for role selection."""
-    def __init__(self, bot: commands.Bot, db: Database, event_id: int, message_id: int):
+    def __init__(self, bot: commands.Bot, db: Database, event_id: int, message_id: int, user: discord.User):
         super().__init__(timeout=300)
         self.bot = bot
         self.db = db
         self.event_id = event_id
         self.message_id = message_id
+        self.user = user
         self.role: Optional[str] = None
         
         self.subclass_select = SubclassSelect(db, event_id)
         self.add_item(RoleSelect(db, event_id))
         self.add_item(self.subclass_select)
+
+    async def on_timeout(self):
+        """Handle the case where the user does not select a role in time."""
+        if self.role is None:
+            print(f"Role selection timed out for user {self.user.id} for event {self.event_id}.")
+            await self.db.update_signup_role(self.event_id, self.user.id, "Unassigned", None)
+            await self.update_original_embed()
+            try:
+                await self.user.send(
+                    "Your role selection has timed out. You have been marked as 'Unassigned' for the event. "
+                    "To select a role, please click 'Decline' and then 'Accept' on the event again."
+                )
+            except discord.Forbidden:
+                pass # User has DMs disabled, can't inform them.
 
     async def update_original_embed(self):
         """Finds the original event message and updates the embed."""
@@ -270,7 +282,6 @@ class PersistentEventView(ui.View):
     @ui.button(label="Accept", style=discord.ButtonStyle.success, custom_id="persistent_view:accept")
     async def accept(self, interaction: discord.Interaction, button: ui.Button):
         try:
-            # Defer immediately and make it ephemeral so only the user sees the followup
             await interaction.response.defer(ephemeral=True)
 
             event = await self.db.get_event_by_message_id(interaction.message.id)
@@ -280,25 +291,21 @@ class PersistentEventView(ui.View):
 
             await self.db.set_rsvp(event['event_id'], interaction.user.id, RsvpStatus.ACCEPTED)
             
-            # Send DM for role selection
             try:
-                role_view = RoleSelectionView(interaction.client, self.db, event['event_id'], interaction.message.id)
+                role_view = RoleSelectionView(interaction.client, self.db, event['event_id'], interaction.message.id, interaction.user)
                 await interaction.user.send(
                     f"You have accepted the event: **{event['title']}**.\nPlease select your role for this event below.",
                     view=role_view
                 )
                 await interaction.followup.send("You have accepted the event! Please check your DMs to select your role.", ephemeral=True)
             except discord.Forbidden:
-                # Handle cases where the user has DMs disabled
                 await self.db.update_signup_role(event['event_id'], interaction.user.id, "Unassigned", None)
                 await interaction.followup.send("You've accepted the event, but I couldn't DM you to select a role. Your role is set to 'Unassigned'. Please enable DMs from server members to use role selection.", ephemeral=True)
             
-            # Update the main event embed in the channel
             await self.update_embed(interaction, event['event_id'])
 
         except Exception as e:
             print(f"Error in 'Accept' button: {e}"); traceback.print_exc()
-            # Safely send an error message if the interaction hasn't been responded to yet
             if not interaction.response.is_done():
                 await interaction.response.send_message("An unexpected error occurred.", ephemeral=True)
             else:
@@ -306,22 +313,22 @@ class PersistentEventView(ui.View):
 
     @ui.button(label="Tentative", style=discord.ButtonStyle.secondary, custom_id="persistent_view:tentative")
     async def tentative(self, interaction: discord.Interaction, button: ui.Button):
-        await interaction.response.defer() # Acknowledge the interaction publicly
+        await interaction.response.defer()
         event = await self.db.get_event_by_message_id(interaction.message.id)
         if not event: return
         
         await self.db.set_rsvp(event['event_id'], interaction.user.id, RsvpStatus.TENTATIVE)
-        await self.db.update_signup_role(event['event_id'], interaction.user.id, None, None) # Clear role if tentative
+        await self.db.update_signup_role(event['event_id'], interaction.user.id, None, None)
         await self.update_embed(interaction, event['event_id'])
 
     @ui.button(label="Decline", style=discord.ButtonStyle.danger, custom_id="persistent_view:decline")
     async def decline(self, interaction: discord.Interaction, button: ui.Button):
-        await interaction.response.defer() # Acknowledge the interaction publicly
+        await interaction.response.defer()
         event = await self.db.get_event_by_message_id(interaction.message.id)
         if not event: return
         
         await self.db.set_rsvp(event['event_id'], interaction.user.id, RsvpStatus.DECLINED)
-        await self.db.update_signup_role(event['event_id'], interaction.user.id, None, None) # Clear role if tentative
+        await self.db.update_signup_role(event['event_id'], interaction.user.id, None, None)
         await self.update_embed(interaction, event['event_id'])
 
 # --- Conversation Class ---

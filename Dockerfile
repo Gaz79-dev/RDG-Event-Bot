@@ -1,26 +1,22 @@
 # Use an official Python runtime as a parent image
-FROM python:3.11-slim
+FROM python:3.10-slim
 
 # Set the working directory in the container
 WORKDIR /usr/src/app
 
-# --- Install System Dependencies (including netcat) ---
-# Install netcat-openbsd to allow the startup script to check the database connection
-RUN apt-get update && apt-get install -y netcat-openbsd && rm -rf /var/lib/apt/lists/*
+# Install system dependencies required for psycopg2 (PostgreSQL adapter)
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-# --- Install Python Dependencies ---
-# Copy the requirements file into the container
+# Copy the requirements file into the container at /usr/src/app
 COPY requirements.txt ./
 
 # Install any needed packages specified in requirements.txt
-# --no-cache-dir: Disables the cache, which is good for keeping image sizes down.
-# -r requirements.txt: Specifies the file to install from.
 RUN pip install --no-cache-dir -r requirements.txt
 
-# --- Copy Application Code ---
-# Copy the 'bot' directory from your local machine to the container's working directory
-COPY ./bot ./bot
+# Copy the rest of the application's code into the container
+COPY . .
 
-# --- Run the application ---
-# The command to run your bot when the container launches.
-CMD ["python", "bot/bot.py"]
+# The command to run the application will be specified in docker-compose.yml

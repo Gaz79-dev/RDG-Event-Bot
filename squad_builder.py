@@ -157,37 +157,49 @@ class SquadBuilder(commands.Cog):
 
         # 1. Commander
         squad_id = await self.db.create_squad(event_id, "Command", "Command")
-        if pools['commander'].get('Commander'):
+        try:
             player = pools['commander']['Commander'].pop(0)
             await self.db.add_squad_member(squad_id, player['user_id'], "Commander")
+        except IndexError:
+            pass # No commander available
 
         # 2. Arty
         for i in range(modal.arty_squads_val):
             squad_id = await self.db.create_squad(event_id, f"Arty {get_squad_letter(i)}", "Arty")
-            if pools['arty'].get('Officer'):
+            try:
                 player = pools['arty']['Officer'].pop(0)
                 await self.db.add_squad_member(squad_id, player['user_id'], "Officer")
+            except IndexError:
+                pass # No arty officer available
 
         # 3. Recon
         for i in range(modal.recon_squads_val):
             squad_id = await self.db.create_squad(event_id, f"Recon {get_squad_letter(i)}", "Recon")
-            if pools['recon'].get('Spotter'):
+            try:
                 player = pools['recon']['Spotter'].pop(0)
                 await self.db.add_squad_member(squad_id, player['user_id'], "Spotter")
-            if pools['recon'].get('Sniper'):
+            except IndexError:
+                pass # No spotter available
+            try:
                 player = pools['recon']['Sniper'].pop(0)
                 await self.db.add_squad_member(squad_id, player['user_id'], "Sniper")
+            except IndexError:
+                pass # No sniper available
 
         # 4. Armour
         for i in range(modal.armour_squads_val):
             squad_id = await self.db.create_squad(event_id, f"Armour {get_squad_letter(i)}", "Armour")
-            if pools['armour'].get('Tank Commander'):
+            try:
                 player = pools['armour']['Tank Commander'].pop(0)
                 await self.db.add_squad_member(squad_id, player['user_id'], "Tank Commander")
+            except IndexError:
+                pass # No tank commander available
             for _ in range(2): # Fill with 2 crewmen
-                if pools['armour'].get('Crewman'):
+                try:
                     player = pools['armour']['Crewman'].pop(0)
                     await self.db.add_squad_member(squad_id, player['user_id'], "Crewman")
+                except IndexError:
+                    pass # Not enough crewmen
 
         # 5. Infantry Squads
         inf_squad_types = {'Attack': modal.attack_squads_val, 'Defence': modal.defence_squads_val, 'Flex': modal.flex_squads_val}
@@ -202,11 +214,13 @@ class SquadBuilder(commands.Cog):
                 # Place Officer first
                 placed_officer = False
                 for pool_name in inf_player_map[squad_type]:
-                    if pools[pool_name].get('Officer'):
+                    try:
                         player = pools[pool_name]['Officer'].pop(0)
                         await self.db.add_squad_member(squad_id, player['user_id'], "Officer")
                         placed_officer = True
                         break
+                    except IndexError:
+                        continue
                 
                 # Fill remaining slots
                 if placed_officer:
@@ -217,13 +231,17 @@ class SquadBuilder(commands.Cog):
                         player_placed_this_iteration = False
                         for pool_name in inf_player_map[squad_type]:
                             for subclass in subclass_priority:
-                                if pools[pool_name].get(subclass):
+                                try:
                                     player = pools[pool_name][subclass].pop(0)
                                     await self.db.add_squad_member(squad_id, player['user_id'], subclass)
                                     player_placed_this_iteration = True
                                     break
-                            if player_placed_this_iteration: break
-                        if not player_placed_this_iteration: break 
+                                except IndexError:
+                                    continue
+                            if player_placed_this_iteration:
+                                break
+                        if not player_placed_this_iteration:
+                            break # Stop filling if no players are left for this squad
 
         # 6. Add all remaining players to reserves
         reserves = []

@@ -1,4 +1,3 @@
-
 import discord
 from discord.ext import commands
 from discord import app_commands, ui
@@ -7,9 +6,8 @@ from typing import List, Dict, Optional, Tuple
 import traceback
 from collections import defaultdict
 
-# Adjust the import path based on your project structure
-from utils.database import Database, RsvpStatus, ROLES, SUBCLASSES
-from cogs.event_management import create_event_embed
+# Use relative import to go up one level to the 'bot' package root
+from ..utils.database import Database, RsvpStatus, ROLES, SUBCLASSES
 
 # --- Helper ---
 def get_squad_letter(count: int) -> str:

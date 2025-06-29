@@ -135,6 +135,7 @@ class ConfirmationView(ui.View):
 class TimezoneSelect(ui.Select):
     def __init__(self):
         options = [
+            discord.SelectOption(label="BST (British Summer Time)", value="Europe/London"),
             discord.SelectOption(label="UTC (Coordinated Universal Time)", value="UTC"),
             discord.SelectOption(label="GMT (Greenwich Mean Time)", value="GMT"),
             discord.SelectOption(label="EST (Eastern Standard Time)", value="EST"),

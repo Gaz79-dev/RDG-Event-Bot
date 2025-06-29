@@ -40,7 +40,6 @@ services:
       - ./data/certbot/www:/var/www/certbot
     depends_on:
       - app
-    # This allows the container to resolve 'host.docker.internal' to the host machine's IP
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -50,8 +49,8 @@ services:
     volumes:
       - ./data/certbot/conf:/etc/letsencrypt
       - ./data/certbot/www:/var/www/certbot
-    # Added --staging flag for safe testing to avoid rate limits.
-    command: certonly --webroot --webroot-path=/var/www/certbot --email ${CERTBOT_EMAIL} --agree-tos --no-eff-email -d squadbuilder.rdg-clan.co.uk --quiet --staging
+    # This command will run when the container starts.
+    command: certonly --webroot --webroot-path=/var/www/certbot --email ${CERTBOT_EMAIL} --agree-tos --no-eff-email -d squadbuilder.rdg-clan.co.uk --quiet
 
 volumes:
   postgres_data:

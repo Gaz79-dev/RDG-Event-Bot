@@ -151,6 +151,12 @@ class Database:
         async with self.pool.acquire() as connection:
             return await connection.fetchval("INSERT INTO squads (event_id, name, squad_type) VALUES ($1, $2, $3) RETURNING squad_id;", event_id, name, squad_type)
 
+    async def get_squad_by_id(self, squad_id: int) -> Optional[Dict]:
+        """Fetches a single squad by its primary key."""
+        async with self.pool.acquire() as connection:
+            row = await connection.fetchrow("SELECT * FROM squads WHERE squad_id = $1;", squad_id)
+            return dict(row) if row else None
+
     async def add_squad_member(self, squad_id: int, user_id: int, assigned_role: str):
         async with self.pool.acquire() as connection:
             await connection.execute("INSERT INTO squad_members (squad_id, user_id, assigned_role_name) VALUES ($1, $2, $3) ON CONFLICT (squad_id, user_id) DO UPDATE SET assigned_role_name = EXCLUDED.assigned_role_name;", squad_id, user_id, assigned_role)

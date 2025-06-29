@@ -127,11 +127,11 @@ class SquadBuilder(commands.Cog):
             # Assign players to specialized pools first
             if role == 'Commander':
                 player_pools['commander'][role].append(player_info)
-            elif role == 'Recon':
+            elif role == 'Recon' and subclass:
                 player_pools['recon'][subclass].append(player_info)
-            elif role == 'Armour' and squad_roles.get('squad_armour_role_id') in user_role_ids:
+            elif role == 'Armour' and subclass and squad_roles.get('squad_armour_role_id') in user_role_ids:
                 player_pools['armour'][subclass].append(player_info)
-            elif role == 'Infantry':
+            elif role == 'Infantry' and subclass:
                 # Check for infantry specialties
                 if squad_roles.get('squad_arty_role_id') in user_role_ids and subclass == 'Officer':
                     player_pools['arty'][subclass].append(player_info)
@@ -172,18 +172,22 @@ class SquadBuilder(commands.Cog):
         for i in range(modal.recon_squads_val):
             squad_id = await self.db.create_squad(event_id, f"Recon {get_squad_letter(i)}", "Recon")
             if pools['recon'].get('Spotter'):
-                await self.db.add_squad_member(squad_id, pools['recon']['Spotter'].pop(0)['user_id'], "Spotter")
+                player = pools['recon']['Spotter'].pop(0)
+                await self.db.add_squad_member(squad_id, player['user_id'], "Spotter")
             if pools['recon'].get('Sniper'):
-                await self.db.add_squad_member(squad_id, pools['recon']['Sniper'].pop(0)['user_id'], "Sniper")
+                player = pools['recon']['Sniper'].pop(0)
+                await self.db.add_squad_member(squad_id, player['user_id'], "Sniper")
 
         # 4. Armour
         for i in range(modal.armour_squads_val):
             squad_id = await self.db.create_squad(event_id, f"Armour {get_squad_letter(i)}", "Armour")
             if pools['armour'].get('Tank Commander'):
-                await self.db.add_squad_member(squad_id, pools['armour']['Tank Commander'].pop(0)['user_id'], "Tank Commander")
+                player = pools['armour']['Tank Commander'].pop(0)
+                await self.db.add_squad_member(squad_id, player['user_id'], "Tank Commander")
             for _ in range(2): # Fill with 2 crewmen
                 if pools['armour'].get('Crewman'):
-                    await self.db.add_squad_member(squad_id, pools['armour']['Crewman'].pop(0)['user_id'], "Crewman")
+                    player = pools['armour']['Crewman'].pop(0)
+                    await self.db.add_squad_member(squad_id, player['user_id'], "Crewman")
 
         # 5. Infantry Squads
         inf_squad_types = {'Attack': modal.attack_squads_val, 'Defence': modal.defence_squads_val, 'Flex': modal.flex_squads_val}
@@ -199,14 +203,15 @@ class SquadBuilder(commands.Cog):
                 placed_officer = False
                 for pool_name in inf_player_map[squad_type]:
                     if pools[pool_name].get('Officer'):
-                        await self.db.add_squad_member(squad_id, pools[pool_name]['Officer'].pop(0)['user_id'], "Officer")
+                        player = pools[pool_name]['Officer'].pop(0)
+                        await self.db.add_squad_member(squad_id, player['user_id'], "Officer")
                         placed_officer = True
                         break
                 
                 # Fill remaining slots
                 if placed_officer:
                     slots_to_fill = modal.infantry_squad_size_val - 1
-                    subclass_priority = ["Anti-Tank", "Support", "Medic", "Machine Gunner", "Automatic Rifleman", "Assault", "Engineer", "Rifleman"]
+                    subclass_priority = ["Anti-Tank", "Support", "Medic", "Machine Gunner", "Automatic Rifleman", "Assault", "Engineer", "Rifleman", "Unassigned"]
                     
                     for _ in range(slots_to_fill):
                         player_placed_this_iteration = False

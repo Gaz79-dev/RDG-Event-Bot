@@ -10,8 +10,8 @@ import asyncio
 from typing import List, Dict, Optional
 from collections import defaultdict
 
-# Adjust the import path based on your project structure
-from utils.database import Database, RsvpStatus, ROLES, SUBCLASSES, RESTRICTED_ROLES
+# Use relative import to go up one level to the 'bot' package root
+from ..utils.database import Database, RsvpStatus, ROLES, SUBCLASSES, RESTRICTED_ROLES
 
 # --- HLL Emoji Mapping (Loaded from Environment) ---
 EMOJI_MAPPING = {

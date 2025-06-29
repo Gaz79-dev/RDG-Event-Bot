@@ -1,4 +1,5 @@
 import os
+import traceback
 from fastapi import APIRouter, Depends, HTTPException
 from typing import List
 import discord
@@ -8,7 +9,7 @@ from discord.ext import commands
 from ...utils.database import Database
 from .. import auth
 from ..dependencies import get_db, get_bot
-from ..models import Event, Signup, Channel, Squad, SquadBuildRequest, SendEmbedRequest
+from ..models import Event, Signup, Channel, Squad, SquadBuildRequest, SendEmbedRequest, SquadMember
 
 router = APIRouter(
     prefix="/api/events",

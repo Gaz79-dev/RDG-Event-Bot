@@ -5,17 +5,17 @@ import pytz
 import traceback
 from dateutil.relativedelta import relativedelta
 
-# Adjust the import path based on your project structure
-from utils.database import Database, RsvpStatus
+# Use relative import to go up one level to the 'bot' package root
+from ..utils.database import Database, RsvpStatus
 
 class Scheduler(commands.Cog):
-    """Cog for handling scheduled background tasks."""
-    def __init__(self, bot: commands.Bot, db: Database):
-        self.bot = bot
-        self.db = db
-        self.create_event_threads.start()
-        self.recreate_recurring_events.start()
-        self.cleanup_finished_events.start()
+    # ... (rest of the class) ...
+    @tasks.loop(minutes=5)
+    async def recreate_recurring_events(self):
+        """Periodically checks for recurring events that need to be recreated."""
+        # Use relative import for the cog as well
+        from .event_management import create_event_embed, PersistentEventView
+        try:
 
     def cog_unload(self):
         """Cleanly cancels all tasks when the cog is unloaded."""

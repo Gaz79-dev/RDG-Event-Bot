@@ -40,6 +40,10 @@ services:
       - ./data/certbot/www:/var/www/certbot
     depends_on:
       - app
+    # --- ADDED THIS BLOCK ---
+    # This allows the container to resolve 'host.docker.internal' to the host machine's IP
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   certbot:
     image: certbot/certbot
@@ -47,9 +51,7 @@ services:
     volumes:
       - ./data/certbot/conf:/etc/letsencrypt
       - ./data/certbot/www:/var/www/certbot
-    # This command attempts to get a certificate only if it's missing or near expiry.
-    # For a production setup, you would typically run 'certbot renew' on a schedule.
-    command: certonly --webroot --webroot-path=/var/www/certbot --email ${CERTBOT_EMAIL} --agree-tos --no-eff-email -d ${DOMAIN} --quiet
+    command: certonly --webroot --webroot-path=/var/www/certbot --email ${CERTBOT_EMAIL} --agree-tos --no-eff-email -d squadbuilder.rdg-clan.co.uk --quiet
 
 volumes:
   postgres_data:

@@ -89,18 +89,22 @@ class SquadBuilder(commands.Cog):
         Returns a string for the followup message.
         """
         try:
+            print("Starting automated draft...")
             await self._run_automated_draft(interaction.guild, event_id, modal)
+            print("Automated draft finished successfully.")
             
+            print("Generating workshop embed...")
             workshop_embed = await self._generate_workshop_embed(interaction.guild, event_id)
+            print("Workshop embed generated.")
             
             # Post the workshop embed in the original channel
             await interaction.channel.send(embed=workshop_embed)
             return "✅ Squads have been built and the workshop is posted above."
 
         except Exception as e:
-            print(f"Error during background squad build process: {e}")
+            print(f"!!! AN ERROR OCCURRED DURING SQUAD BUILD PROCESS !!!")
             traceback.print_exc()
-            return f"An error occurred while building the squads: {e}"
+            return f"An error occurred while building the squads. Please check the bot logs."
 
     async def _get_player_pools(self, guild: discord.Guild, signups: List[Dict]) -> Dict[str, Dict[str, List[Dict]]]:
         """Sorts signed-up players into pools based on their roles and specialties."""
@@ -144,59 +148,79 @@ class SquadBuilder(commands.Cog):
                 else:
                     player_pools['general'][s_class].append(player_info)
         
+        print(f"Player pools created: { {k: dict(v) for k, v in player_pools.items()} }")
         return player_pools
 
     async def _run_automated_draft(self, guild: discord.Guild, event_id: int, modal: SquadBuilderModal):
         """The core logic for drafting players into squads."""
+        print("--- RUNNING AUTOMATED DRAFT ---")
         await self.db.delete_squads_for_event(event_id)
+        print("Cleared old squads for this event.")
         signups = await self.db.get_signups_for_event(event_id)
         pools = await self._get_player_pools(guild, signups)
         
         # --- Draft Logic ---
 
         # 1. Commander
+        print("\n[Phase 1] Drafting Commander...")
         squad_id = await self.db.create_squad(event_id, "Command", "Command")
         try:
             player = pools['commander']['Commander'].pop(0)
             await self.db.add_squad_member(squad_id, player['user_id'], "Commander")
-        except IndexError: pass
+            print(f"  > Placed {player['member'].display_name} as Commander.")
+        except IndexError:
+            print("  > No Commander available.")
 
         # 2. Arty
+        print("\n[Phase 2] Drafting Arty...")
         for i in range(modal.arty_squads_val):
             squad_id = await self.db.create_squad(event_id, f"Arty {get_squad_letter(i)}", "Arty")
             try:
                 player = pools['arty']['Officer'].pop(0)
                 await self.db.add_squad_member(squad_id, player['user_id'], "Officer")
-            except IndexError: pass
-
+                print(f"  > Placed {player['member'].display_name} as Arty Officer.")
+            except IndexError:
+                print("  > No Arty Officer available for Arty Squad.")
+        
         # 3. Recon
+        print("\n[Phase 3] Drafting Recon...")
         for i in range(modal.recon_squads_val):
             squad_id = await self.db.create_squad(event_id, f"Recon {get_squad_letter(i)}", "Recon")
             try:
                 player = pools['recon']['Spotter'].pop(0)
                 await self.db.add_squad_member(squad_id, player['user_id'], "Spotter")
-            except IndexError: pass
+                print(f"  > Placed {player['member'].display_name} as Spotter.")
+            except IndexError:
+                print("  > No Spotter available for Recon Squad.")
             try:
                 player = pools['recon']['Sniper'].pop(0)
                 await self.db.add_squad_member(squad_id, player['user_id'], "Sniper")
-            except IndexError: pass
+                print(f"  > Placed {player['member'].display_name} as Sniper.")
+            except IndexError:
+                print("  > No Sniper available for Recon Squad.")
 
         # 4. Armour
+        print("\n[Phase 4] Drafting Armour...")
         for i in range(modal.armour_squads_val):
             squad_id = await self.db.create_squad(event_id, f"Armour {get_squad_letter(i)}", "Armour")
             try:
                 player = pools['armour']['Tank Commander'].pop(0)
                 await self.db.add_squad_member(squad_id, player['user_id'], "Tank Commander")
-            except IndexError: pass
+                print(f"  > Placed {player['member'].display_name} as Tank Commander.")
+            except IndexError:
+                print("  > No Tank Commander available for Armour Squad.")
             for _ in range(2): 
                 try:
                     player = pools['armour']['Crewman'].pop(0)
                     await self.db.add_squad_member(squad_id, player['user_id'], "Crewman")
-                except IndexError: pass
+                    print(f"  > Placed {player['member'].display_name} as Crewman.")
+                except IndexError:
+                    print("  > Not enough Crewmen for Armour Squad.")
+                    break
 
         # 5. Infantry Squads (ROBUST REWRITE)
+        print("\n[Phase 5] Drafting Infantry...")
         
-        # Create a master list of all infantry players, sorted by priority
         all_infantry = []
         officers = []
         
@@ -204,16 +228,17 @@ class SquadBuilder(commands.Cog):
         officer_priority = ['attack', 'flex', 'defence', 'general']
         subclass_priority = ["Anti-Tank", "Support", "Medic", "Machine Gunner", "Automatic Rifleman", "Assault", "Engineer", "Rifleman", "Unassigned"]
 
-        # Gather Officers
+        print("  > Gathering all infantry players into master lists...")
         for pool_name in officer_priority:
             officers.extend(pools[pool_name].get('Officer', []))
         
-        # Gather all other infantry
         for pool_name in inf_pools_to_check:
             for subclass in subclass_priority:
                 all_infantry.extend(pools[pool_name].get(subclass, []))
+        
+        print(f"  > Found {len(officers)} officers and {len(all_infantry)} other infantry.")
 
-        # Create all infantry squads first
+        print("  > Creating infantry squad shells...")
         inf_squads_to_create = []
         inf_squad_count = 0
         squad_types = [('Attack', modal.attack_squads_val), ('Defence', modal.defence_squads_val), ('Flex', modal.flex_squads_val)]
@@ -223,27 +248,31 @@ class SquadBuilder(commands.Cog):
                 squad_id = await self.db.create_squad(event_id, squad_name, squad_type)
                 inf_squads_to_create.append(squad_id)
                 inf_squad_count += 1
-        
-        # Fill the created squads
+        print(f"  > Created {len(inf_squads_to_create)} infantry squad shells.")
+
+        print("  > Filling infantry squads...")
         for squad_id in inf_squads_to_create:
-            # Assign Officer
+            squad_info = await self.db.get_squad_by_id(squad_id)
+            print(f"    - Filling Squad: {squad_info['name']}")
             try:
                 officer = officers.pop(0)
                 await self.db.add_squad_member(squad_id, officer['user_id'], 'Officer')
+                print(f"      > Placed Officer: {officer['member'].display_name}")
             except IndexError:
-                continue # No more officers, cannot fill this squad further
+                print(f"      > No more officers available. Skipping squad {squad_info['name']}.")
+                continue
 
-            # Fill remaining slots
-            for _ in range(modal.infantry_squad_size_val - 1):
+            for i in range(modal.infantry_squad_size_val - 1):
                 try:
                     infantryman = all_infantry.pop(0)
                     subclass = infantryman.get('subclass_name') or "Unassigned"
                     await self.db.add_squad_member(squad_id, infantryman['user_id'], subclass)
+                    print(f"      > Placed {subclass}: {infantryman['member'].display_name}")
                 except IndexError:
-                    break # No more infantry players left
-
-        # 6. Add all unassigned players to reserves
-        # Re-fetch signups and created squad members to find who is left
+                    print(f"      > No more infantry players to fill squad.")
+                    break
+        
+        print("\n[Phase 6] Calculating Reserves...")
         all_signups = {s['user_id'] for s in await self.db.get_signups_for_event(event_id) if s['rsvp_status'] == RsvpStatus.ACCEPTED}
         all_squads = await self.db.get_squads_for_event(event_id)
         placed_members = set()
@@ -253,6 +282,7 @@ class SquadBuilder(commands.Cog):
                 placed_members.add(member['user_id'])
         
         reserves = all_signups - placed_members
+        print(f"  > Found {len(reserves)} players for the reserve list.")
         
         if reserves:
             reserve_squad_id = await self.db.create_squad(event_id, "Reserves", "Reserves")
@@ -261,6 +291,9 @@ class SquadBuilder(commands.Cog):
                 if signup:
                     role_display = signup.get('subclass_name') or signup.get('role_name') or "Unassigned"
                     await self.db.add_squad_member(reserve_squad_id, user_id, role_display)
+                    print(f"  > Added {signup['member'].display_name} to Reserves.")
+
+        print("--- DRAFTING COMPLETE ---")
 
     async def _generate_workshop_embed(self, guild: discord.Guild, event_id: int) -> discord.Embed:
         """Generates the final embed showing the built squads."""

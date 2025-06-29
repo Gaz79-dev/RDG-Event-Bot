@@ -1,5 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import Optional, List
+from datetime import datetime # <--- ADDED THIS LINE TO FIX THE ERROR
 
 # --- Token Models ---
 class Token(BaseModel):
@@ -31,7 +32,7 @@ class User(UserBase):
     is_admin: bool
 
     class Config:
-        orm_mode = True
+        from_attributes = True # Updated from orm_mode for Pydantic v2
 
 class UserInDB(User):
     hashed_password: str
@@ -40,10 +41,10 @@ class UserInDB(User):
 class Event(BaseModel):
     event_id: int
     title: str
-    event_time: datetime # Use datetime for proper sorting/display
-    
+    event_time: datetime # This line was causing the error
+
     class Config:
-        orm_mode = True
+        from_attributes = True # Updated from orm_mode for Pydantic v2
 
 class Signup(BaseModel):
     user_id: int

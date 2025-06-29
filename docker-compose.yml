@@ -1,37 +1,53 @@
 services:
-  # The Discord Bot Service
-  bot:
-    build: .
-    container_name: discord-event-bot
-    restart: always
-    env_file:
-      - .env
-    # Add a volume to mount the Google credentials file
-    volumes:
-      - ./google-credentials.json:/usr/src/app/google-credentials.json:ro
-    depends_on:
-      - db
-    command: >
-      sh -c "
-        echo 'Waiting for PostgreSQL to be ready...' &&
-        while ! nc -z db 5432; do   
-          sleep 1
-        done
-        echo 'PostgreSQL is ready, starting bot.' &&
-        python bot/bot.py
-      "
-
-  # The PostgreSQL Database Service
   db:
     image: postgres:14
     container_name: postgres-db
     restart: always
-    env_file:
-      - .env
+    env_file: .env
     volumes:
-      - ./data/postgres:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
     ports:
       - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  app:
+    build: .
+    container_name: discord-squad-app
+    restart: always
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - .:/usr/src/app
+    command: uvicorn bot.main:app --host 0.0.0.0 --port 8000
+
+  nginx:
+    image: nginx:latest
+    container_name: nginx-proxy
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./data/certbot/conf:/etc/letsencrypt
+      - ./data/certbot/www:/var/www/certbot
+    depends_on:
+      - app
+
+  certbot:
+    image: certbot/certbot
+    container_name: certbot
+    volumes:
+      - ./data/certbot/conf:/etc/letsencrypt
+      - ./data/certbot/www:/var/www/certbot
+    command: certonly --webroot --webroot-path=/var/www/certbot --email ${CERTBOT_EMAIL} --agree-tos --no-eff-email -d ${DOMAIN} --staging
 
 volumes:
   postgres_data:

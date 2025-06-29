@@ -9,7 +9,7 @@ from passlib.context import CryptContext
 
 # This import will be relative when the app runs
 from ..utils.database import Database
-from .models import TokenData, UserInDB
+from .models import Token, TokenData, UserInDB # <--- ADDED Token to this import
 
 # --- Configuration ---
 SECRET_KEY = os.getenv("SECRET_KEY")

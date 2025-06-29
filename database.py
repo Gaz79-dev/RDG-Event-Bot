@@ -1,241 +1,551 @@
-import asyncpg
-import os
+import discord
+from discord.ext import commands
+from discord import app_commands, ui
 import datetime
-from typing import List, Optional, Dict
+import traceback
+import os
+import pytz
+from urllib.parse import urlencode
+import asyncio
+from typing import List, Dict
+from collections import defaultdict
 
-# --- Static Role and Sub-class Definitions ---
-ROLES = ["Commander", "Infantry", "Armour", "Recon"]
-SUBCLASSES = {
-    "Infantry": ["Anti-Tank", "Assault", "Automatic Rifleman", "Engineer", "Machine Gunner", "Medic", "Officer", "Rifleman", "Support"],
-    "Armour": ["Tank Commander", "Crewman"],
-    "Recon": ["Spotter", "Sniper"]
+# Adjust the import path based on your project structure
+from utils.database import Database, RsvpStatus, ROLES, SUBCLASSES, RESTRICTED_ROLES
+
+# --- HLL Emoji Mapping (Loaded from Environment) ---
+EMOJI_MAPPING = {
+    "Commander": os.getenv("EMOJI_COMMANDER", "⭐"),
+    "Infantry": os.getenv("EMOJI_INFANTRY", "💂"),
+    "Armour": os.getenv("EMOJI_ARMOUR", "🛡️"),
+    "Recon": os.getenv("EMOJI_RECON", "👁️"),
+    "Anti-Tank": os.getenv("EMOJI_ANTI_TANK", "🚀"),
+    "Assault": os.getenv("EMOJI_ASSAULT", "💥"),
+    "Automatic Rifleman": os.getenv("EMOJI_AUTOMATIC_RIFLEMAN", "🔥"),
+    "Engineer": os.getenv("EMOJI_ENGINEER", "🛠️"),
+    "Machine Gunner": os.getenv("EMOJI_MACHINE_GUNNER", "💣"),
+    "Medic": os.getenv("EMOJI_MEDIC", "➕"),
+    "Officer": os.getenv("EMOJI_OFFICER", "🫡"),
+    "Rifleman": os.getenv("EMOJI_RIFLEMAN", "👤"),
+    "Support": os.getenv("EMOJI_SUPPORT", "🔧"),
+    "Tank Commander": os.getenv("EMOJI_TANK_COMMANDER", "🧑‍✈️"),
+    "Crewman": os.getenv("EMOJI_CREWMAN", "👨‍🔧"),
+    "Spotter": os.getenv("EMOJI_SPOTTER", "👀"),
+    "Sniper": os.getenv("EMOJI_SNIPER", "🎯"),
+    "Unassigned": "❔"
 }
-RESTRICTED_ROLES = ["Commander", "Recon", "Officer", "Tank Commander"]
 
-# --- RSVP Status Enum ---
-class RsvpStatus:
-    ACCEPTED = "Accepted"
-    TENTATIVE = "Tentative"
-    DECLINED = "Declined"
+# --- Helper function to generate Google Calendar Link ---
+def create_google_calendar_link(event: dict) -> str:
+    base_url = "https://www.google.com/calendar/render?action=TEMPLATE"
+    start_time_utc = event['event_time'].astimezone(pytz.utc)
+    end_time_utc = (event['end_time'] or (start_time_utc + datetime.timedelta(hours=2))).astimezone(pytz.utc)
+    params = {'text': event['title'],'dates': f"{start_time_utc.strftime('%Y%m%dT%H%M%SZ')}/{end_time_utc.strftime('%Y%m%dT%H%M%SZ')}",'details': event['description'],'ctz': 'UTC'}
+    return f"{base_url}&{urlencode(params)}"
 
-class Database:
-    """A database interface for the Discord event bot."""
-    def __init__(self):
-        self.pool = None
+# --- Helper function to generate the event embed ---
+async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> discord.Embed:
+    event = await db.get_event_by_id(event_id)
+    if not event: return discord.Embed(title="Error", description="Event not found.", color=discord.Color.red())
+    guild = bot.get_guild(event['guild_id'])
+    if not guild: return discord.Embed(title="Error", description="Could not find the server for this event.", color=discord.Color.red())
 
-    async def connect(self):
-        try:
-            self.pool = await asyncpg.create_pool(
-                user=os.getenv("POSTGRES_USER"), password=os.getenv("POSTGRES_PASSWORD"),
-                database=os.getenv("POSTGRES_DB"), host=os.getenv("POSTGRES_HOST", "db"),
-                port=os.getenv("POSTGRES_PORT", 5432)
-            )
-            print("Successfully connected to the PostgreSQL database.")
-            await self._initial_setup()
-        except Exception as e:
-            print(f"Error: Could not connect to the PostgreSQL database. {e}")
-            raise
-
-    async def _initial_setup(self):
-        """Sets up all necessary tables and performs schema migrations."""
-        async with self.pool.acquire() as connection:
-            async with connection.transaction():
-                await connection.execute("""
-                    CREATE TABLE IF NOT EXISTS guilds (
-                        guild_id BIGINT PRIMARY KEY, event_manager_role_ids BIGINT[],
-                        commander_role_id BIGINT, recon_role_id BIGINT, officer_role_id BIGINT,
-                        tank_commander_role_id BIGINT, thread_creation_hours INT DEFAULT 24,
-                        squad_attack_role_id BIGINT, squad_defence_role_id BIGINT,
-                        squad_arty_role_id BIGINT, squad_armour_role_id BIGINT
-                    );
-                """)
-                await connection.execute("ALTER TABLE guilds ADD COLUMN IF NOT EXISTS squad_attack_role_id BIGINT;")
-                await connection.execute("ALTER TABLE guilds ADD COLUMN IF NOT EXISTS squad_defence_role_id BIGINT;")
-                await connection.execute("ALTER TABLE guilds ADD COLUMN IF NOT EXISTS squad_arty_role_id BIGINT;")
-                await connection.execute("ALTER TABLE guilds ADD COLUMN IF NOT EXISTS squad_armour_role_id BIGINT;")
-
-                await connection.execute("""
-                    CREATE TABLE IF NOT EXISTS events (
-                        event_id SERIAL PRIMARY KEY, guild_id BIGINT NOT NULL, creator_id BIGINT NOT NULL,
-                        message_id BIGINT UNIQUE, channel_id BIGINT NOT NULL, thread_id BIGINT,
-                        title VARCHAR(255) NOT NULL, description TEXT, 
-                        event_time TIMESTAMP WITH TIME ZONE NOT NULL, end_time TIMESTAMP WITH TIME ZONE,
-                        timezone VARCHAR(100), created_at TIMESTAMP WITH TIME ZONE DEFAULT (NOW() AT TIME ZONE 'utc'),
-                        thread_created BOOLEAN DEFAULT FALSE, is_recurring BOOLEAN DEFAULT FALSE,
-                        recurrence_rule VARCHAR(50), mention_role_ids BIGINT[], restrict_to_role_ids BIGINT[],
-                        recreation_hours INT, parent_event_id INT REFERENCES events(event_id) ON DELETE SET NULL,
-                        last_recreated_at TIMESTAMP WITH TIME ZONE
-                    );
-                """)
-
-                await connection.execute("""
-                    CREATE TABLE IF NOT EXISTS signups (
-                        signup_id SERIAL PRIMARY KEY, event_id INT REFERENCES events(event_id) ON DELETE CASCADE,
-                        user_id BIGINT NOT NULL, role_name VARCHAR(100), subclass_name VARCHAR(100),
-                        rsvp_status VARCHAR(10) NOT NULL, UNIQUE(event_id, user_id)
-                    );
-                """)
-                
-                try:
-                    await connection.execute("ALTER TABLE signups DROP COLUMN IF EXISTS role_id, DROP COLUMN IF EXISTS subclass_id;")
-                    await connection.execute("ALTER TABLE signups ADD COLUMN IF NOT EXISTS role_name VARCHAR(100), ADD COLUMN IF NOT EXISTS subclass_name VARCHAR(100);")
-                except asyncpg.PostgresError:
-                    pass
-
-                await connection.execute("""
-                    CREATE TABLE IF NOT EXISTS squads (
-                        squad_id SERIAL PRIMARY KEY,
-                        event_id INT NOT NULL REFERENCES events(event_id) ON DELETE CASCADE,
-                        name VARCHAR(100) NOT NULL, squad_type VARCHAR(50) NOT NULL
-                    );
-                """)
-                await connection.execute("""
-                    CREATE TABLE IF NOT EXISTS squad_members (
-                        squad_member_id SERIAL PRIMARY KEY,
-                        squad_id INT NOT NULL REFERENCES squads(squad_id) ON DELETE CASCADE,
-                        user_id BIGINT NOT NULL, assigned_role_name VARCHAR(100) NOT NULL,
-                        UNIQUE(squad_id, user_id)
-                    );
-                """)
-                print("Database setup is complete.")
-
-    # --- Scheduler Functions ---
-    async def get_events_for_thread_creation(self):
-        query = """
-            SELECT e.*
-            FROM events e
-            JOIN guilds g ON e.guild_id = g.guild_id
-            WHERE e.thread_created = FALSE
-            AND e.event_time IS NOT NULL
-            AND (e.event_time - (g.thread_creation_hours * INTERVAL '1 hour')) <= (NOW() AT TIME ZONE 'utc');
-        """
-        async with self.pool.acquire() as connection:
-            return await connection.fetch(query)
-
-    async def get_events_for_recreation(self):
-        """Fetches recurring events that have passed and are due for recreation."""
-        query = """
-            SELECT * FROM events
-            WHERE is_recurring = TRUE
-            AND event_time < (NOW() AT TIME ZONE 'utc')
-            AND (last_recreated_at IS NULL OR last_recreated_at < (NOW() - INTERVAL '1 hour'));
-        """
-        async with self.pool.acquire() as connection:
-            return await connection.fetch(query)
-
-    async def get_events_for_deletion(self):
-        """Fetches non-recurring events that have finished and are ready for cleanup."""
-        query = """
-            SELECT event_id, guild_id, channel_id, message_id, thread_id
-            FROM events
-            WHERE is_recurring = FALSE
-            AND COALESCE(end_time, event_time + INTERVAL '2 hours') < (NOW() AT TIME ZONE 'utc');
-        """
-        async with self.pool.acquire() as connection:
-            return await connection.fetch(query)
-            
-    # --- Squad Config Functions ---
-    async def set_squad_config_role(self, guild_id: int, role_type: str, role_id: int):
-        column_name = f"squad_{role_type}_role_id"
-        async with self.pool.acquire() as connection:
-            await connection.execute("INSERT INTO guilds (guild_id) VALUES ($1) ON CONFLICT (guild_id) DO NOTHING;", guild_id)
-            await connection.execute(f"UPDATE guilds SET {column_name} = $1 WHERE guild_id = $2;", role_id, guild_id)
-
-    async def get_squad_config_roles(self, guild_id: int) -> Dict:
-        async with self.pool.acquire() as connection:
-            row = await connection.fetchrow("SELECT squad_attack_role_id, squad_defence_role_id, squad_arty_role_id, squad_armour_role_id FROM guilds WHERE guild_id = $1;", guild_id)
-            return dict(row) if row else {}
-
-    # --- Squad Management Functions ---
-    async def create_squad(self, event_id: int, name: str, squad_type: str) -> int:
-        async with self.pool.acquire() as connection:
-            return await connection.fetchval("INSERT INTO squads (event_id, name, squad_type) VALUES ($1, $2, $3) RETURNING squad_id;", event_id, name, squad_type)
-
-    async def add_squad_member(self, squad_id: int, user_id: int, assigned_role: str):
-        async with self.pool.acquire() as connection:
-            await connection.execute("INSERT INTO squad_members (squad_id, user_id, assigned_role_name) VALUES ($1, $2, $3) ON CONFLICT (squad_id, user_id) DO UPDATE SET assigned_role_name = EXCLUDED.assigned_role_name;", squad_id, user_id, assigned_role)
-
-    async def get_squads_for_event(self, event_id: int) -> List[Dict]:
-        async with self.pool.acquire() as connection:
-            return await connection.fetch("SELECT * FROM squads WHERE event_id = $1 ORDER BY squad_id;", event_id)
-
-    async def get_squad_members(self, squad_id: int) -> List[Dict]:
-        async with self.pool.acquire() as connection:
-            return await connection.fetch("SELECT * FROM squad_members WHERE squad_id = $1;", squad_id)
-            
-    async def delete_squads_for_event(self, event_id: int):
-        async with self.pool.acquire() as connection:
-            await connection.execute("DELETE FROM squads WHERE event_id = $1;", event_id)
-            
-    # --- Other Functions ---
-    async def get_signups_for_event(self, event_id: int):
-        async with self.pool.acquire() as connection:
-            return await connection.fetch("SELECT * FROM signups WHERE event_id = $1;", event_id)
-
-    async def get_event_by_id(self, event_id: int):
-        async with self.pool.acquire() as connection:
-            return await connection.fetchrow("SELECT * FROM events WHERE event_id = $1;", event_id)
-            
-    async def update_signup_role(self, event_id: int, user_id: int, role_name: str, subclass_name: Optional[str] = None):
-        async with self.pool.acquire() as connection:
-            await connection.execute("UPDATE signups SET role_name = $1, subclass_name = $2 WHERE event_id = $3 AND user_id = $4;", role_name, subclass_name, event_id, user_id)
-            
-    async def set_rsvp(self, event_id: int, user_id: int, status: str):
-        async with self.pool.acquire() as connection:
-            await connection.execute("INSERT INTO signups (event_id, user_id, rsvp_status) VALUES ($1, $2, $3) ON CONFLICT (event_id, user_id) DO UPDATE SET rsvp_status = EXCLUDED.rsvp_status;", event_id, user_id, status)
+    signups = await db.get_signups_for_event(event_id)
+    squad_roles = await db.get_squad_config_roles(guild.id)
     
-    async def get_manager_role_ids(self, guild_id: int) -> List[int]:
-        """Gets the list of event manager role IDs for a guild."""
-        async with self.pool.acquire() as connection:
-            role_ids = await connection.fetchval("SELECT event_manager_role_ids FROM guilds WHERE guild_id = $1;", guild_id)
-            return role_ids or []
+    embed = discord.Embed(title=f"📅 {event['title']}", description=event['description'], color=discord.Color.blue())
+    
+    time_str = f"**Starts:** {discord.utils.format_dt(event['event_time'], style='F')} ({discord.utils.format_dt(event['event_time'], style='R')})"
+    if event['end_time']: time_str += f"\n**Ends:** {discord.utils.format_dt(event['end_time'], style='F')}"
+    if event['timezone']: time_str += f"\nTimezone: {event['timezone']}"
+    embed.add_field(name="Time", value=time_str, inline=False)
 
-    async def set_manager_roles(self, guild_id: int, role_ids: List[int]):
-        """Sets the event manager roles for a guild."""
-        async with self.pool.acquire() as connection:
-            await connection.execute("INSERT INTO guilds (guild_id) VALUES ($1) ON CONFLICT (guild_id) DO NOTHING;", guild_id)
-            await connection.execute("UPDATE guilds SET event_manager_role_ids = $1 WHERE guild_id = $2;", role_ids, guild_id)
+    accepted_signups = defaultdict(list)
+    tentative_users, declined_users = [], []
+
+    for signup in signups:
+        member = guild.get_member(signup['user_id'])
+        if not member: continue
+
+        if signup['rsvp_status'] == RsvpStatus.ACCEPTED:
+            user_role_ids = {r.id for r in member.roles}
+            specialty = ""
+            if squad_roles.get('squad_arty_role_id') in user_role_ids: specialty = " (Arty)"
+            elif squad_roles.get('squad_armour_role_id') in user_role_ids: specialty = " (Armour)"
+            elif squad_roles.get('squad_attack_role_id') in user_role_ids and squad_roles.get('squad_defence_role_id') in user_role_ids: specialty = " (Flex)"
+            elif squad_roles.get('squad_attack_role_id') in user_role_ids: specialty = " (Attack)"
+            elif squad_roles.get('squad_defence_role_id') in user_role_ids: specialty = " (Defence)"
+
+            role = signup['role_name'] or "Unassigned"
+            subclass = signup['subclass_name']
             
-    async def mark_thread_as_created(self, event_id: int):
-        async with self.pool.acquire() as connection:
-            await connection.execute("UPDATE events SET thread_created = TRUE WHERE event_id = $1;", event_id)
+            signup_text = f"**{member.display_name}**"
+            if subclass: signup_text += f" ({EMOJI_MAPPING.get(subclass, '❔')})"
+            signup_text += specialty
             
-    async def update_last_recreated_at(self, event_id: int):
-        """Updates the last_recreated_at timestamp for an event."""
-        async with self.pool.acquire() as connection:
-            await connection.execute(
-                "UPDATE events SET last_recreated_at = (NOW() AT TIME ZONE 'utc') WHERE event_id = $1;",
-                event_id
-            )
+            accepted_signups[role].append(signup_text)
+        elif signup['rsvp_status'] == RsvpStatus.TENTATIVE:
+            tentative_users.append(member.display_name)
+        elif signup['rsvp_status'] == RsvpStatus.DECLINED:
+            declined_users.append(member.display_name)
+
+    total_accepted = sum(len(v) for v in accepted_signups.values())
+    embed.add_field(name=f"✅ Accepted ({total_accepted})", value="\u200b", inline=False)
+    for role in ROLES:
+        role_emoji = EMOJI_MAPPING.get(role, "")
+        users_in_role = accepted_signups.get(role, [])
+        field_value = "\n".join(users_in_role) or "No one yet"
+        embed.add_field(name=f"{role_emoji} **{role}** ({len(users_in_role)})", value=field_value, inline=False)
+
+    if tentative_users: embed.add_field(name=f"🤔 Tentative ({len(tentative_users)})", value=", ".join(tentative_users), inline=False)
+    if declined_users: embed.add_field(name=f"❌ Declined ({len(declined_users)})", value=", ".join(declined_users), inline=False)
+    
+    creator = await bot.fetch_user(event['creator_id'])
+    embed.set_footer(text=f"Event ID: {event_id} | Created by: {creator.display_name}")
+    
+    return embed
+
+# --- UI Components ---
+class RoleMultiSelect(ui.RoleSelect):
+    def __init__(self, placeholder: str):
+        super().__init__(placeholder=placeholder, min_values=1, max_values=25)
+
+    async def callback(self, interaction: discord.Interaction):
+        self.view.selection = [role.id for role in self.values]
+        await interaction.response.defer()
+        self.view.stop()
+
+class MultiRoleSelectView(ui.View):
+    selection: List[int] = None
+    def __init__(self, placeholder: str):
+        super().__init__(timeout=180)
+        self.add_item(RoleMultiSelect(placeholder=placeholder))
+
+class ConfirmationView(ui.View):
+    def __init__(self):
+        super().__init__(timeout=120)
+        self.value = None
+    @ui.button(label="Yes", style=discord.ButtonStyle.green)
+    async def confirm(self, interaction: discord.Interaction, button: ui.Button):
+        self.value = True; await interaction.response.defer(); self.stop()
+    @ui.button(label="No/Skip", style=discord.ButtonStyle.red)
+    async def cancel(self, interaction: discord.Interaction, button: ui.Button):
+        self.value = False; await interaction.response.defer(); self.stop()
+
+class TimezoneSelect(ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="UTC (Coordinated Universal Time)", value="UTC"),
+            discord.SelectOption(label="GMT (Greenwich Mean Time)", value="GMT"),
+            discord.SelectOption(label="EST (Eastern Standard Time)", value="EST"),
+            discord.SelectOption(label="PST (Pacific Standard Time)", value="PST"),
+            discord.SelectOption(label="CET (Central European Time)", value="CET"),
+            discord.SelectOption(label="AEST (Australian Eastern Standard Time)", value="Australia/Sydney"),
+        ]
+        super().__init__(placeholder="Choose a timezone...", min_values=1, max_values=1, options=options)
+    
+    async def callback(self, interaction: discord.Interaction):
+        self.view.selection = self.values[0]
+        await interaction.response.defer()
+        self.view.stop()
+
+class TimezoneSelectView(ui.View):
+    selection: str = None
+    def __init__(self):
+        super().__init__(timeout=180)
+        self.add_item(TimezoneSelect())
+
+# --- NEW: Role Selection UI Components ---
+class RoleSelect(ui.Select):
+    """The first dropdown for selecting a primary role."""
+    def __init__(self, db: Database, event_id: int):
+        self.db = db
+        self.event_id = event_id
+        options = [discord.SelectOption(label=role, emoji=EMOJI_MAPPING.get(role, "❔")) for role in ROLES]
+        super().__init__(placeholder="1. Choose your primary role...", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        self.view.role = self.values[0]
+        
+        # Enable and populate the subclass dropdown based on the selected role
+        subclass_options = SUBCLASSES.get(self.view.role, [])
+        subclass_select = self.view.subclass_select
+        subclass_select.disabled = not subclass_options
+        
+        if subclass_options:
+            subclass_select.placeholder = "2. Choose your subclass..."
+            subclass_select.options = [discord.SelectOption(label=sub, emoji=EMOJI_MAPPING.get(sub, "❔")) for sub in subclass_options]
+        else:
+            # If no subclasses, update the DB directly and close the view
+            await self.db.update_signup_role(self.event_id, interaction.user.id, self.view.role, None)
+            for item in self.view.children: item.disabled = True
+            await interaction.response.edit_message(content=f"Your role has been confirmed as **{self.view.role}**! You can dismiss this message.", view=self.view)
+            self.view.stop()
+            asyncio.create_task(self.view.update_original_embed()) # Update the main event embed
+            return
+
+        await interaction.response.edit_message(view=self.view)
+
+class SubclassSelect(ui.Select):
+    """The second dropdown for selecting a subclass."""
+    def __init__(self, db: Database, event_id: int):
+        self.db = db
+        self.event_id = event_id
+        super().__init__(placeholder="Select a primary role first...", disabled=True, options=[discord.SelectOption(label="placeholder")])
+
+    async def callback(self, interaction: discord.Interaction):
+        subclass = self.values[0]
+        await self.db.update_signup_role(self.event_id, interaction.user.id, self.view.role, subclass)
+        
+        for item in self.view.children: item.disabled = True
+        await interaction.response.edit_message(
+            content=f"Your role has been confirmed as **{self.view.role} ({subclass})**! You can dismiss this message.",
+            view=self.view
+        )
+        self.view.stop()
+        asyncio.create_task(self.view.update_original_embed()) # Update the main event embed
+
+class RoleSelectionView(ui.View):
+    """The view sent in a DM to the user for role selection."""
+    def __init__(self, bot: commands.Bot, db: Database, event_id: int, message_id: int):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.db = db
+        self.event_id = event_id
+        self.message_id = message_id
+        self.role: Optional[str] = None
+        
+        self.subclass_select = SubclassSelect(db, event_id)
+        self.add_item(RoleSelect(db, event_id))
+        self.add_item(self.subclass_select)
+
+    async def update_original_embed(self):
+        """Finds the original event message and updates the embed."""
+        event = await self.db.get_event_by_id(self.event_id)
+        if not event: return
+
+        try:
+            channel = self.bot.get_channel(event['channel_id']) or await self.bot.fetch_channel(event['channel_id'])
+            message = await channel.fetch_message(self.message_id)
+            new_embed = await create_event_embed(self.bot, self.event_id, self.db)
+            await message.edit(embed=new_embed)
+        except (discord.NotFound, discord.Forbidden):
+            print(f"Could not update original embed for event {self.event_id}")
+        except Exception as e:
+            print(f"Error updating original embed: {e}")
+
+class PersistentEventView(ui.View):
+    def __init__(self, db: Database):
+        super().__init__(timeout=None)
+        self.db = db
+
+    async def update_embed(self, interaction: discord.Interaction, event_id: int):
+        """Safely updates the event embed."""
+        try:
+            new_embed = await create_event_embed(interaction.client, event_id, self.db)
+            await interaction.message.edit(embed=new_embed)
+        except (discord.NotFound, discord.Forbidden) as e:
+            print(f"Error updating embed for event {event_id}: {e}")
+        except Exception as e:
+            print(f"Unexpected error updating embed for event {event_id}: {e}")
+            traceback.print_exc()
+
+    @ui.button(label="Accept", style=discord.ButtonStyle.success, custom_id="persistent_view:accept")
+    async def accept(self, interaction: discord.Interaction, button: ui.Button):
+        try:
+            await interaction.response.defer(ephemeral=True)
+
+            event = await self.db.get_event_by_message_id(interaction.message.id)
+            if not event:
+                await interaction.followup.send("This event could not be found or is no longer active.", ephemeral=True)
+                return
+
+            await self.db.set_rsvp(event['event_id'], interaction.user.id, RsvpStatus.ACCEPTED)
             
-    async def delete_event(self, event_id: int):
-        async with self.pool.acquire() as connection:
-            await connection.execute("DELETE FROM events WHERE event_id = $1;", event_id)
-            
-    async def create_event(self, guild_id: int, channel_id: int, creator_id: int, data: dict) -> int:
-        async with self.pool.acquire() as connection:
-            parent_id = data.get('parent_event_id')
-            return await connection.fetchval(
-                """
-                INSERT INTO events (
-                    guild_id, channel_id, creator_id, title, description, 
-                    event_time, end_time, timezone, is_recurring, recurrence_rule,
-                    mention_role_ids, restrict_to_role_ids, recreation_hours, parent_event_id
+            # Send DM for role selection
+            try:
+                role_view = RoleSelectionView(interaction.client, self.db, event['event_id'], interaction.message.id)
+                await interaction.user.send(
+                    f"You have accepted the event: **{event['title']}**.\nPlease select your role for this event below.",
+                    view=role_view
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-                RETURNING event_id;
-                """,
-                guild_id, channel_id, creator_id, data.get('title'), data.get('description'),
-                data.get('start_time'), data.get('end_time'), data.get('timezone'),
-                data.get('is_recurring', False), data.get('recurrence_rule'),
-                data.get('mention_role_ids'), data.get('restrict_to_role_ids'),
-                data.get('recreation_hours'), parent_id
-            )
+                await interaction.followup.send("You have accepted the event! Please check your DMs to select your role.", ephemeral=True)
+            except discord.Forbidden:
+                # Handle cases where the user has DMs disabled
+                await self.db.update_signup_role(event['event_id'], interaction.user.id, "Unassigned", None)
+                await interaction.followup.send("You've accepted the event, but I couldn't DM you to select a role. Your role is set to 'Unassigned'. Please enable DMs from server members to use role selection.", ephemeral=True)
             
-    async def update_event_message_id(self, event_id: int, message_id: int):
-        async with self.pool.acquire() as connection:
-            await connection.execute("UPDATE events SET message_id = $1 WHERE event_id = $2;", message_id, event_id)
-            
-    async def update_event_thread_id(self, event_id: int, thread_id: int):
-        async with self.pool.acquire() as connection:
-            await connection.execute("UPDATE events SET thread_id = $1 WHERE event_id = $2;", thread_id, event_id)
+            # Update the main event embed
+            await self.update_embed(interaction, event['event_id'])
+
+        except Exception as e:
+            print(f"Error in 'Accept' button: {e}"); traceback.print_exc()
+            if not interaction.response.is_done():
+                await interaction.response.send_message("An unexpected error occurred.", ephemeral=True)
+            else:
+                await interaction.followup.send("An unexpected error occurred.", ephemeral=True)
+
+    @ui.button(label="Tentative", style=discord.ButtonStyle.secondary, custom_id="persistent_view:tentative")
+    async def tentative(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.defer() # Acknowledge the interaction publicly
+        event = await self.db.get_event_by_message_id(interaction.message.id)
+        if not event: return
+        
+        await self.db.set_rsvp(event['event_id'], interaction.user.id, RsvpStatus.TENTATIVE)
+        await self.db.update_signup_role(event['event_id'], interaction.user.id, None, None) # Clear role if tentative
+        await self.update_embed(interaction, event['event_id'])
+
+    @ui.button(label="Decline", style=discord.ButtonStyle.danger, custom_id="persistent_view:decline")
+    async def decline(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.defer() # Acknowledge the interaction publicly
+        event = await self.db.get_event_by_message_id(interaction.message.id)
+        if not event: return
+        
+        await self.db.set_rsvp(event['event_id'], interaction.user.id, RsvpStatus.DECLINED)
+        await self.db.update_signup_role(event['event_id'], interaction.user.id, None, None) # Clear role if declined
+        await self.update_embed(interaction, event['event_id'])
+
+# --- Conversation Class ---
+class Conversation:
+    def __init__(self, cog: 'EventManagement', interaction: discord.Interaction, db: Database, event_id: int = None):
+        self.cog, self.bot, self.interaction, self.user, self.db, self.event_id = cog, cog.bot, interaction, interaction.user, db, event_id
+        self.data, self.is_finished = {}, False
+    
+    async def start(self):
+        try:
+            if self.event_id:
+                event_data = await self.db.get_event_by_id(self.event_id)
+                self.data = dict(event_data) if event_data else {}
+                await self.user.send(f"Now editing event: **{self.data.get('title', 'Unknown')}**.\nYou can type `cancel` at any time to stop.")
+            else:
+                await self.user.send("Let's create a new event! You can type `cancel` at any time to stop.")
+            await self.run_conversation()
+        except Exception as e:
+            print(f"Error at start of conversation for {self.user.id}: {e}"); traceback.print_exc(); await self.cancel()
+
+    async def run_conversation(self):
+        steps = [
+            ("What is the title of the event?", self.process_text, 'title'),
+            (None, self.process_timezone, 'timezone'),
+            ("What is the start date and time? Please use `DD-MM-YYYY HH:MM` format.", self.process_start_time, 'start_time'),
+            ("What is the end date and time? (Optional, press Enter to skip). Format: `DD-MM-YYYY HH:MM`.", self.process_end_time, 'end_time'),
+            ("Please provide a detailed description for the event.", self.process_text, 'description'),
+            (None, self.ask_is_recurring, 'is_recurring'),
+            (None, self.ask_mention_roles, 'mention_role_ids'),
+            (None, self.ask_restrict_roles, 'restrict_to_role_ids'),
+        ]
+        for prompt, processor, data_key in steps:
+            if not await processor(prompt, data_key): return
+        await self.finish()
+
+    async def _wait_for_message(self):
+        return await self.bot.wait_for('message', check=lambda m: m.author == self.user and isinstance(m.channel, discord.DMChannel), timeout=300.0)
+
+    async def process_text(self, prompt, data_key):
+        if self.event_id and self.data.get(data_key): prompt += f"\n(Current: `{self.data.get(data_key)}`)"
+        await self.user.send(prompt)
+        try:
+            msg = await self._wait_for_message()
+            if msg.content.lower() == 'cancel': await self.cancel(); return False
+            self.data[data_key] = msg.content; return True
+        except asyncio.TimeoutError: await self.user.send("You took too long. Conversation cancelled."); await self.cancel(); return False
+
+    async def process_timezone(self, prompt, data_key):
+        view = TimezoneSelectView()
+        msg = await self.user.send("Please select a timezone for the event.", view=view)
+        await view.wait()
+        if view.selection:
+            self.data[data_key] = view.selection
+            await msg.edit(content=f"Timezone set to **{view.selection}**.", view=None)
+            return True
+        else:
+            await msg.edit(content="Timezone selection timed out. Conversation cancelled.", view=None)
+            await self.cancel()
+            return False
+
+    async def process_start_time(self, prompt, data_key):
+        while True:
+            val = self.data.get(data_key).strftime('%d-%m-%Y %H:%M') if self.data.get(data_key) else ''
+            p = prompt + (f"\n(Current: `{val}`)" if self.event_id and val else "")
+            await self.user.send(p)
+            try:
+                msg = await self._wait_for_message()
+                if msg.content.lower() == 'cancel': await self.cancel(); return False
+                try:
+                    tz = pytz.timezone(self.data.get('timezone', 'UTC'))
+                    self.data[data_key] = tz.localize(datetime.datetime.strptime(msg.content, "%d-%m-%Y %H:%M")); return True
+                except ValueError: await self.user.send("Invalid date format. Use `DD-MM-YYYY HH:MM`.")
+            except asyncio.TimeoutError: await self.user.send("You took too long. Conversation cancelled."); await self.cancel(); return False
+
+    async def process_end_time(self, prompt, data_key):
+        val = self.data.get(data_key).strftime('%d-%m-%Y %H:%M') if self.data.get(data_key) else 'Not set'
+        p = prompt + (f"\n(Current: `{val}`)" if self.event_id else "")
+        await self.user.send(p)
+        try:
+            msg = await self._wait_for_message()
+            if msg.content.lower() == 'cancel': await self.cancel(); return False
+            if not msg.content: self.data[data_key] = None; return True
+            try:
+                tz = pytz.timezone(self.data.get('timezone', 'UTC'))
+                self.data[data_key] = tz.localize(datetime.datetime.strptime(msg.content, "%d-%m-%Y %H:%M")); return True
+            except ValueError:
+                await self.user.send("Invalid date format. Use `DD-MM-YYYY HH:MM`."); return await self.process_end_time(prompt, data_key)
+        except asyncio.TimeoutError: await self.user.send("You took too long. Conversation cancelled."); await self.cancel(); return False
+
+    async def ask_is_recurring(self, prompt, data_key):
+        view = ConfirmationView()
+        msg = await self.user.send("Is this a recurring event?", view=view)
+        await view.wait()
+        if view.value is None: await msg.delete(); await self.user.send("Timed out."); await self.cancel(); return False
+        await msg.delete(); self.data['is_recurring'] = view.value
+        if view.value: return await self.process_recurrence_rule(None, 'recurrence_rule')
+        else: self.data['recurrence_rule'], self.data['recreation_hours'] = None, None; return True
+
+    async def process_recurrence_rule(self, prompt, data_key):
+        p = "How often should it recur? (`daily`, `weekly`, `monthly`)"
+        await self.user.send(p)
+        try:
+            msg = await self._wait_for_message()
+            if msg.content.lower() == 'cancel': await self.cancel(); return False
+            rule = msg.content.lower()
+            if rule not in ['daily', 'weekly', 'monthly']:
+                await self.user.send("Invalid input."); return await self.process_recurrence_rule(prompt, data_key)
+            self.data[data_key] = rule
+            return await self.process_recreation_hours(None, 'recreation_hours')
+        except asyncio.TimeoutError: await self.user.send("You took too long. Conversation cancelled."); await self.cancel(); return False
+
+    async def process_recreation_hours(self, prompt, data_key):
+        p = "How many hours before the event should the new embed be created? (e.g., `168` for 7 days)"
+        await self.user.send(p)
+        try:
+            msg = await self._wait_for_message()
+            if msg.content.lower() == 'cancel': await self.cancel(); return False
+            try: self.data[data_key] = int(msg.content); return True
+            except ValueError: await self.user.send("Please enter a valid number."); return await self.process_recreation_hours(prompt, data_key)
+        except asyncio.TimeoutError: await self.user.send("You took too long. Conversation cancelled."); await self.cancel(); return False
+
+    async def _ask_roles(self, prompt, data_key, question):
+        view = ConfirmationView()
+        msg = await self.user.send(question, view=view)
+        await view.wait()
+        if view.value is None: await msg.delete(); return False
+        await msg.delete()
+        if view.value:
+            select_view = MultiRoleSelectView(f"Select roles for: {data_key}")
+            m = await self.user.send("Please select roles below.", view=select_view)
+            await select_view.wait(); await m.delete(); self.data[data_key] = select_view.selection or []
+        else: self.data[data_key] = []
+        return True
+
+    async def ask_mention_roles(self, prompt, data_key):
+        return await self._ask_roles(prompt, data_key, "Mention roles in the announcement?")
+    async def ask_restrict_roles(self, prompt, data_key):
+        return await self._ask_roles(prompt, data_key, "Restrict sign-ups to specific roles?")
+        
+    async def finish(self):
+        if self.is_finished: return
+        self.is_finished = True
+        if self.user.id in self.cog.active_conversations:
+            del self.cog.active_conversations[self.user.id]
+
+        if self.event_id:
+            await self.db.update_event(self.event_id, self.data)
+            await self.user.send("Event updated successfully!")
+            # ... update existing embed ...
+        else:
+            event_id = None
+            try:
+                event_id = await self.db.create_event(self.interaction.guild.id, self.interaction.channel.id, self.user.id, self.data)
+                await self.user.send(f"Event created successfully! (ID: {event_id}). Posting it in the channel now...")
+                
+                target_channel = self.bot.get_channel(self.interaction.channel.id)
+                if not target_channel:
+                    await self.user.send("Error: I could not find the original channel to post the event in.")
+                    return
+
+                view = PersistentEventView(self.db)
+                embed = await create_event_embed(self.bot, event_id, self.db)
+                content = " ".join([f"<@&{rid}>" for rid in self.data.get('mention_role_ids', [])])
+
+                msg = await target_channel.send(content=content, embed=embed, view=view)
+                await self.db.update_event_message_id(event_id, msg.id)
+
+            except Exception as e:
+                await self.user.send("An error occurred while posting the event.")
+                traceback.print_exc()
+                if event_id: await self.db.delete_event(event_id)
+
+    async def cancel(self):
+        if self.is_finished: return
+        self.is_finished = True
+        if self.user.id in self.cog.active_conversations:
+            del self.cog.active_conversations[self.user.id]
+        await self.user.send("Event creation/editing cancelled")
+
+# --- Main Cog ---
+class EventManagement(commands.Cog):
+    def __init__(self, bot: commands.Bot, db: Database):
+        self.bot = bot
+        self.db = db
+        self.active_conversations = {}
+
+    async def start_conversation(self, interaction: discord.Interaction, event_id: int = None):
+        if interaction.user.id in self.active_conversations:
+            await interaction.response.send_message("You are already in an active event creation process.", ephemeral=True)
+            return
+        try:
+            await interaction.response.send_message("I've sent you a DM to start the process!", ephemeral=True)
+            conv = Conversation(self, interaction, self.db, event_id)
+            self.active_conversations[interaction.user.id] = conv
+            asyncio.create_task(conv.start())
+        except discord.Forbidden:
+            await interaction.followup.send("I couldn't send you a DM. Please check your privacy settings.", ephemeral=True)
+
+    # --- Event Command Group ---
+    event_group = app_commands.Group(name="event", description="Commands for creating and managing events.")
+
+    @event_group.command(name="create", description="Create a new event via DM.")
+    async def create(self, interaction: discord.Interaction):
+        await self.start_conversation(interaction)
+
+    @event_group.command(name="edit", description="Edit an existing event via DM.")
+    @app_commands.describe(event_id="The ID of the event to edit.")
+    async def edit(self, interaction: discord.Interaction, event_id: int):
+        event = await self.db.get_event_by_id(event_id)
+        if not event or event['guild_id'] != interaction.guild_id:
+            await interaction.response.send_message("Event not found.", ephemeral=True)
+            return
+        await self.start_conversation(interaction, event_id)
+
+    @event_group.command(name="delete", description="Delete an existing event by its ID.")
+    @app_commands.describe(event_id="The ID of the event to delete.")
+    async def delete(self, interaction: discord.Interaction, event_id: int):
+        await interaction.response.send_message("Delete functionality placeholder.", ephemeral=True)
+
+    # --- Setup Command Group ---
+    setup = app_commands.Group(name="setup", description="Commands for setting up the bot.", default_permissions=discord.Permissions(administrator=True))
+    squad_config_group = app_commands.Group(name="squad_config", description="Commands for configuring squad roles.", parent=setup)
+
+    @squad_config_group.command(name="attack_role", description="Set the role for Attack specialty.")
+    async def set_attack_role(self, interaction: discord.Interaction, role: discord.Role):
+        await self.db.set_squad_config_role(interaction.guild.id, "attack", role.id)
+        await interaction.response.send_message(f"Attack specialty role set to {role.mention}.", ephemeral=True)
+
+    @squad_config_group.command(name="defence_role", description="Set the role for Defence specialty.")
+    async def set_defence_role(self, interaction: discord.Interaction, role: discord.Role):
+        await self.db.set_squad_config_role(interaction.guild.id, "defence", role.id)
+        await interaction.response.send_message(f"Defence specialty role set to {role.mention}.", ephemeral=True)
+
+    @squad_config_group.command(name="arty_role", description="Set the role for Arty Certified players.")
+    async def set_arty_role(self, interaction: discord.Interaction, role: discord.Role):
+        await self.db.set_squad_config_role(interaction.guild.id, "arty", role.id)
+        await interaction.response.send_message(f"Arty specialty role set to {role.mention}.", ephemeral=True)
+
+    @squad_config_group.command(name="armour_role", description="Set the role for Armour specialty players.")
+    async def set_armour_role(self, interaction: discord.Interaction, role: discord.Role):
+        await self.db.set_squad_config_role(interaction.guild.id, "armour", role.id)
+        await interaction.response.send_message(f"Armour specialty role set to {role.mention}.", ephemeral=True)
+
+async def setup(bot: commands.Bot, db: Database):
+    await bot.add_cog(EventManagement(bot, db))
+    bot.add_view(PersistentEventView(db))

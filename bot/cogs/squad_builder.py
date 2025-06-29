@@ -131,18 +131,18 @@ class SquadBuilder(commands.Cog):
             elif role == 'Recon':
                 s_class = subclass or 'Unassigned'
                 player_pools['recon'][s_class].append(player_info)
-            elif role == 'Armour' and squad_roles.get('squad_armour_role_id') in user_role_ids:
+            elif role == 'Armour' and squad_roles and squad_roles.get('squad_armour_role_id') in user_role_ids:
                 s_class = subclass or 'Unassigned'
                 player_pools['armour'][s_class].append(player_info)
             elif role == 'Infantry':
                 s_class = subclass or 'Unassigned'
-                if squad_roles.get('squad_arty_role_id') in user_role_ids and s_class == 'Officer':
+                if squad_roles and squad_roles.get('squad_arty_role_id') in user_role_ids and s_class == 'Officer':
                     player_pools['arty'][s_class].append(player_info)
-                elif squad_roles.get('squad_attack_role_id') in user_role_ids and squad_roles.get('squad_defence_role_id') in user_role_ids:
+                elif squad_roles and squad_roles.get('squad_attack_role_id') in user_role_ids and squad_roles.get('squad_defence_role_id') in user_role_ids:
                     player_pools['flex'][s_class].append(player_info)
-                elif squad_roles.get('squad_attack_role_id') in user_role_ids:
+                elif squad_roles and squad_roles.get('squad_attack_role_id') in user_role_ids:
                     player_pools['attack'][s_class].append(player_info)
-                elif squad_roles.get('squad_defence_role_id') in user_role_ids:
+                elif squad_roles and squad_roles.get('squad_defence_role_id') in user_role_ids:
                     player_pools['defence'][s_class].append(player_info)
                 else:
                     player_pools['general'][s_class].append(player_info)
@@ -217,7 +217,7 @@ class SquadBuilder(commands.Cog):
                     print("  > Not enough Crewmen for Armour Squad.")
                     break
 
-        # 5. Infantry Squads (ROBUST REWRITE)
+        # 5. Infantry Squads
         print("\n[Phase 5] Drafting Infantry...")
         
         all_infantry = []
@@ -229,11 +229,13 @@ class SquadBuilder(commands.Cog):
 
         print("  > Gathering all infantry players into master lists...")
         for pool_name in officer_priority:
-            officers.extend(pools[pool_name].get('Officer', []))
+            if 'Officer' in pools[pool_name]:
+                officers.extend(pools[pool_name].pop('Officer'))
         
         for pool_name in inf_pools_to_check:
             for subclass in subclass_priority:
-                all_infantry.extend(pools[pool_name].get(subclass, []))
+                if subclass in pools[pool_name]:
+                    all_infantry.extend(pools[pool_name].pop(subclass))
         
         print(f"  > Found {len(officers)} officers and {len(all_infantry)} other infantry.")
 
@@ -286,11 +288,15 @@ class SquadBuilder(commands.Cog):
         if reserves:
             reserve_squad_id = await self.db.create_squad(event_id, "Reserves", "Reserves")
             for user_id in reserves:
+                # We need to re-fetch the signup info to get the member object
                 signup = next((s for s in signups if s['user_id'] == user_id), None)
                 if signup:
                     role_display = signup.get('subclass_name') or signup.get('role_name') or "Unassigned"
                     await self.db.add_squad_member(reserve_squad_id, user_id, role_display)
-                    print(f"  > Added {signup['member'].display_name} to Reserves.")
+                    # The 'member' object might not be in the signup dict if it was moved, so we get it from the guild
+                    member_obj = guild.get_member(user_id)
+                    display_name = member_obj.display_name if member_obj else f"ID: {user_id}"
+                    print(f"  > Added {display_name} to Reserves.")
 
         print("--- DRAFTING COMPLETE ---")
 
@@ -319,5 +325,7 @@ class SquadBuilder(commands.Cog):
         embed.set_footer(text=f"Event ID: {event_id}")
         return embed
 
-async def setup(bot: commands.Bot, db: Database):
+async def setup(bot: commands.Bot):
+    """Sets up the SquadBuilder cog, retrieving the db instance from the bot's state."""
+    db = bot.web_app.state.db
     await bot.add_cog(SquadBuilder(bot, db))

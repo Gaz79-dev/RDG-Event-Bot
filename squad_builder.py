@@ -119,7 +119,9 @@ class SquadBuilder(commands.Cog):
             role = player_info.get('role_name')
             subclass = player_info.get('subclass_name')
 
-            if not role: # Skip players who haven't selected a role
+            # Handle players who are unassigned or haven't selected a role yet
+            if not role or role == "Unassigned":
+                player_pools['general']['Unassigned'].append(player_info)
                 continue
 
             # Assign players to specialized pools first
@@ -204,7 +206,6 @@ class SquadBuilder(commands.Cog):
                 # Fill remaining slots
                 if placed_officer:
                     slots_to_fill = modal.infantry_squad_size_val - 1
-                    filled_slots = 0
                     subclass_priority = ["Anti-Tank", "Support", "Medic", "Machine Gunner", "Automatic Rifleman", "Assault", "Engineer", "Rifleman"]
                     
                     for _ in range(slots_to_fill):

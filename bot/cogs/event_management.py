@@ -330,45 +330,57 @@ class EventCreationModal(ui.Modal, title='Create a New Event'):
         await interaction.followup.send('Oops! Something went wrong with the form.', ephemeral=True)
 
 # --- Main Cog ---
-class EventManagement(commands.Cog):
+# --- FIX: Converted the Cog to a GroupCog to ensure commands are registered ---
+class EventManagement(commands.GroupCog, group_name="event", description="Commands for creating and managing events."):
     def __init__(self, bot: commands.Bot, db: Database):
         self.bot = bot
         self.db = db
+        super().__init__()
 
-    event_group = app_commands.Group(name="event", description="Commands for creating and managing events.")
-
-    @event_group.command(name="create", description="Create a new event.")
+    @app_commands.command(name="create", description="Create a new event.")
     @app_commands.describe(channel="The channel where the event announcement will be posted.")
     async def create(self, interaction: discord.Interaction, channel: discord.TextChannel):
         """Opens a form to create a new event."""
         modal = EventCreationModal(self.bot, self.db, channel)
         await interaction.response.send_modal(modal)
 
-    # --- Setup Command Group ---
-    setup = app_commands.Group(name="setup", description="Commands for setting up the bot.", default_permissions=discord.Permissions(administrator=True))
-    squad_config_group = app_commands.Group(name="squad_config", description="Commands for configuring squad roles.", parent=setup)
+    # --- Setup Command Group (This needs to be a separate top-level cog or command) ---
+    # For now, we will define it as a separate top-level group.
+    
+setup_group = app_commands.Group(name="setup", description="Commands for setting up the bot.", default_permissions=discord.Permissions(administrator=True))
+squad_config_group = app_commands.Group(name="squad_config", description="Commands for configuring squad roles.", parent=setup_group)
 
-    @squad_config_group.command(name="attack_role", description="Set the role for Attack specialty.")
-    async def set_attack_role(self, interaction: discord.Interaction, role: discord.Role):
-        await self.db.set_squad_config_role(interaction.guild.id, "attack", role.id)
-        await interaction.response.send_message(f"Attack specialty role set to {role.mention}.", ephemeral=True)
+@squad_config_group.command(name="attack_role", description="Set the role for Attack specialty.")
+async def set_attack_role(interaction: discord.Interaction, role: discord.Role):
+    # We need access to the database, which requires a little restructuring.
+    # The simplest way is to fetch it from the bot instance.
+    db = interaction.client.web_app.state.db
+    await db.set_squad_config_role(interaction.guild.id, "attack", role.id)
+    await interaction.response.send_message(f"Attack specialty role set to {role.mention}.", ephemeral=True)
 
-    @squad_config_group.command(name="defence_role", description="Set the role for Defence specialty.")
-    async def set_defence_role(self, interaction: discord.Interaction, role: discord.Role):
-        await self.db.set_squad_config_role(interaction.guild.id, "defence", role.id)
-        await interaction.response.send_message(f"Defence specialty role set to {role.mention}.", ephemeral=True)
+@squad_config_group.command(name="defence_role", description="Set the role for Defence specialty.")
+async def set_defence_role(interaction: discord.Interaction, role: discord.Role):
+    db = interaction.client.web_app.state.db
+    await db.set_squad_config_role(interaction.guild.id, "defence", role.id)
+    await interaction.response.send_message(f"Defence specialty role set to {role.mention}.", ephemeral=True)
 
-    @squad_config_group.command(name="arty_role", description="Set the role for Arty Certified players.")
-    async def set_arty_role(self, interaction: discord.Interaction, role: discord.Role):
-        await self.db.set_squad_config_role(interaction.guild.id, "arty", role.id)
-        await interaction.response.send_message(f"Arty specialty role set to {role.mention}.", ephemeral=True)
+@squad_config_group.command(name="arty_role", description="Set the role for Arty Certified players.")
+async def set_arty_role(interaction: discord.Interaction, role: discord.Role):
+    db = interaction.client.web_app.state.db
+    await db.set_squad_config_role(interaction.guild.id, "arty", role.id)
+    await interaction.response.send_message(f"Arty specialty role set to {role.mention}.", ephemeral=True)
 
-    @squad_config_group.command(name="armour_role", description="Set the role for Armour specialty players.")
-    async def set_armour_role(self, interaction: discord.Interaction, role: discord.Role):
-        await self.db.set_squad_config_role(interaction.guild.id, "armour", role.id)
-        await interaction.response.send_message(f"Armour specialty role set to {role.mention}.", ephemeral=True)
+@squad_config_group.command(name="armour_role", description="Set the role for Armour specialty players.")
+async def set_armour_role(interaction: discord.Interaction, role: discord.Role):
+    db = interaction.client.web_app.state.db
+    await db.set_squad_config_role(interaction.guild.id, "armour", role.id)
+    await interaction.response.send_message(f"Armour specialty role set to {role.mention}.", ephemeral=True)
+
 
 async def setup(bot: commands.Bot):
     db = bot.web_app.state.db
+    # --- FIX: Add the cog to the bot ---
     await bot.add_cog(EventManagement(bot, db))
+    # --- FIX: Add the separate setup command tree to the bot ---
+    bot.tree.add_command(setup_group)
     bot.add_view(PersistentEventView(db))

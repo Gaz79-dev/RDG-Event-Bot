@@ -258,19 +258,12 @@ class EventCreationConversation:
         self.timeout = 300.0
 
     async def start(self):
-        try:
-            self.dm_channel = self.user.dm_channel or await self.user.create_dm()
-            await self.dm_channel.send(
-                "Hello! Let's create a new event. Please reply to my questions. "
-                "You can type `cancel` at any time to stop."
-            )
-            await self.ask_title()
-        except discord.Forbidden:
-            await self.interaction.followup.send("I couldn't send you a DM. Please enable DMs from server members.", ephemeral=True)
-            self.cog.end_conversation(self.user.id)
-        except Exception as e:
-            print(f"Error starting event creation conversation: {e}")
-            self.cog.end_conversation(self.user.id)
+        self.dm_channel = self.user.dm_channel or await self.user.create_dm()
+        await self.dm_channel.send(
+            "Hello! Let's create a new event. Please reply to my questions. "
+            "You can type `cancel` at any time to stop."
+        )
+        await self.ask_title()
 
     def check(self, message):
         return message.author == self.user and message.channel == self.dm_channel
@@ -419,25 +412,17 @@ class EventManagement(commands.Cog):
             conv = EventCreationConversation(self, interaction, channel)
             self.active_conversations[interaction.user.id] = conv
             await conv.start()
+        except discord.Forbidden:
+            await interaction.followup.send("I couldn't send you a DM. Please enable DMs from server members.", ephemeral=True)
+            self.end_conversation(interaction.user.id)
         except Exception as e:
             print(f"Error during DM conversation task: {e}")
             traceback.print_exc()
             try:
-                # Use followup if the initial response has already been sent
                 await interaction.followup.send("An unexpected error occurred while starting our conversation.", ephemeral=True)
             except discord.HTTPException:
-                pass # Ignore if we can't send a followup
+                pass 
             self.end_conversation(interaction.user.id)
-
-    async def start_conversation(self, interaction: discord.Interaction, channel: discord.TextChannel):
-        if interaction.user.id in self.active_conversations:
-            return await interaction.response.send_message("You are already creating an event.", ephemeral=True)
-        
-        # Acknowledge the interaction immediately. This is crucial.
-        await interaction.response.send_message("I've sent you a DM to start creating the event!", ephemeral=True)
-        
-        # Run the actual conversation logic in a background task so the command doesn't time out.
-        asyncio.create_task(self._start_dm_conversation_task(interaction, channel))
 
     # --- Event Command Group ---
     event_group = app_commands.Group(name="event", description="Commands for creating and managing events.")
@@ -445,7 +430,14 @@ class EventManagement(commands.Cog):
     @event_group.command(name="create", description="Create a new event via DM.")
     @app_commands.describe(channel="The channel where the event will be posted.")
     async def create(self, interaction: discord.Interaction, channel: discord.TextChannel):
-        await self.start_conversation(interaction, channel)
+        if interaction.user.id in self.active_conversations:
+            return await interaction.response.send_message("You are already creating an event.", ephemeral=True)
+        
+        # Defer the response immediately to guarantee a response within 3 seconds.
+        await interaction.response.defer(ephemeral=True)
+        
+        # Run the actual conversation logic in a background task.
+        asyncio.create_task(self._start_dm_conversation_task(interaction, channel))
 
     # --- Setup Command Group ---
     setup = app_commands.Group(name="setup", description="Commands for setting up the bot.", default_permissions=discord.Permissions(administrator=True))

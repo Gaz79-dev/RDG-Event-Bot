@@ -30,7 +30,7 @@ EMOJI_MAPPING = {
     "Officer": os.getenv("EMOJI_OFFICER", "🫡"),
     "Rifleman": os.getenv("EMOJI_RIFLEMAN", "👤"),
     "Support": os.getenv("EMOJI_SUPPORT", "🔧"),
-    "Tank Commander": os.getenv("EMOJI_TANK_COMMANDER", "�‍✈️"),
+    "Tank Commander": os.getenv("EMOJI_TANK_COMMANDER", "🧑‍✈️"),
     "Crewman": os.getenv("EMOJI_CREWMAN", "👨‍🔧"),
     "Spotter": os.getenv("EMOJI_SPOTTER", "👀"),
     "Sniper": os.getenv("EMOJI_SNIPER", "🎯"),
@@ -410,7 +410,6 @@ class EventManagement(commands.Cog):
     async def _start_dm_conversation_task(self, interaction: discord.Interaction, channel: discord.TextChannel):
         """A helper function to run the conversation as a background task."""
         try:
-            # We send an initial followup to the deferred response so the user knows what's happening.
             await interaction.followup.send("I've sent you a DM to start creating the event!", ephemeral=True)
             conv = EventCreationConversation(self, interaction, channel)
             self.active_conversations[interaction.user.id] = conv
@@ -436,10 +435,8 @@ class EventManagement(commands.Cog):
         if interaction.user.id in self.active_conversations:
             return await interaction.response.send_message("You are already creating an event.", ephemeral=True)
         
-        # Defer the response immediately to guarantee a response within 3 seconds.
         await interaction.response.defer(ephemeral=True, thinking=True)
         
-        # Run the actual conversation logic in a background task.
         asyncio.create_task(self._start_dm_conversation_task(interaction, channel))
 
     # --- Setup Command Group ---
@@ -470,4 +467,3 @@ async def setup(bot: commands.Bot):
     db = bot.web_app.state.db
     await bot.add_cog(EventManagement(bot, db))
     bot.add_view(PersistentEventView(db))
-�

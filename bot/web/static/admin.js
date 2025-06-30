@@ -8,6 +8,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const headers = { 'Authorization': `Bearer ${token}` };
     const userListBody = document.getElementById('user-list-body');
     const createUserForm = document.getElementById('create-user-form');
+    const changePasswordForm = document.getElementById('change-password-form');
 
     // Fetch and display all users
     async function loadUsers() {
@@ -17,7 +18,17 @@ document.addEventListener('DOMContentLoaded', () => {
                  window.location.href = '/login';
                  return;
             }
-            if (!response.ok) throw new Error('Failed to fetch users');
+            if (!response.ok) {
+                // Try to get error detail from the server
+                let errorMsg = 'Failed to fetch users';
+                try {
+                    const errorData = await response.json();
+                    errorMsg = errorData.detail || errorMsg;
+                } catch (e) {
+                    // Ignore if response is not JSON
+                }
+                throw new Error(errorMsg);
+            }
             
             const users = await response.json();
             userListBody.innerHTML = ''; // Clear existing list
@@ -72,6 +83,39 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    // Handle change password form submission
+    if (changePasswordForm) {
+        changePasswordForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const currentPassword = e.target['current-password'].value;
+            const newPassword = e.target['new-password-change'].value;
+            const messageEl = document.getElementById('password-change-message');
+            messageEl.textContent = '';
+            messageEl.classList.remove('text-green-400', 'text-red-400');
+
+            try {
+                const response = await fetch('/api/users/me/password', {
+                    method: 'PUT',
+                    headers: { ...headers, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword })
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || 'Failed to change password');
+                }
+                
+                messageEl.textContent = 'Password changed successfully!';
+                messageEl.classList.add('text-green-400');
+                changePasswordForm.reset();
+
+            } catch (error) {
+                messageEl.textContent = `Error: ${error.message}`;
+                messageEl.classList.add('text-red-400');
+            }
+        });
+    }
+
     // Handle actions on the user list (delete, toggle status)
     userListBody.addEventListener('click', async (e) => {
         if (e.target.tagName !== 'BUTTON') return;
@@ -80,7 +124,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const userId = e.target.dataset.id;
 
         if (action === 'delete') {
-            if (!confirm('Are you sure you want to delete this user? This cannot be undone.')) return;
+            // Using a custom modal/confirm is better, but for simplicity:
+            if (!window.confirm('Are you sure you want to delete this user? This cannot be undone.')) return;
             try {
                 await fetch(`/api/users/${userId}`, { method: 'DELETE', headers });
                 loadUsers();

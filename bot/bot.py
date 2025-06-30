@@ -2,9 +2,14 @@ import discord
 from discord.ext import commands
 import os
 import asyncio
+import traceback  # --- FIX: Import the traceback module
 from dotenv import load_dotenv
 
-from utils.database import Database
+# We need to adjust the path for standalone execution
+import sys
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from bot.utils.database import Database
 
 # Load environment variables from .env file
 load_dotenv()
@@ -19,27 +24,24 @@ class EventBot(commands.Bot):
         """The setup_hook is called when the bot logs in."""
         print("Bot setup hook running...")
         
-        # List of cogs to load
+        # --- FIX: Use correct dot-notation paths for load_extension ---
         cogs_to_load = [
-            'cogs.event_management',
-            'cogs.scheduler',
-            'cogs.squad_builder',
-            # We don't need the 'setup' cog anymore as those commands
-            # are now correctly placed within event_management.py
+            'bot.cogs.event_management',
+            'bot.cogs.scheduler',
+            'bot.cogs.squad_builder',
+            'bot.cogs.setup'
         ]
 
         # Load each cog
         for cog_path in cogs_to_load:
             try:
-                # The full path to the cog module
-                full_cog_path = f'bot.{cog_path}'
-                await self.load_extension(full_cog_path)
-                print(f"Successfully loaded cog: {full_cog_path}")
+                await self.load_extension(cog_path)
+                print(f"Successfully loaded cog: {cog_path}")
             except Exception as e:
-                print(f"Failed to load cog {full_cog_path}: {e}")
-                traceback.print_exc()
+                print(f"Failed to load cog {cog_path}:")
+                traceback.print_exc() # This will now work correctly
         
-        # Sync commands to a specific guild if GUILD_ID is set
+        # Sync commands
         guild_id = os.getenv("GUILD_ID")
         if guild_id:
             guild = discord.Object(id=int(guild_id))
@@ -47,7 +49,6 @@ class EventBot(commands.Bot):
             synced = await self.tree.sync(guild=guild)
             print(f"Synced {len(synced)} command(s) to guild {guild_id}.")
         else:
-            # Sync commands globally if no GUILD_ID is set
             synced = await self.tree.sync()
             print(f"Synced {len(synced)} command(s) globally.")
 

@@ -125,7 +125,7 @@ document.addEventListener('DOMContentLoaded', () => {
         sendBtn.disabled = true;
 
         try {
-            // --- FIX: Changed URL from '/api/send-embed' to '/api/events/send-embed' ---
+            // --- FIX: Corrected the API endpoint URL ---
             await fetch('/api/events/send-embed', {
                 method: 'POST',
                 headers: { ...headers, 'Content-Type': 'application/json' },

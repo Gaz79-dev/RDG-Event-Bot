@@ -435,8 +435,10 @@ class EventManagement(commands.Cog):
         if interaction.user.id in self.active_conversations:
             return await interaction.response.send_message("You are already creating an event.", ephemeral=True)
         
-        await interaction.response.defer(ephemeral=True, thinking=True)
+        # Defer the response immediately to guarantee a response within 3 seconds.
+        await interaction.response.defer(ephemeral=True)
         
+        # Run the actual conversation logic in a background task.
         asyncio.create_task(self._start_dm_conversation_task(interaction, channel))
 
     # --- Setup Command Group ---

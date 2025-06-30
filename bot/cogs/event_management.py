@@ -132,4 +132,114 @@ class RoleSelectionView(ui.View):
     async def update_original_embed(self):
         if not (event := await self.db.get_event_by_id(self.event_id)): return
         try:
-            channel = self.bot.get_channel(event['channel_id']) or await self
+            # --- FIX: The line below was incomplete and is now corrected ---
+            channel = self.bot.get_channel(event['channel_id']) or await self.bot.fetch_channel(event['channel_id'])
+            message = await channel.fetch_message(self.message_id)
+            await message.edit(embed=await create_event_embed(self.bot, self.event_id, self.db))
+        except (discord.NotFound, discord.Forbidden): pass
+
+class PersistentEventView(ui.View):
+    def __init__(self, db: Database):
+        super().__init__(timeout=None)
+        self.db = db
+    async def update_embed(self, i: discord.Interaction, event_id: int):
+        try: await i.message.edit(embed=await create_event_embed(i.client, event_id, self.db))
+        except Exception as e: print(f"Error updating embed: {e}")
+    @ui.button(label="Accept", style=discord.ButtonStyle.success, custom_id="persistent_view:accept")
+    async def accept(self, i: discord.Interaction, button: ui.Button):
+        await i.response.defer(ephemeral=True)
+        if not (event := await self.db.get_event_by_message_id(i.message.id)): return await i.followup.send("Event not found.", ephemeral=True)
+        await self.db.set_rsvp(event['event_id'], i.user.id, RsvpStatus.ACCEPTED)
+        try:
+            await i.user.send(f"You accepted **{event['title']}**. Select your role:", view=RoleSelectionView(i.client, self.db, event['event_id'], i.message.id, i.user))
+            await i.followup.send("Check your DMs to select your role!", ephemeral=True)
+        except discord.Forbidden:
+            await self.db.update_signup_role(event['event_id'], i.user.id, "Unassigned", None)
+            await i.followup.send("Accepted, but I couldn't DM you. Role set to 'Unassigned'.", ephemeral=True)
+        await self.update_embed(i, event['event_id'])
+    @ui.button(label="Tentative", style=discord.ButtonStyle.secondary, custom_id="persistent_view:tentative")
+    async def tentative(self, i: discord.Interaction, button: ui.Button):
+        await i.response.defer()
+        if event := await self.db.get_event_by_message_id(i.message.id):
+            await self.db.set_rsvp(event['event_id'], i.user.id, RsvpStatus.TENTATIVE)
+            await self.db.update_signup_role(event['event_id'], i.user.id, None, None)
+            await self.update_embed(i, event['event_id'])
+    @ui.button(label="Decline", style=discord.ButtonStyle.danger, custom_id="persistent_view:decline")
+    async def decline(self, i: discord.Interaction, button: ui.Button):
+        await i.response.defer()
+        if event := await self.db.get_event_by_message_id(i.message.id):
+            await self.db.set_rsvp(event['event_id'], i.user.id, RsvpStatus.DECLINED)
+            await self.db.update_signup_role(event['event_id'], i.user.id, None, None)
+            await self.update_embed(i, event['event_id'])
+
+class EventCreationModal(ui.Modal, title='Create a New Event'):
+    def __init__(self, bot: commands.Bot, db: Database, channel: discord.TextChannel):
+        super().__init__()
+        self.bot, self.db, self.target_channel = bot, db, channel
+    event_title = ui.TextInput(label='Event Title', placeholder='e.g., Operation Overlord', required=True)
+    event_description = ui.TextInput(label='Description', style=discord.TextStyle.long, placeholder='Details about the event...', required=False)
+    event_timezone = ui.TextInput(label='Timezone', placeholder='e.g., Europe/London, US/Eastern', required=True, default='UTC')
+    start_datetime = ui.TextInput(label='Start Date & Time (DD-MM-YYYY HH:MM)', placeholder='e.g., 25-12-2024 19:30', required=True)
+    end_time = ui.TextInput(label='End Time (HH:MM) (Optional)', placeholder='e.g., 21:00', required=False)
+    async def on_submit(self, i: discord.Interaction):
+        await i.response.defer(ephemeral=True, thinking=True)
+        data, errors, tz = {}, [], None
+        try:
+            tz = pytz.timezone(self.event_timezone.value)
+            data['timezone'] = str(tz)
+        except pytz.UnknownTimeZoneError: errors.append(f"Invalid Timezone: `{self.event_timezone.value}`.")
+        if tz:
+            try: data['start_time'] = tz.localize(datetime.datetime.strptime(self.start_datetime.value, "%d-%m-%Y %H:%M"))
+            except ValueError: errors.append(f"Invalid Start Date/Time: `{self.start_datetime.value}`.")
+        if self.end_time.value:
+            try:
+                if start_dt := data.get('start_time'):
+                    end_t = datetime.datetime.strptime(self.end_time.value, "%H:%M").time()
+                    end_dt = start_dt.replace(hour=end_t.hour, minute=end_t.minute, second=0, microsecond=0)
+                    if end_dt <= start_dt: end_dt += datetime.timedelta(days=1)
+                    data['end_time'] = end_dt
+            except (ValueError, KeyError): errors.append(f"Invalid End Time: `{self.end_time.value}`.")
+        if errors: return await i.followup.send("Please correct errors:\n- " + "\n- ".join(errors), ephemeral=True)
+        
+        data.update({ 'title': self.event_title.value, 'description': self.event_description.value or "No description.", 'is_recurring': False, 'mention_role_ids': [], 'restrict_to_role_ids': []})
+        try:
+            event_id = await self.db.create_event(i.guild.id, self.target_channel.id, i.user.id, data)
+            msg = await self.target_channel.send(embed=await create_event_embed(self.bot, event_id, self.db), view=PersistentEventView(self.db))
+            await self.db.update_event_message_id(event_id, msg.id)
+            await i.followup.send(f"✅ Event '{data['title']}' created in {self.target_channel.mention}!", ephemeral=True)
+        except Exception as e:
+            print(f"Error on modal submit: {e}"), traceback.print_exc()
+            await i.followup.send("An unexpected error occurred.", ephemeral=True)
+    async def on_error(self, i: discord.Interaction, error: Exception):
+        traceback.print_exc()
+        await i.followup.send('Oops! Something went wrong.', ephemeral=True)
+
+# --- Command Definition (Module Level) ---
+event_group = app_commands.Group(name="event", description="Commands for creating and managing events.")
+
+@event_group.command(name="create", description="Create a new event.")
+@app_commands.describe(channel="The channel where the event announcement will be posted.")
+async def create_command(interaction: discord.Interaction, channel: discord.TextChannel):
+    """Opens a form to create a new event."""
+    bot = interaction.client
+    event_cog = bot.get_cog("EventManagement")
+    if not event_cog:
+        return await interaction.response.send_message("Event cog is not loaded.", ephemeral=True)
+    modal = EventCreationModal(bot, event_cog.db, channel)
+    await interaction.response.send_modal(modal)
+
+# --- Cog Definition (For State Management) ---
+class EventManagement(commands.Cog):
+    def __init__(self, bot: commands.Bot, db: Database):
+        self.bot = bot
+        self.db = db
+
+# --- Setup Function (Called by bot to load the extension) ---
+async def setup(bot: commands.Bot):
+    db = bot.web_app.state.db
+    # Add the cog for state management
+    await bot.add_cog(EventManagement(bot, db))
+    # Explicitly add the command group to the bot's tree
+    bot.tree.add_command(event_group)
+    # Add the persistent view
+    bot.add_view(PersistentEventView(db))

@@ -56,10 +56,26 @@ async def lifespan(app: FastAPI):
 # --- FastAPI App Setup ---
 app = FastAPI(lifespan=lifespan)
 
+# --- DEBUGGING: Check for templates directory and its contents ---
+templates_dir = BASE_DIR / "web/templates"
+print("--- Sanity Check for Templates ---")
+print(f"Attempting to use templates directory: {templates_dir}")
+if templates_dir.is_dir():
+    print("Directory exists. Files found:")
+    files = [f.name for f in templates_dir.iterdir()]
+    if files:
+        for f in files:
+            print(f"  - {f}")
+    else:
+        print("  - Directory is empty.")
+else:
+    print("!!! ERROR: Templates directory does not exist or is not a directory. !!!")
+print("---------------------------------")
+
+
 # Mount static files and templates using absolute paths
-# This is the key change to fix the TemplateNotFound error
 app.mount("/static", StaticFiles(directory=BASE_DIR / "web/static"), name="static")
-templates = Jinja2Templates(directory=BASE_DIR / "web/templates")
+templates = Jinja2Templates(directory=templates_dir) # Use the path we just checked
 
 # Include API routers
 app.include_router(auth.router)

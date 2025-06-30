@@ -410,6 +410,7 @@ class EventManagement(commands.Cog):
     async def _start_dm_conversation_task(self, interaction: discord.Interaction, channel: discord.TextChannel):
         """A helper function to run the conversation as a background task."""
         try:
+            # We send an initial followup to the deferred response so the user knows what's happening.
             await interaction.followup.send("I've sent you a DM to start creating the event!", ephemeral=True)
             conv = EventCreationConversation(self, interaction, channel)
             self.active_conversations[interaction.user.id] = conv

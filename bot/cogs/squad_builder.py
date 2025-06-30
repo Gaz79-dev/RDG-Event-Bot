@@ -58,14 +58,14 @@ class SquadBuilderModal(ui.Modal, title="Build Squads"):
             await interaction.followup.send("An unexpected error occurred while processing the squad build.", ephemeral=True)
 
 # --- Main Cog ---
-class SquadBuilder(commands.Cog):
+# --- FIX: Converted the Cog to a GroupCog to ensure commands are registered ---
+class SquadBuilder(commands.GroupCog, group_name="squads", description="Commands for building and managing squads."):
     def __init__(self, bot: commands.Bot, db: Database):
         self.bot = bot
         self.db = db
+        super().__init__()
 
-    squads_group = app_commands.Group(name="squads", description="Commands for building and managing squads.")
-
-    @squads_group.command(name="build", description="Build the team composition for an event.")
+    @app_commands.command(name="build", description="Build the team composition for an event.")
     @app_commands.describe(event_id="The ID of the event to build squads for.")
     async def build(self, interaction: discord.Interaction, event_id: int):
         # Basic permission check

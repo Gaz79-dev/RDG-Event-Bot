@@ -1,6 +1,6 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, List
-from datetime import datetime # <--- ADDED THIS LINE TO FIX THE ERROR
+from datetime import datetime
 
 # --- Token Models ---
 class Token(BaseModel):
@@ -27,24 +27,23 @@ class PasswordChange(BaseModel):
     new_password: str = Field(..., min_length=6)
 
 class User(UserBase):
+    # This tells Pydantic to read data from object attributes (e.g., database records)
+    model_config = ConfigDict(from_attributes=True)
+    
     id: int
     is_active: bool
     is_admin: bool
-
-    class Config:
-        from_attributes = True # Updated from orm_mode for Pydantic v2
 
 class UserInDB(User):
     hashed_password: str
 
 # --- Event & Squad Models ---
 class Event(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     event_id: int
     title: str
-    event_time: datetime # This line was causing the error
-
-    class Config:
-        from_attributes = True # Updated from orm_mode for Pydantic v2
+    event_time: datetime
 
 class Signup(BaseModel):
     user_id: int

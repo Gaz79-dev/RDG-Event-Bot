@@ -5,12 +5,9 @@ import datetime
 import traceback
 import os
 import pytz
-import re
-from urllib.parse import urlencode
 import asyncio
-from typing import List, Dict, Optional
+from typing import List, Optional
 from collections import defaultdict
-from dateutil.parser import parse
 
 # Use an absolute import from the 'bot' package root for robustness
 from bot.utils.database import Database, RsvpStatus, ROLES, SUBCLASSES, RESTRICTED_ROLES
@@ -244,225 +241,116 @@ class PersistentEventView(ui.View):
         await self.db.update_signup_role(event['event_id'], interaction.user.id, None, None)
         await self.update_embed(interaction, event['event_id'])
 
-# --- New DM Conversation for Event Creation ---
-class EventCreationConversation:
-    def __init__(self, cog: 'EventManagement', interaction: discord.Interaction, channel: discord.TextChannel):
-        self.cog = cog
-        self.bot = cog.bot
-        self.interaction = interaction
-        self.user = interaction.user
-        self.channel = channel
-        self.guild = interaction.guild
-        self.db = cog.db
-        self.data = {}
-        self.dm_channel = None
-        self.timeout = 300.0
+# --- FIX START: New Modal for Event Creation ---
+class EventCreationModal(ui.Modal, title='Create a New Event'):
+    def __init__(self, bot: commands.Bot, db: Database, channel: discord.TextChannel):
+        super().__init__()
+        self.bot = bot
+        self.db = db
+        self.target_channel = channel
 
-    # --- FIX START: This method now only initiates the DM ---
-    async def initiate_dm(self):
-        """Creates the DM channel and sends the initial message."""
-        self.dm_channel = self.user.dm_channel or await self.user.create_dm()
-        await self.dm_channel.send(
-            "Hello! Let's create a new event. Please reply to my questions. "
-            "You can type `cancel` at any time to stop."
-        )
-    # --- FIX END ---
+    # --- Modal Fields ---
+    event_title = ui.TextInput(label='Event Title', placeholder='e.g., Operation Overlord', required=True)
+    event_description = ui.TextInput(label='Description', style=discord.TextStyle.long, placeholder='Details about the event...', required=False)
+    event_timezone = ui.TextInput(label='Timezone', placeholder='e.g., Europe/London, US/Eastern, EST, BST', required=True, default='UTC')
+    start_datetime = ui.TextInput(label='Start Date & Time (DD-MM-YYYY HH:MM)', placeholder='e.g., 25-12-2024 19:30', required=True)
+    end_time = ui.TextInput(label='End Time (HH:MM) (Optional)', placeholder='e.g., 21:00', required=False)
 
-    # --- FIX START: This method now runs the main conversation loop ---
-    async def run_conversation(self):
-        """Runs the question-and-answer part of the conversation."""
-        await self.ask_title()
-    # --- FIX END ---
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        
+        data = {}
+        errors = []
 
-    def check(self, message):
-        return message.author == self.user and message.channel == self.dm_channel
-
-    async def ask(self, question, next_step, validation_func=None):
+        # --- Data Validation ---
         try:
-            await self.dm_channel.send(question)
-            msg = await self.bot.wait_for('message', check=self.check, timeout=self.timeout)
-
-            if msg.content.lower() == 'cancel':
-                await self.dm_channel.send("Event creation cancelled.")
-                self.cog.end_conversation(self.user.id)
-                return
-
-            if validation_func:
-                validated_data = await validation_func(msg.content)
-                if validated_data is None:
-                    await self.ask(question, next_step, validation_func)
-                    return
-                return await next_step(validated_data)
-            else:
-                return await next_step(msg.content)
-        except asyncio.TimeoutError:
-            await self.dm_channel.send("Event creation timed out. Please start over.")
-            self.cog.end_conversation(self.user.id)
-
-    async def ask_title(self):
-        await self.ask("1. What is the **title** of the event?", self.ask_timezone)
-
-    async def ask_timezone(self, title):
-        self.data['title'] = title
-        await self.ask("2. What is the **timezone**? (e.g., `BST`, `GMT`, `EST`, `US/Eastern`, `Europe/London`)", self.ask_start_datetime, self._validate_timezone)
-
-    async def _validate_timezone(self, content):
-        try:
-            return pytz.timezone(content)
+            tz = pytz.timezone(self.event_timezone.value)
+            data['timezone'] = tz
         except pytz.UnknownTimeZoneError:
-            await self.dm_channel.send("Sorry, that's not a valid timezone. Please try again.")
-            return None
-
-    async def ask_start_datetime(self, tz):
-        self.data['timezone'] = tz
-        await self.ask("3. What is the **start date and time**? (Format: `DD-MM-YYYY HH:MM`)", self.ask_end_time, self._validate_start_datetime)
-
-    async def _validate_start_datetime(self, content):
-        try:
-            dt = datetime.datetime.strptime(content, "%d-%m-%Y %H:%M")
-            return self.data['timezone'].localize(dt)
-        except ValueError:
-            await self.dm_channel.send("Invalid format. Please use `DD-MM-YYYY HH:MM`.")
-            return None
-
-    async def ask_end_time(self, start_time):
-        self.data['start_time'] = start_time
-        await self.ask("4. What is the **end time**? (Format: `HH:MM`, or type `none`)", self.ask_description, self._validate_end_time)
-
-    async def _validate_end_time(self, content):
-        if content.lower() == 'none':
-            return None
-        try:
-            end_t = datetime.datetime.strptime(content, "%H:%M").time()
-            start_dt = self.data['start_time']
-            end_dt = start_dt.replace(hour=end_t.hour, minute=end_t.minute, second=0, microsecond=0)
-            if end_dt <= start_dt:
-                end_dt += datetime.timedelta(days=1)
-            return end_dt
-        except ValueError:
-            await self.dm_channel.send("Invalid format. Please use `HH:MM` or `none`.")
-            return None
-
-    async def ask_description(self, end_time):
-        self.data['end_time'] = end_time
-        await self.ask("5. What is the **description** for the event? (Type `none` for no description)", self.ask_recurring)
-
-    async def ask_recurring(self, description):
-        self.data['description'] = None if description.lower() == 'none' else description
-        await self.ask("6. Is this a **recurring** event? (yes/no)", self.ask_restricted_roles, self._validate_yes_no)
-
-    async def _validate_yes_no(self, content):
-        if content.lower() in ['yes', 'y', 'no', 'n']:
-            return content.lower().startswith('y')
-        await self.dm_channel.send("Please answer `yes` or `no`.")
-        return None
-
-    async def ask_restricted_roles(self, is_recurring):
-        self.data['is_recurring'] = is_recurring
-        await self.ask("7. **Restrict signups to specific roles?** (Enter role names, separated by commas, or type `none`)", self.ask_mention_roles, self._validate_roles)
-
-    async def _validate_roles(self, content):
-        if content.lower() == 'none':
-            return []
-        role_names = [r.strip() for r in content.split(',')]
-        roles = []
-        for name in role_names:
-            role = discord.utils.get(self.guild.roles, name=name)
-            if role:
-                roles.append(role)
-            else:
-                await self.dm_channel.send(f"I couldn't find a role named `{name}`. Please check the spelling and try again.")
-                return None
-        return roles
-
-    async def ask_mention_roles(self, restricted_roles):
-        self.data['restrict_to_role_ids'] = [r.id for r in restricted_roles]
-        await self.ask("8. **Mention roles in the announcement?** (Enter role names, separated by commas, or type `none`)", self.finish, self._validate_roles)
-
-    async def finish(self, mention_roles):
-        self.data['mention_role_ids'] = [r.id for r in mention_roles]
+            errors.append(f"Invalid Timezone: `{self.event_timezone.value}`. Please use a valid identifier like `Europe/London`.")
         
         try:
+            start_dt_naive = datetime.datetime.strptime(self.start_datetime.value, "%d-%m-%Y %H:%M")
+            data['start_time'] = tz.localize(start_dt_naive) if 'timezone' in data else start_dt_naive
+        except ValueError:
+            errors.append(f"Invalid Start Date/Time format: `{self.start_datetime.value}`. Must be `DD-MM-YYYY HH:MM`.")
+
+        if self.end_time.value:
+            try:
+                end_t = datetime.datetime.strptime(self.end_time.value, "%H:%M").time()
+                start_dt = data.get('start_time')
+                if start_dt:
+                    end_dt = start_dt.replace(hour=end_t.hour, minute=end_t.minute, second=0, microsecond=0)
+                    if end_dt <= start_dt:
+                        end_dt += datetime.timedelta(days=1)
+                    data['end_time'] = end_dt
+            except (ValueError, KeyError):
+                errors.append(f"Invalid End Time format: `{self.end_time.value}`. Must be `HH:MM`.")
+
+        if errors:
+            await interaction.followup.send("Please correct the following errors:\n- " + "\n- ".join(errors), ephemeral=True)
+            return
+
+        # --- Data Preparation & DB Insertion ---
+        data['title'] = self.event_title.value
+        data['description'] = self.event_description.value or "No description provided."
+        # For this simplified example, we'll hardcode these. They could be added as modal fields.
+        data['is_recurring'] = False
+        data['mention_role_ids'] = []
+        data['restrict_to_role_ids'] = []
+
+        try:
             event_id = await self.db.create_event(
-                self.guild.id,
-                self.channel.id,
-                self.user.id,
-                self.data
+                interaction.guild.id,
+                self.target_channel.id,
+                interaction.user.id,
+                data
             )
             
             view = PersistentEventView(self.db)
             embed = await create_event_embed(self.bot, event_id, self.db)
             
-            content_mentions = " ".join([f"<@&{rid}>" for rid in self.data['mention_role_ids']])
-            msg = await self.channel.send(content=content_mentions, embed=embed, view=view)
+            msg = await self.target_channel.send(embed=embed, view=view)
             await self.db.update_event_message_id(event_id, msg.id)
 
-            await self.dm_channel.send(f"✅ Event '{self.data['title']}' created successfully in {self.channel.mention}!")
+            await interaction.followup.send(f"✅ Event '{data['title']}' created successfully in {self.target_channel.mention}!", ephemeral=True)
+
         except Exception as e:
-            await self.dm_channel.send("I failed to create the event. Please check the bot logs.")
-            print(f"Error finishing conversation: {e}")
-        finally:
-            self.cog.end_conversation(self.user.id)
+            print(f"Error during modal submission: {e}")
+            traceback.print_exc()
+            await interaction.followup.send("An unexpected error occurred while creating the event. Please check the bot logs.", ephemeral=True)
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        traceback.print_exc()
+        await interaction.followup.send('Oops! Something went wrong with the form.', ephemeral=True)
+# --- FIX END ---
 
 # --- Main Cog ---
 class EventManagement(commands.Cog):
     def __init__(self, bot: commands.Bot, db: Database):
         self.bot = bot
         self.db = db
-        self.active_conversations = {}
+        # The active_conversations dictionary is no longer needed.
+        # self.active_conversations = {}
 
-    def end_conversation(self, user_id: int):
-        if user_id in self.active_conversations:
-            del self.active_conversations[user_id]
+    # The end_conversation method is no longer needed.
+    # def end_conversation(self, user_id: int): ...
 
-    # --- FIX START: New helper method to run conversation as a background task ---
-    async def _start_dm_conversation_task(self, interaction: discord.Interaction, channel: discord.TextChannel):
-        """A helper function to run the conversation as a background task."""
-        conv = EventCreationConversation(self, interaction, channel)
-        self.active_conversations[interaction.user.id] = conv
-        
-        try:
-            # Step 1: Try to initiate the DM. This is the first failure point.
-            await conv.initiate_dm()
-            
-            # Step 2: If successful, confirm via followup in the original channel.
-            await interaction.followup.send("I've sent you a DM to start creating the event!", ephemeral=True)
-            
-            # Step 3: Start the actual question-and-answer loop.
-            await conv.run_conversation()
-
-        except discord.Forbidden:
-            # This block runs if initiate_dm() fails because DMs are closed.
-            await interaction.followup.send("I couldn't send you a DM. Please enable DMs from server members.", ephemeral=True)
-            self.end_conversation(interaction.user.id)
-        except Exception as e:
-            # This block runs for any other errors.
-            print(f"Error during DM conversation task: {e}")
-            traceback.print_exc()
-            try:
-                await interaction.followup.send("An unexpected error occurred while starting our conversation.", ephemeral=True)
-            except discord.HTTPException:
-                pass  # Interaction is likely dead, can't do anything.
-            self.end_conversation(interaction.user.id)
-    # --- FIX END ---
+    # The DM conversation task is no longer needed.
+    # async def _start_dm_conversation_task(...): ...
 
     # --- Event Command Group ---
     event_group = app_commands.Group(name="event", description="Commands for creating and managing events.")
 
-    # --- FIX START: Modified 'create' command to use defer() ---
-    @event_group.command(name="create", description="Create a new event via DM.")
-    @app_commands.describe(channel="The channel where the event will be posted.")
+    # --- FIX START: Refactored 'create' command to use the Modal ---
+    @event_group.command(name="create", description="Create a new event.")
+    @app_commands.describe(channel="The channel where the event announcement will be posted.")
     async def create(self, interaction: discord.Interaction, channel: discord.TextChannel):
-        if interaction.user.id in self.active_conversations:
-            await interaction.response.send_message("You are already creating an event.", ephemeral=True)
-            return
-        
-        # Defer the interaction immediately. This is the most reliable way
-        # to acknowledge the command and prevent the "not responding" error.
-        await interaction.response.defer(ephemeral=True)
-        
-        # Run the conversation logic in a background task.
-        asyncio.create_task(self._start_dm_conversation_task(interaction, channel))
+        """Opens a form to create a new event."""
+        # This is now the only action: send the modal to the user.
+        # It's instant and guarantees no timeout.
+        modal = EventCreationModal(self.bot, self.db, channel)
+        await interaction.response.send_modal(modal)
     # --- FIX END ---
 
     # --- Setup Command Group ---

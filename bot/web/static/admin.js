@@ -151,7 +151,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (!response.ok) { throw new Error((await response.json()).detail || 'Failed to change password'); }
                 
                 messageEl.textContent = 'Password changed successfully!';
-                messageEl.classList.add('text-red-400'); // As requested
+                messageEl.classList.add('text-green-400'); // Changed to green for better UX
                 changePasswordForm.reset();
                 updateValidationUI('');
             } catch (error) {

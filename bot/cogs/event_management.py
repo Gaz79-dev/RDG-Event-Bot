@@ -258,13 +258,21 @@ class EventCreationConversation:
         self.dm_channel = None
         self.timeout = 300.0
 
-    async def start(self):
+    # --- FIX START: This method now only initiates the DM ---
+    async def initiate_dm(self):
+        """Creates the DM channel and sends the initial message."""
         self.dm_channel = self.user.dm_channel or await self.user.create_dm()
         await self.dm_channel.send(
             "Hello! Let's create a new event. Please reply to my questions. "
             "You can type `cancel` at any time to stop."
         )
+    # --- FIX END ---
+
+    # --- FIX START: This method now runs the main conversation loop ---
+    async def run_conversation(self):
+        """Runs the question-and-answer part of the conversation."""
         await self.ask_title()
+    # --- FIX END ---
 
     def check(self, message):
         return message.author == self.user and message.channel == self.dm_channel
@@ -410,29 +418,38 @@ class EventManagement(commands.Cog):
     # --- FIX START: New helper method to run conversation as a background task ---
     async def _start_dm_conversation_task(self, interaction: discord.Interaction, channel: discord.TextChannel):
         """A helper function to run the conversation as a background task."""
+        conv = EventCreationConversation(self, interaction, channel)
+        self.active_conversations[interaction.user.id] = conv
+        
         try:
-            conv = EventCreationConversation(self, interaction, channel)
-            self.active_conversations[interaction.user.id] = conv
-            await conv.start()
+            # Step 1: Try to initiate the DM. This is the first failure point.
+            await conv.initiate_dm()
+            
+            # Step 2: If successful, confirm via followup in the original channel.
+            await interaction.followup.send("I've sent you a DM to start creating the event!", ephemeral=True)
+            
+            # Step 3: Start the actual question-and-answer loop.
+            await conv.run_conversation()
+
         except discord.Forbidden:
-            # Use followup since the initial response has already been sent.
+            # This block runs if initiate_dm() fails because DMs are closed.
             await interaction.followup.send("I couldn't send you a DM. Please enable DMs from server members.", ephemeral=True)
             self.end_conversation(interaction.user.id)
         except Exception as e:
+            # This block runs for any other errors.
             print(f"Error during DM conversation task: {e}")
             traceback.print_exc()
             try:
-                # Use followup for any other errors.
                 await interaction.followup.send("An unexpected error occurred while starting our conversation.", ephemeral=True)
             except discord.HTTPException:
-                pass # Interaction is likely dead, can't do anything.
+                pass  # Interaction is likely dead, can't do anything.
             self.end_conversation(interaction.user.id)
     # --- FIX END ---
 
     # --- Event Command Group ---
     event_group = app_commands.Group(name="event", description="Commands for creating and managing events.")
 
-    # --- FIX START: Modified 'create' command ---
+    # --- FIX START: Modified 'create' command to use defer() ---
     @event_group.command(name="create", description="Create a new event via DM.")
     @app_commands.describe(channel="The channel where the event will be posted.")
     async def create(self, interaction: discord.Interaction, channel: discord.TextChannel):
@@ -440,10 +457,11 @@ class EventManagement(commands.Cog):
             await interaction.response.send_message("You are already creating an event.", ephemeral=True)
             return
         
-        # Acknowledge the interaction immediately. This is the crucial fix.
-        await interaction.response.send_message("I've sent you a DM to start creating the event!", ephemeral=True)
+        # Defer the interaction immediately. This is the most reliable way
+        # to acknowledge the command and prevent the "not responding" error.
+        await interaction.response.defer(ephemeral=True)
         
-        # Run the actual conversation logic in a background task to avoid timeouts.
+        # Run the conversation logic in a background task.
         asyncio.create_task(self._start_dm_conversation_task(interaction, channel))
     # --- FIX END ---
 

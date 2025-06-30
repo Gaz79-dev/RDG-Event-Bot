@@ -10,7 +10,27 @@ document.addEventListener('DOMContentLoaded', () => {
     const createUserForm = document.getElementById('create-user-form');
     const changePasswordForm = document.getElementById('change-password-form');
 
-    // Fetch and display all users
+    // --- Modal Elements ---
+    const adminModal = document.getElementById('admin-change-password-modal');
+    const adminModalForm = document.getElementById('admin-change-password-form-modal');
+    const modalUsername = document.getElementById('modal-username');
+    const modalUserId = document.getElementById('modal-user-id');
+    const modalNewPassword = document.getElementById('modal-new-password');
+    const modalCancelBtn = document.getElementById('modal-cancel-btn');
+    const modalMessageEl = document.getElementById('modal-password-change-message');
+
+    // --- Password Validation Function ---
+    function validatePassword(password) {
+        const validations = {
+            length: password.length >= 8,
+            case: /[a-z]/.test(password) && /[A-Z]/.test(password),
+            number: /[0-9]/.test(password),
+            special: /[!@#$%^&*()_+\-=\[\]{}|;':",./<>?]/.test(password)
+        };
+        return Object.values(validations).every(Boolean);
+    }
+
+    // --- Load Users Function ---
     async function loadUsers() {
         try {
             const response = await fetch('/api/users/', { headers });
@@ -20,15 +40,12 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             if (!response.ok) {
                 let errorMsg = 'Failed to fetch users';
-                try {
-                    const errorData = await response.json();
-                    errorMsg = errorData.detail || errorMsg;
-                } catch (e) { /* Ignore if response is not JSON */ }
+                try { errorMsg = (await response.json()).detail || errorMsg; } catch (e) {}
                 throw new Error(errorMsg);
             }
             
             const users = await response.json();
-            userListBody.innerHTML = ''; // Clear existing list
+            userListBody.innerHTML = '';
             users.forEach(user => {
                 const tr = document.createElement('tr');
                 tr.className = 'border-b border-gray-700';
@@ -43,6 +60,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <td class="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
                         <button data-action="toggle-active" data-id="${user.id}" class="text-yellow-400 hover:text-yellow-600">${user.is_active ? 'Disable' : 'Enable'}</button>
                         <button data-action="toggle-admin" data-id="${user.id}" class="text-indigo-400 hover:text-indigo-600">${user.is_admin ? 'Revoke Admin' : 'Make Admin'}</button>
+                        <button data-action="change-password" data-id="${user.id}" data-username="${user.username}" class="text-blue-400 hover:text-blue-600">Change Password</button>
                         <button data-action="delete" data-id="${user.id}" class="text-red-500 hover:text-red-700">Delete</button>
                     </td>
                 `;
@@ -54,88 +72,75 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Handle create user form submission
+    // --- Create User Form ---
     createUserForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         const username = e.target['new-username'].value;
         const password = e.target['new-password'].value;
         const isAdmin = e.target['new-is-admin'].checked;
-
+        if (!validatePassword(password)) {
+            alert('Error: New user password does not meet all requirements.');
+            return;
+        }
         try {
             const response = await fetch('/api/users/', {
                 method: 'POST',
                 headers: { ...headers, 'Content-Type': 'application/json' },
                 body: JSON.stringify({ username, password, is_admin: isAdmin })
             });
-
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.detail || 'Failed to create user');
-            }
-            
+            if (!response.ok) { throw new Error((await response.json()).detail || 'Failed to create user'); }
             createUserForm.reset();
-            loadUsers(); // Refresh the list
+            loadUsers();
         } catch (error) {
             alert(`Error: ${error.message}`);
         }
     });
 
-    // Handle change password form submission
+    // --- Self Password Change Form ---
     if (changePasswordForm) {
         const newPasswordInput = document.getElementById('new-password-change');
-        const confirmPasswordInput = document.getElementById('confirm-new-password');
         const messageEl = document.getElementById('password-change-message');
+        const pwValidators = {
+            length: document.getElementById('pw-length'),
+            case: document.getElementById('pw-case'),
+            number: document.getElementById('pw-number'),
+            special: document.getElementById('pw-special'),
+        };
 
-        // Password validation UI elements
-        const pwLength = document.getElementById('pw-length');
-        const pwCase = document.getElementById('pw-case');
-        const pwNumber = document.getElementById('pw-number');
-        const pwSpecial = document.getElementById('pw-special');
-
-        function validatePassword(password) {
+        function updateValidationUI(password) {
             const validations = {
                 length: password.length >= 8,
                 case: /[a-z]/.test(password) && /[A-Z]/.test(password),
                 number: /[0-9]/.test(password),
                 special: /[!@#$%^&*()_+\-=\[\]{}|;':",./<>?]/.test(password)
             };
-
-            // Update UI feedback for password requirements
-            pwLength.style.color = validations.length ? 'lightgreen' : 'inherit';
-            pwCase.style.color = validations.case ? 'lightgreen' : 'inherit';
-            pwNumber.style.color = validations.number ? 'lightgreen' : 'inherit';
-            pwSpecial.style.color = validations.special ? 'lightgreen' : 'inherit';
-
-            return Object.values(validations).every(Boolean);
+            pwValidators.length.style.color = validations.length ? 'lightgreen' : 'inherit';
+            pwValidators.case.style.color = validations.case ? 'lightgreen' : 'inherit';
+            pwValidators.number.style.color = validations.number ? 'lightgreen' : 'inherit';
+            pwValidators.special.style.color = validations.special ? 'lightgreen' : 'inherit';
         }
 
-        // Add live validation feedback as the user types
-        newPasswordInput.addEventListener('input', () => {
-            validatePassword(newPasswordInput.value);
-        });
+        newPasswordInput.addEventListener('input', () => updateValidationUI(newPasswordInput.value));
 
         changePasswordForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             const currentPassword = document.getElementById('current-password').value;
             const newPassword = newPasswordInput.value;
-            const confirmPassword = confirmPasswordInput.value;
+            const confirmPassword = document.getElementById('confirm-new-password').value;
             
             messageEl.textContent = '';
-            messageEl.classList.remove('text-green-400', 'text-red-400');
+            messageEl.classList.remove('text-red-400', 'text-green-400');
 
-            // --- Validation Checks ---
             if (newPassword !== confirmPassword) {
                 messageEl.textContent = 'Error: New passwords do not match.';
                 messageEl.classList.add('text-red-400');
                 return;
             }
-
             if (!validatePassword(newPassword)) {
                 messageEl.textContent = 'Error: New password does not meet all requirements.';
                 messageEl.classList.add('text-red-400');
                 return;
             }
-            // --- End Validation ---
 
             try {
                 const response = await fetch('/api/users/me/password', {
@@ -143,18 +148,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     headers: { ...headers, 'Content-Type': 'application/json' },
                     body: JSON.stringify({ current_password: currentPassword, new_password: newPassword })
                 });
-
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.detail || 'Failed to change password');
-                }
+                if (!response.ok) { throw new Error((await response.json()).detail || 'Failed to change password'); }
                 
                 messageEl.textContent = 'Password changed successfully!';
-                messageEl.classList.add('text-green-400');
+                messageEl.classList.add('text-red-400'); // As requested
                 changePasswordForm.reset();
-                // Reset validation UI colors
-                validatePassword('');
-
+                updateValidationUI('');
             } catch (error) {
                 messageEl.textContent = `Error: ${error.message}`;
                 messageEl.classList.add('text-red-400');
@@ -162,36 +161,25 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Handle actions on the user list (delete, toggle status)
+    // --- User List Actions (Delegated) ---
     userListBody.addEventListener('click', async (e) => {
-        if (e.target.tagName !== 'BUTTON') return;
+        const targetButton = e.target.closest('button');
+        if (!targetButton) return;
 
-        const action = e.target.dataset.action;
-        const userId = e.target.dataset.id;
+        const action = targetButton.dataset.action;
+        const userId = targetButton.dataset.id;
 
         if (action === 'delete') {
-            if (!window.confirm('Are you sure you want to delete this user? This cannot be undone.')) return;
+            if (!window.confirm('Are you sure you want to delete this user?')) return;
             try {
                 await fetch(`/api/users/${userId}`, { method: 'DELETE', headers });
                 loadUsers();
-            } catch {
-                alert('Failed to delete user.');
-            }
-        }
-
-        if (action === 'toggle-active' || action === 'toggle-admin') {
-            const row = e.target.closest('tr');
+            } catch { alert('Failed to delete user.'); }
+        } else if (action === 'toggle-active' || action === 'toggle-admin') {
+            const row = targetButton.closest('tr');
             const isActive = row.cells[1].textContent.trim() === 'Active';
             const isAdmin = row.cells[2].textContent.trim() === 'Admin';
-            
-            let updatePayload = {};
-            if (action === 'toggle-active') {
-                updatePayload.is_active = !isActive;
-            }
-            if (action === 'toggle-admin') {
-                updatePayload.is_admin = !isAdmin;
-            }
-
+            const updatePayload = action === 'toggle-active' ? { is_active: !isActive } : { is_admin: !isAdmin };
             try {
                 await fetch(`/api/users/${userId}`, {
                     method: 'PUT',
@@ -199,9 +187,53 @@ document.addEventListener('DOMContentLoaded', () => {
                     body: JSON.stringify(updatePayload)
                 });
                 loadUsers();
-            } catch {
-                alert('Failed to update user.');
-            }
+            } catch { alert('Failed to update user.'); }
+        } else if (action === 'change-password') {
+            modalUsername.textContent = targetButton.dataset.username;
+            modalUserId.value = userId;
+            adminModal.classList.remove('hidden');
+        }
+    });
+
+    // --- Admin Modal Logic ---
+    modalCancelBtn.addEventListener('click', () => {
+        adminModal.classList.add('hidden');
+        adminModalForm.reset();
+        modalMessageEl.textContent = '';
+    });
+
+    adminModalForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const userId = modalUserId.value;
+        const newPassword = modalNewPassword.value;
+        modalMessageEl.textContent = '';
+        modalMessageEl.classList.remove('text-red-400', 'text-green-400');
+
+        if (!validatePassword(newPassword)) {
+            modalMessageEl.textContent = 'Password does not meet requirements.';
+            modalMessageEl.classList.add('text-red-400');
+            return;
+        }
+
+        try {
+            const response = await fetch(`/api/users/${userId}/password`, {
+                method: 'PUT',
+                headers: { ...headers, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ new_password: newPassword })
+            });
+            if (!response.ok) { throw new Error((await response.json()).detail || 'Failed to change password'); }
+            
+            modalMessageEl.textContent = 'Password changed successfully!';
+            modalMessageEl.classList.add('text-green-400');
+            adminModalForm.reset();
+            setTimeout(() => {
+                adminModal.classList.add('hidden');
+                modalMessageEl.textContent = '';
+            }, 2000);
+
+        } catch (error) {
+            modalMessageEl.textContent = `Error: ${error.message}`;
+            modalMessageEl.classList.add('text-red-400');
         }
     });
 

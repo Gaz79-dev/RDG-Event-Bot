@@ -47,7 +47,7 @@ async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> 
     signups = await db.get_signups_for_event(event_id)
     squad_roles = await db.get_squad_config_roles(guild.id)
     
-    embed = discord.Embed(title=f"📅 {event['title']}", description=event['description'], color=discord.Color.blue())
+    embed = discord.Embed(title=f"� {event['title']}", description=event['description'], color=discord.Color.blue())
     
     time_str = f"**Starts:** {discord.utils.format_dt(event['event_time'], style='F')} ({discord.utils.format_dt(event['event_time'], style='R')})"
     if event['end_time']: time_str += f"\n**Ends:** {discord.utils.format_dt(event['end_time'], style='F')}"
@@ -180,33 +180,24 @@ class RoleSelectionView(ui.View):
         self.add_item(self.subclass_select)
 
     async def on_timeout(self):
-        """Handle the case where the user does not select a role in time."""
         if self.role is None:
-            print(f"Role selection timed out for user {self.user.id} for event {self.event_id}.")
             await self.db.update_signup_role(self.event_id, self.user.id, "Unassigned", None)
             await self.update_original_embed()
             try:
-                await self.user.send(
-                    "Your role selection has timed out. You have been marked as 'Unassigned' for the event. "
-                    "To select a role, please click 'Decline' and then 'Accept' on the event again."
-                )
+                await self.user.send("Your role selection has timed out. You have been marked as 'Unassigned'.")
             except discord.Forbidden:
                 pass
 
     async def update_original_embed(self):
-        """Finds the original event message and updates the embed."""
         event = await self.db.get_event_by_id(self.event_id)
         if not event: return
-
         try:
             channel = self.bot.get_channel(event['channel_id']) or await self.bot.fetch_channel(event['channel_id'])
             message = await channel.fetch_message(self.message_id)
             new_embed = await create_event_embed(self.bot, self.event_id, self.db)
             await message.edit(embed=new_embed)
         except (discord.NotFound, discord.Forbidden):
-            print(f"Could not update original embed for event {self.event_id}")
-        except Exception as e:
-            print(f"Error updating original embed: {e}")
+            pass
 
 class PersistentEventView(ui.View):
     def __init__(self, db: Database):
@@ -214,54 +205,32 @@ class PersistentEventView(ui.View):
         self.db = db
 
     async def update_embed(self, interaction: discord.Interaction, event_id: int):
-        """Safely updates the event embed."""
         try:
             new_embed = await create_event_embed(interaction.client, event_id, self.db)
             await interaction.message.edit(embed=new_embed)
-        except (discord.NotFound, discord.Forbidden) as e:
-            print(f"Error updating embed for event {event_id}: {e}")
         except Exception as e:
-            print(f"Unexpected error updating embed for event {event_id}: {e}")
-            traceback.print_exc()
+            print(f"Error updating embed: {e}")
 
     @ui.button(label="Accept", style=discord.ButtonStyle.success, custom_id="persistent_view:accept")
     async def accept(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        event = await self.db.get_event_by_message_id(interaction.message.id)
+        if not event: return await interaction.followup.send("Event not found.", ephemeral=True)
+        await self.db.set_rsvp(event['event_id'], interaction.user.id, RsvpStatus.ACCEPTED)
         try:
-            await interaction.response.defer(ephemeral=True)
-
-            event = await self.db.get_event_by_message_id(interaction.message.id)
-            if not event:
-                await interaction.followup.send("This event could not be found or is no longer active.", ephemeral=True)
-                return
-
-            await self.db.set_rsvp(event['event_id'], interaction.user.id, RsvpStatus.ACCEPTED)
-            
-            try:
-                role_view = RoleSelectionView(interaction.client, self.db, event['event_id'], interaction.message.id, interaction.user)
-                await interaction.user.send(
-                    f"You have accepted the event: **{event['title']}**.\nPlease select your role for this event below.",
-                    view=role_view
-                )
-                await interaction.followup.send("You have accepted the event! Please check your DMs to select your role.", ephemeral=True)
-            except discord.Forbidden:
-                await self.db.update_signup_role(event['event_id'], interaction.user.id, "Unassigned", None)
-                await interaction.followup.send("You've accepted the event, but I couldn't DM you to select a role. Your role is set to 'Unassigned'. Please enable DMs from server members to use role selection.", ephemeral=True)
-            
-            await self.update_embed(interaction, event['event_id'])
-
-        except Exception as e:
-            print(f"Error in 'Accept' button: {e}"); traceback.print_exc()
-            if not interaction.response.is_done():
-                await interaction.followup.send("An unexpected error occurred.", ephemeral=True)
-            else:
-                await interaction.followup.send("An unexpected error occurred.", ephemeral=True)
+            view = RoleSelectionView(interaction.client, self.db, event['event_id'], interaction.message.id, interaction.user)
+            await interaction.user.send(f"You accepted **{event['title']}**. Please select your role:", view=view)
+            await interaction.followup.send("Check your DMs to select your role!", ephemeral=True)
+        except discord.Forbidden:
+            await self.db.update_signup_role(event['event_id'], interaction.user.id, "Unassigned", None)
+            await interaction.followup.send("Accepted, but I couldn't DM you. Your role is 'Unassigned'.", ephemeral=True)
+        await self.update_embed(interaction, event['event_id'])
 
     @ui.button(label="Tentative", style=discord.ButtonStyle.secondary, custom_id="persistent_view:tentative")
     async def tentative(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer()
         event = await self.db.get_event_by_message_id(interaction.message.id)
         if not event: return
-        
         await self.db.set_rsvp(event['event_id'], interaction.user.id, RsvpStatus.TENTATIVE)
         await self.db.update_signup_role(event['event_id'], interaction.user.id, None, None)
         await self.update_embed(interaction, event['event_id'])
@@ -271,36 +240,33 @@ class PersistentEventView(ui.View):
         await interaction.response.defer()
         event = await self.db.get_event_by_message_id(interaction.message.id)
         if not event: return
-        
         await self.db.set_rsvp(event['event_id'], interaction.user.id, RsvpStatus.DECLINED)
         await self.db.update_signup_role(event['event_id'], interaction.user.id, None, None)
         await self.update_embed(interaction, event['event_id'])
 
-# --- Conversation Class for Event Creation ---
-class Conversation:
-    def __init__(self, cog: 'EventManagement', interaction: discord.Interaction, db: Database, event_id: Optional[int] = None):
+# --- New DM Conversation for Event Creation ---
+class EventCreationConversation:
+    def __init__(self, cog: 'EventManagement', interaction: discord.Interaction, channel: discord.TextChannel):
         self.cog = cog
         self.bot = cog.bot
         self.interaction = interaction
         self.user = interaction.user
-        self.db = db
-        self.event_id = event_id
+        self.channel = channel
+        self.db = cog.db
         self.data = {}
         self.dm_channel = None
-        self.is_editing = bool(event_id)
-        self.timeout = 300.0  # 5 minutes for each step
+        self.timeout = 300.0
 
     async def start(self):
         try:
             self.dm_channel = self.user.dm_channel or await self.user.create_dm()
             await self.dm_channel.send(
-                f"Hello! Let's {'edit an' if self.is_editing else 'create a new'} event. "
-                "Please reply to my questions to fill in the details. "
+                "Hello! Let's create a new event. Please reply to my questions. "
                 "You can type `cancel` at any time to stop."
             )
             await self.ask_title()
         except Exception as e:
-            print(f"Error starting conversation: {e}")
+            print(f"Error starting event creation conversation: {e}")
             self.cog.end_conversation(self.user.id)
 
     def check(self, message):
@@ -319,8 +285,7 @@ class Conversation:
             if validation_func:
                 validated_data = await validation_func(msg.content)
                 if validated_data is None:
-                    # Validation failed, validation_func should have sent a message
-                    await self.ask(question, next_step, validation_func) # Ask again
+                    await self.ask(question, next_step, validation_func)
                     return
                 return await next_step(validated_data)
             else:
@@ -328,69 +293,94 @@ class Conversation:
         except asyncio.TimeoutError:
             await self.dm_channel.send("Event creation timed out. Please start over.")
             self.cog.end_conversation(self.user.id)
-        except Exception as e:
-            await self.dm_channel.send("An unexpected error occurred. Please start over.")
-            print(f"Error during conversation step: {e}")
-            self.cog.end_conversation(self.user.id)
 
     async def ask_title(self):
-        await self.ask("What is the **title** of the event?", self.ask_description)
+        await self.ask("1. What is the **title** of the event?", self.ask_timezone)
 
-    async def ask_description(self, title):
+    async def ask_timezone(self, title):
         self.data['title'] = title
-        await self.ask("What is the **description**? (Type `none` for no description)", self.ask_start_time)
+        await self.ask("2. What is the **timezone**? (e.g., `BST`, `GMT`, `EST`, `US/Eastern`, `Europe/London`)", self.ask_start_datetime, self._validate_timezone)
 
-    async def ask_start_time(self, description):
-        self.data['description'] = None if description.lower() == 'none' else description
-        await self.ask("What is the **start time**? Please be specific (e.g., `July 1 2025 8pm`, `tomorrow 20:00`).", self.ask_timezone, self._validate_time)
-    
-    async def _validate_time(self, content):
+    async def _validate_timezone(self, content):
         try:
-            # Use dateutil.parser for flexible time parsing
-            dt = parse(content)
-            return dt
-        except ValueError:
-            await self.dm_channel.send("Sorry, I couldn't understand that date/time. Please try again (e.g., `YYYY-MM-DD HH:MM`).")
-            return None
-
-    async def ask_timezone(self, start_time):
-        self.data['start_time'] = start_time
-        await self.ask("What is the **timezone**? (e.g., `EST`, `PST`, `Europe/London`).", self.ask_channel)
-    
-    async def ask_channel(self, timezone):
-        try:
-            # Set the timezone for the start time
-            self.data['start_time'] = pytz.timezone(timezone).localize(self.data['start_time'])
-            self.data['timezone'] = timezone
+            return pytz.timezone(content)
         except pytz.UnknownTimeZoneError:
-            await self.dm_channel.send("Unknown timezone. Defaulting to UTC.")
-            self.data['start_time'] = pytz.utc.localize(self.data['start_time'])
-            self.data['timezone'] = 'UTC'
-            
-        channels = [c for c in self.interaction.guild.text_channels]
-        channel_list = "\n".join([f"`{i+1}` - {c.name}" for i, c in enumerate(channels[:15])])
-        await self.ask(f"Finally, which **channel** should I post this in? Please reply with the number.\n{channel_list}", self.finish, lambda c: self._validate_channel(c, channels))
-
-    async def _validate_channel(self, content, channels):
-        try:
-            index = int(content) - 1
-            if 0 <= index < len(channels):
-                return channels[index]
-            else:
-                await self.dm_channel.send("Invalid number. Please choose from the list.")
-                return None
-        except ValueError:
-            await self.dm_channel.send("Please reply with a number.")
+            await self.dm_channel.send("Sorry, that's not a valid timezone. Please try again.")
             return None
 
-    async def finish(self, channel):
-        self.data['channel_id'] = channel.id
-        self.data['mention_role_ids'] = [] # Keeping it simple for now
+    async def ask_start_datetime(self, tz):
+        self.data['timezone'] = tz
+        await self.ask("3. What is the **start date and time**? (Format: `DD-MM-YYYY HH:MM`)", self.ask_end_time, self._validate_start_datetime)
+
+    async def _validate_start_datetime(self, content):
+        try:
+            dt = datetime.datetime.strptime(content, "%d-%m-%Y %H:%M")
+            return self.data['timezone'].localize(dt)
+        except ValueError:
+            await self.dm_channel.send("Invalid format. Please use `DD-MM-YYYY HH:MM`.")
+            return None
+
+    async def ask_end_time(self, start_time):
+        self.data['start_time'] = start_time
+        await self.ask("4. What is the **end time**? (Format: `HH:MM`, or type `none`)", self.ask_description, self._validate_end_time)
+
+    async def _validate_end_time(self, content):
+        if content.lower() == 'none':
+            return None
+        try:
+            end_t = datetime.datetime.strptime(content, "%H:%M").time()
+            start_dt = self.data['start_time']
+            end_dt = start_dt.replace(hour=end_t.hour, minute=end_t.minute, second=0, microsecond=0)
+            if end_dt <= start_dt:
+                end_dt += datetime.timedelta(days=1)
+            return end_dt
+        except ValueError:
+            await self.dm_channel.send("Invalid format. Please use `HH:MM` or `none`.")
+            return None
+
+    async def ask_description(self, end_time):
+        self.data['end_time'] = end_time
+        await self.ask("5. What is the **description** for the event? (Type `none` for no description)", self.ask_recurring)
+
+    async def ask_recurring(self, description):
+        self.data['description'] = None if description.lower() == 'none' else description
+        await self.ask("6. Is this a **recurring** event? (yes/no)", self.ask_restricted_roles, self._validate_yes_no)
+
+    async def _validate_yes_no(self, content):
+        if content.lower() in ['yes', 'y', 'no', 'n']:
+            return content.lower().startswith('y')
+        await self.dm_channel.send("Please answer `yes` or `no`.")
+        return None
+
+    async def ask_restricted_roles(self, is_recurring):
+        self.data['is_recurring'] = is_recurring
+        await self.ask("7. **Restrict signups to specific roles?** (Enter role names, separated by commas, or type `none`)", self.ask_mention_roles, self._validate_roles)
+
+    async def _validate_roles(self, content):
+        if content.lower() == 'none':
+            return []
+        role_names = [r.strip() for r in content.split(',')]
+        roles = []
+        for name in role_names:
+            role = discord.utils.get(self.interaction.guild.roles, name=name)
+            if role:
+                roles.append(role)
+            else:
+                await self.dm_channel.send(f"I couldn't find a role named `{name}`. Please check the spelling and try again.")
+                return None
+        return roles
+
+    async def ask_mention_roles(self, restricted_roles):
+        self.data['restrict_to_role_ids'] = [r.id for r in restricted_roles]
+        await self.ask("8. **Mention roles in the announcement?** (Enter role names, separated by commas, or type `none`)", self.finish, self._validate_roles)
+
+    async def finish(self, mention_roles):
+        self.data['mention_role_ids'] = [r.id for r in mention_roles]
         
         try:
             event_id = await self.db.create_event(
                 self.interaction.guild.id,
-                self.data['channel_id'],
+                self.channel.id,
                 self.user.id,
                 self.data
             )
@@ -398,16 +388,16 @@ class Conversation:
             view = PersistentEventView(self.db)
             embed = await create_event_embed(self.bot, event_id, self.db)
             
-            msg = await channel.send(embed=embed, view=view)
+            content_mentions = " ".join([f"<@&{rid}>" for rid in self.data['mention_role_ids']])
+            msg = await self.channel.send(content=content_mentions, embed=embed, view=view)
             await self.db.update_event_message_id(event_id, msg.id)
 
-            await self.dm_channel.send(f"✅ Event '{self.data['title']}' created successfully in the {channel.mention} channel!")
+            await self.dm_channel.send(f"✅ Event '{self.data['title']}' created successfully in {self.channel.mention}!")
         except Exception as e:
-            await self.dm_channel.send("I failed to create the event in the database. Please check the bot logs.")
+            await self.dm_channel.send("I failed to create the event. Please check the bot logs.")
             print(f"Error finishing conversation: {e}")
         finally:
             self.cog.end_conversation(self.user.id)
-
 
 # --- Main Cog ---
 class EventManagement(commands.Cog):
@@ -417,23 +407,20 @@ class EventManagement(commands.Cog):
         self.active_conversations = {}
 
     def end_conversation(self, user_id: int):
-        """Safely removes a user from the active conversations dictionary."""
         if user_id in self.active_conversations:
             del self.active_conversations[user_id]
 
-    async def start_conversation(self, interaction: discord.Interaction, event_id: int = None):
+    async def start_conversation(self, interaction: discord.Interaction, channel: discord.TextChannel):
         if interaction.user.id in self.active_conversations:
-            await interaction.response.send_message("You are already in an active event creation process.", ephemeral=True)
-            return
+            return await interaction.response.send_message("You are already creating an event.", ephemeral=True)
+        
         try:
-            await interaction.response.send_message("I've sent you a DM to start the process!", ephemeral=True)
-            # This logic is now re-enabled
-            conv = Conversation(self, interaction, self.db, event_id)
+            await interaction.response.send_message("I've sent you a DM to start creating the event!", ephemeral=True)
+            conv = EventCreationConversation(self, interaction, channel)
             self.active_conversations[interaction.user.id] = conv
             await conv.start()
         except discord.Forbidden:
-            await interaction.followup.send("I couldn't send you a DM. Please check your privacy settings.", ephemeral=True)
-            self.end_conversation(interaction.user.id)
+            await interaction.followup.send("I couldn't send you a DM. Please enable DMs from server members.", ephemeral=True)
         except Exception as e:
             print(f"Error starting conversation: {e}")
             traceback.print_exc()
@@ -443,10 +430,9 @@ class EventManagement(commands.Cog):
     event_group = app_commands.Group(name="event", description="Commands for creating and managing events.")
 
     @event_group.command(name="create", description="Create a new event via DM.")
-    async def create(self, interaction: discord.Interaction):
-        await self.start_conversation(interaction)
-
-    # ... (other event commands like edit, delete would go here) ...
+    @app_commands.describe(channel="The channel where the event will be posted.")
+    async def create(self, interaction: discord.Interaction, channel: discord.TextChannel):
+        await self.start_conversation(interaction, channel)
 
     # --- Setup Command Group ---
     setup = app_commands.Group(name="setup", description="Commands for setting up the bot.", default_permissions=discord.Permissions(administrator=True))
@@ -473,7 +459,7 @@ class EventManagement(commands.Cog):
         await interaction.response.send_message(f"Armour specialty role set to {role.mention}.", ephemeral=True)
 
 async def setup(bot: commands.Bot):
-    # The database is now managed in main.py's state
     db = bot.web_app.state.db
     await bot.add_cog(EventManagement(bot, db))
     bot.add_view(PersistentEventView(db))
+�

@@ -2,13 +2,10 @@ import discord
 from discord.ext import commands
 import os
 import asyncio
-import traceback  # --- FIX: Import the traceback module
+import traceback
 from dotenv import load_dotenv
 
-# We need to adjust the path for standalone execution
-import sys
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
+# --- FIX: The sys.path hack is removed. Imports are now relative to the project root. ---
 from bot.utils.database import Database
 
 # Load environment variables from .env file
@@ -24,7 +21,6 @@ class EventBot(commands.Bot):
         """The setup_hook is called when the bot logs in."""
         print("Bot setup hook running...")
         
-        # --- FIX: Use correct dot-notation paths for load_extension ---
         cogs_to_load = [
             'bot.cogs.event_management',
             'bot.cogs.scheduler',
@@ -39,7 +35,7 @@ class EventBot(commands.Bot):
                 print(f"Successfully loaded cog: {cog_path}")
             except Exception as e:
                 print(f"Failed to load cog {cog_path}:")
-                traceback.print_exc() # This will now work correctly
+                traceback.print_exc()
         
         # Sync commands
         guild_id = os.getenv("GUILD_ID")

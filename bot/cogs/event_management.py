@@ -265,6 +265,9 @@ class EventCreationConversation:
                 "You can type `cancel` at any time to stop."
             )
             await self.ask_title()
+        except discord.Forbidden:
+            await self.interaction.followup.send("I couldn't send you a DM. Please enable DMs from server members.", ephemeral=True)
+            self.cog.end_conversation(self.user.id)
         except Exception as e:
             print(f"Error starting event creation conversation: {e}")
             self.cog.end_conversation(self.user.id)
@@ -410,21 +413,31 @@ class EventManagement(commands.Cog):
         if user_id in self.active_conversations:
             del self.active_conversations[user_id]
 
+    async def _start_dm_conversation_task(self, interaction: discord.Interaction, channel: discord.TextChannel):
+        """A helper function to run the conversation as a background task."""
+        try:
+            conv = EventCreationConversation(self, interaction, channel)
+            self.active_conversations[interaction.user.id] = conv
+            await conv.start()
+        except Exception as e:
+            print(f"Error during DM conversation task: {e}")
+            traceback.print_exc()
+            try:
+                # Use followup if the initial response has already been sent
+                await interaction.followup.send("An unexpected error occurred while starting our conversation.", ephemeral=True)
+            except discord.HTTPException:
+                pass # Ignore if we can't send a followup
+            self.end_conversation(interaction.user.id)
+
     async def start_conversation(self, interaction: discord.Interaction, channel: discord.TextChannel):
         if interaction.user.id in self.active_conversations:
             return await interaction.response.send_message("You are already creating an event.", ephemeral=True)
         
-        try:
-            await interaction.response.send_message("I've sent you a DM to start creating the event!", ephemeral=True)
-            conv = EventCreationConversation(self, interaction, channel)
-            self.active_conversations[interaction.user.id] = conv
-            await conv.start()
-        except discord.Forbidden:
-            await interaction.followup.send("I couldn't send you a DM. Please enable DMs from server members.", ephemeral=True)
-        except Exception as e:
-            print(f"Error starting conversation: {e}")
-            traceback.print_exc()
-            self.end_conversation(interaction.user.id)
+        # Acknowledge the interaction immediately. This is crucial.
+        await interaction.response.send_message("I've sent you a DM to start creating the event!", ephemeral=True)
+        
+        # Run the actual conversation logic in a background task so the command doesn't time out.
+        asyncio.create_task(self._start_dm_conversation_task(interaction, channel))
 
     # --- Event Command Group ---
     event_group = app_commands.Group(name="event", description="Commands for creating and managing events.")

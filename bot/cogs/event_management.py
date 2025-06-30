@@ -164,10 +164,20 @@ class ConfirmationView(ui.View):
     def __init__(self):
         super().__init__(timeout=120)
         self.value = None
+    
+    # --- FIX: Separated actions onto their own lines ---
     @ui.button(label="Yes", style=discord.ButtonStyle.green)
-    async def confirm(self, i: discord.Interaction, button: ui.Button): self.value, self.stop() = True, await i.response.defer()
+    async def confirm(self, i: discord.Interaction, button: ui.Button):
+        self.value = True
+        self.stop()
+        await i.response.defer()
+
+    # --- FIX: Separated actions onto their own lines ---
     @ui.button(label="No/Skip", style=discord.ButtonStyle.red)
-    async def cancel(self, i: discord.Interaction, button: ui.Button): self.value, self.stop() = False, await i.response.defer()
+    async def cancel(self, i: discord.Interaction, button: ui.Button):
+        self.value = False
+        self.stop()
+        await i.response.defer()
 
 class TimezoneSelect(ui.Select):
     def __init__(self):
@@ -178,11 +188,9 @@ class TimezoneSelectView(ui.View):
     def __init__(self):
         super().__init__(timeout=180); self.selection: str = None; self.add_item(TimezoneSelect())
 
-# --- FIX: Replaced incorrect MultiRoleSelectView with the correct, two-class pattern ---
 class RoleMultiSelect(ui.RoleSelect):
     def __init__(self, placeholder: str):
         super().__init__(placeholder=placeholder, min_values=1, max_values=25)
-
     async def callback(self, interaction: discord.Interaction):
         self.view.selection = [role.id for role in self.values]
         await interaction.response.defer()
@@ -264,7 +272,7 @@ class Conversation:
                 if msg.content.lower() == 'cancel': return False
                 try:
                     self.data[data_key] = pytz.timezone(self.data.get('timezone', 'UTC')).localize(datetime.datetime.strptime(msg.content, "%d-%m-%Y %H:%M"))
-                    return True # Success
+                    return True
                 except ValueError: await self.user.send("Invalid date format. Please use `DD-MM-YYYY HH:MM`.")
             except asyncio.TimeoutError: await self.user.send("Conversation timed out."); return False
 
@@ -378,4 +386,3 @@ class EventManagement(commands.Cog):
 async def setup(bot: commands.Bot):
     await bot.add_cog(EventManagement(bot, bot.db))
     bot.add_view(PersistentEventView(bot.db))
-    

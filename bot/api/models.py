@@ -15,7 +15,7 @@ class UserBase(BaseModel):
     username: str = Field(..., min_length=3, max_length=50)
 
 class UserCreate(UserBase):
-    password: str = Field(..., min_length=6)
+    password: str = Field(..., min_length=8)
     is_admin: bool = False
 
 class UserUpdate(BaseModel):
@@ -24,10 +24,12 @@ class UserUpdate(BaseModel):
 
 class PasswordChange(BaseModel):
     current_password: str
-    new_password: str = Field(..., min_length=6)
+    new_password: str = Field(..., min_length=8)
+
+class AdminPasswordChange(BaseModel):
+    new_password: str = Field(..., min_length=8)
 
 class User(UserBase):
-    # This tells Pydantic to read data from object attributes (e.g., database records)
     model_config = ConfigDict(from_attributes=True)
     
     id: int

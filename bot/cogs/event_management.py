@@ -47,7 +47,7 @@ async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> 
     signups = await db.get_signups_for_event(event_id)
     squad_roles = await db.get_squad_config_roles(guild.id)
     
-    embed = discord.Embed(title=f"� {event['title']}", description=event['description'], color=discord.Color.blue())
+    embed = discord.Embed(title=f"📅 {event['title']}", description=event['description'], color=discord.Color.blue())
     
     time_str = f"**Starts:** {discord.utils.format_dt(event['event_time'], style='F')} ({discord.utils.format_dt(event['event_time'], style='R')})"
     if event['end_time']: time_str += f"\n**Ends:** {discord.utils.format_dt(event['end_time'], style='F')}"
@@ -462,4 +462,3 @@ async def setup(bot: commands.Bot):
     db = bot.web_app.state.db
     await bot.add_cog(EventManagement(bot, db))
     bot.add_view(PersistentEventView(db))
-�

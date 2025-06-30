@@ -2,10 +2,10 @@ import os
 import traceback
 from fastapi import APIRouter, Depends, HTTPException
 from typing import List
-import httpx # Import the new library
+import httpx
 
-# All other existing imports remain the same
-from ...utils.database import Database
+# Use relative imports from within the 'bot' package
+from ..utils.database import Database, RsvpStatus # --- FIX: Imported RsvpStatus ---
 from .. import auth
 from ..dependencies import get_db
 from ..models import Event, Signup, Channel, Squad, SquadBuildRequest, SendEmbedRequest, SquadMember
@@ -28,7 +28,6 @@ async def get_events(db: Database = Depends(get_db)):
     events = await db.get_upcoming_events()
     return [dict(event) for event in events]
 
-# --- FIX: Refactored this endpoint to call the Discord API directly ---
 @router.get("/{event_id}/signups", response_model=List[Signup])
 async def get_event_signups(event_id: int, db: Database = Depends(get_db)):
     """
@@ -43,12 +42,12 @@ async def get_event_signups(event_id: int, db: Database = Depends(get_db)):
 
     async with httpx.AsyncClient() as client:
         for record in signups_records:
+            # This check will now work correctly
             if record['rsvp_status'] != RsvpStatus.ACCEPTED:
                 continue
             
-            display_name = f"User ID: {record['user_id']}" # Default name
+            display_name = f"User ID: {record['user_id']}"
             
-            # Fetch member data from Discord API
             url = f"https://discord.com/api/v10/guilds/{GUILD_ID}/members/{record['user_id']}"
             try:
                 response = await client.get(url, headers=headers)
@@ -68,5 +67,16 @@ async def get_event_signups(event_id: int, db: Database = Depends(get_db)):
             ))
     return roster
 
-# The other endpoints are removed for now as they also depend on the bot object
-# and are not required for the event selection/roster display to work.
+# Note: The following endpoints will still not be fully functional as they require a
+# more complex refactor to work in a decoupled system, but they will no longer crash.
+@router.get("/channels", response_model=List[Channel])
+async def get_guild_channels():
+    return []
+
+@router.post("/{event_id}/build-squads", response_model=List[Squad])
+async def build_squads_for_event(event_id: int, request: SquadBuildRequest, db: Database = Depends(get_db)):
+    return []
+
+@router.post("/send-embed", status_code=204)
+async def send_squad_embed(request: SendEmbedRequest, db: Database = Depends(get_db)):
+    return

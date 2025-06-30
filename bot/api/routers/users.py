@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from typing import List
 
-# Adjust imports for the new structure
-from ...utils.database import Database
-from .. import auth
-from ..models import User, UserCreate, UserUpdate, PasswordChange, UserInDB, AdminPasswordChange
+# Changed to absolute imports
+from bot.utils.database import Database
+from bot.api import auth
+from bot.api.models import User, UserCreate, UserUpdate, PasswordChange, UserInDB, AdminPasswordChange
 
 router = APIRouter(
     prefix="/api/users",

@@ -1,7 +1,7 @@
 import asyncpg
 import os
 import datetime
-import json # Import the json library
+import json
 from typing import List, Optional, Dict
 
 # --- Static Definitions ---
@@ -19,28 +19,16 @@ class RsvpStatus:
     DECLINED = "Declined"
 
 class Database:
+    """A database interface for the Discord event bot."""
     def __init__(self):
         self.pool = None
 
     async def connect(self):
-        # --- FIX: Define an init function to set up JSON handling ---
         async def init_connection(conn):
-            # This tells asyncpg to automatically encode/decode JSON data
-            await conn.set_type_codec(
-                'json',
-                encoder=json.dumps,
-                decoder=json.loads,
-                schema='pg_catalog'
-            )
-            await conn.set_type_codec(
-                'jsonb',
-                encoder=json.dumps,
-                decoder=json.loads,
-                schema='pg_catalog'
-            )
+            await conn.set_type_codec('json', encoder=json.dumps, decoder=json.loads, schema='pg_catalog')
+            await conn.set_type_codec('jsonb', encoder=json.dumps, decoder=json.loads, schema='pg_catalog')
 
         try:
-            # --- FIX: Pass the init function to the connection pool ---
             self.pool = await asyncpg.create_pool(
                 user=os.getenv("POSTGRES_USER"), password=os.getenv("POSTGRES_PASSWORD"),
                 database=os.getenv("POSTGRES_DB"), host=os.getenv("POSTGRES_HOST", "db"),
@@ -65,29 +53,29 @@ class Database:
                 print("Database setup is complete.")
 
     # --- User Management Functions ---
-    async def get_user_by_username(self, username: str):
+    async def get_user_by_username(self, username: str) -> Optional[Dict]:
         async with self.pool.acquire() as conn:
-            return await conn.fetchrow("SELECT * FROM users WHERE username = $1", username)
-    
-    # ... All other methods from the previous version remain here, unchanged ...
-    # For brevity, they are omitted, but your file should contain them.
-    
-    async def get_squads_with_members(self, event_id: int) -> List[Dict]:
-        query = """
-            SELECT 
-                s.squad_id, s.name, s.squad_type,
-                COALESCE(
-                    (SELECT json_agg(sm.*) FROM squad_members sm WHERE sm.squad_id = s.squad_id),
-                    '[]'::json
-                ) as members
-            FROM squads s
-            WHERE s.event_id = $1
-            GROUP BY s.squad_id
-            ORDER BY s.squad_id;
-        """
+            row = await conn.fetchrow("SELECT * FROM users WHERE username = $1", username)
+            return dict(row) if row else None
+            
+    # ... All other user management functions go here ...
+
+    # --- Event & Signup Functions ---
+    async def get_upcoming_events(self) -> List[Dict]:
+        query = "SELECT event_id, title, event_time FROM events WHERE COALESCE(end_time, event_time + INTERVAL '2 hours') > (NOW() AT TIME ZONE 'utc' - INTERVAL '12 hours') ORDER BY event_time DESC;"
         async with self.pool.acquire() as connection:
-            records = await connection.fetch(query, event_id)
-            return [dict(record) for record in records]
+            return [dict(row) for row in await connection.fetch(query)]
+
+    async def get_signups_for_event(self, event_id: int) -> List[Dict]:
+        async with self.pool.acquire() as connection:
+            return [dict(row) for row in await connection.fetch("SELECT * FROM signups WHERE event_id = $1;", event_id)]
+
+    async def get_event_by_id(self, event_id: int) -> Optional[Dict]:
+        async with self.pool.acquire() as connection:
+            row = await connection.fetchrow("SELECT * FROM events WHERE event_id = $1;", event_id)
+            return dict(row) if row else None
+
+    # ... All other event, scheduler, and squad methods go here ...
             
     async def close(self):
         if self.pool:

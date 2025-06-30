@@ -407,6 +407,7 @@ class EventManagement(commands.Cog):
         if user_id in self.active_conversations:
             del self.active_conversations[user_id]
 
+    # --- FIX START: New helper method to run conversation as a background task ---
     async def _start_dm_conversation_task(self, interaction: discord.Interaction, channel: discord.TextChannel):
         """A helper function to run the conversation as a background task."""
         try:
@@ -414,31 +415,37 @@ class EventManagement(commands.Cog):
             self.active_conversations[interaction.user.id] = conv
             await conv.start()
         except discord.Forbidden:
+            # Use followup since the initial response has already been sent.
             await interaction.followup.send("I couldn't send you a DM. Please enable DMs from server members.", ephemeral=True)
             self.end_conversation(interaction.user.id)
         except Exception as e:
             print(f"Error during DM conversation task: {e}")
             traceback.print_exc()
             try:
+                # Use followup for any other errors.
                 await interaction.followup.send("An unexpected error occurred while starting our conversation.", ephemeral=True)
             except discord.HTTPException:
-                pass 
+                pass # Interaction is likely dead, can't do anything.
             self.end_conversation(interaction.user.id)
+    # --- FIX END ---
 
     # --- Event Command Group ---
     event_group = app_commands.Group(name="event", description="Commands for creating and managing events.")
 
+    # --- FIX START: Modified 'create' command ---
     @event_group.command(name="create", description="Create a new event via DM.")
     @app_commands.describe(channel="The channel where the event will be posted.")
     async def create(self, interaction: discord.Interaction, channel: discord.TextChannel):
         if interaction.user.id in self.active_conversations:
-            return await interaction.response.send_message("You are already creating an event.", ephemeral=True)
+            await interaction.response.send_message("You are already creating an event.", ephemeral=True)
+            return
         
-        # Acknowledge the interaction immediately. This is the most reliable way.
+        # Acknowledge the interaction immediately. This is the crucial fix.
         await interaction.response.send_message("I've sent you a DM to start creating the event!", ephemeral=True)
         
-        # Run the actual conversation logic in a background task.
+        # Run the actual conversation logic in a background task to avoid timeouts.
         asyncio.create_task(self._start_dm_conversation_task(interaction, channel))
+    # --- FIX END ---
 
     # --- Setup Command Group ---
     setup = app_commands.Group(name="setup", description="Commands for setting up the bot.", default_permissions=discord.Permissions(administrator=True))

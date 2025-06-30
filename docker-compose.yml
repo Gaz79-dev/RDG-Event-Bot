@@ -1,44 +1,67 @@
 services:
+  # The Discord Bot Service
+  bot:
+    build: .
+    container_name: discord-squad-bot
+    restart: always
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy # Wait for db to be ready
+    # Command to run the dedicated bot script
+    command: python bot/bot.py
+
+  # The FastAPI Web App Service
+  web:
+    build: .
+    container_name: discord-squad-web
+    restart: always
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy # Wait for db to be ready
+    # Expose port 8000 for Nginx to connect to
+    ports:
+      - "8000:8000"
+    # Command to run the web server
+    command: uvicorn bot.main:app --host 0.0.0.0 --port 8000
+
+  # The Nginx Proxy Service
+  nginx:
+    image: nginx:latest
+    container_name: discord-squad-nginx
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Mount your nginx config
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      # Volumes for Certbot SSL certificates
+      - ./data/certbot/conf:/etc/letsencrypt:ro
+      - ./data/certbot/www:/var/www/certbot:ro
+    depends_on:
+      - web
+
+  # The PostgreSQL Database Service
   db:
     image: postgres:14
-    container_name: postgres-db
+    container_name: postgres-squad-db
     restart: always
-    env_file: .env
+    env_file:
+      - .env
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - ./data/postgres:/var/lib/postgresql/data
     ports:
       - "5433:5432"
+    # Healthcheck to ensure other services can wait for the DB
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 60s
-
-  app:
-    build: .
-    container_name: discord-squad-app
-    restart: always
-    env_file: .env
-    depends_on:
-      db:
-        condition: service_healthy
-    volumes:
-      - .:/usr/src/app
-    command: uvicorn bot.main:app --host 0.0.0.0 --port 8000
-
-  nginx:
-    image: nginx:latest
-    container_name: nginx-proxy
-    restart: always
-    ports:
-      - "80:80" # We only need port 80 for HTTP
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-    depends_on:
-      - app
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
 
 volumes:
   postgres_data:

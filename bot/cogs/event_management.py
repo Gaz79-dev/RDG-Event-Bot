@@ -10,10 +10,10 @@ import asyncio
 from typing import List, Dict, Optional
 from collections import defaultdict
 
-# Use relative import to go up one level to the 'bot' package root
+# Corrected relative import path
 from ..utils.database import Database, RsvpStatus, ROLES, SUBCLASSES, RESTRICTED_ROLES
 
-# --- FIX: EMOJI_MAPPING restored ---
+# --- Constants & Helpers ---
 EMOJI_MAPPING = {
     "Commander": os.getenv("EMOJI_COMMANDER", "⭐"), "Infantry": os.getenv("EMOJI_INFANTRY", "💂"),
     "Armour": os.getenv("EMOJI_ARMOUR", "🛡️"), "Recon": os.getenv("EMOJI_RECON", "👁️"),
@@ -26,7 +26,6 @@ EMOJI_MAPPING = {
     "Sniper": os.getenv("EMOJI_SNIPER", "🎯"), "Unassigned": "❔"
 }
 
-# --- Helper function to generate the event embed ---
 async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> discord.Embed:
     event = await db.get_event_by_id(event_id)
     if not event: return discord.Embed(title="Error", description="Event not found.", color=discord.Color.red())
@@ -173,7 +172,6 @@ class PersistentEventView(ui.View):
             await self.db.update_signup_role(event['event_id'], i.user.id, None, None)
             await self.update_embed(i, event['event_id'])
 
-# This is the Conversation class from your working reference file
 class Conversation:
     def __init__(self, cog: 'EventManagement', interaction: discord.Interaction, db: Database, event_id: int = None):
         self.cog, self.bot, self.interaction, self.user, self.db, self.event_id = cog, cog.bot, interaction, interaction.user, db, event_id
@@ -203,9 +201,11 @@ class Conversation:
             self.data[data_key] = msg.content; return True
         except asyncio.TimeoutError: await self.user.send("You took too long. Conversation cancelled."); await self.cancel(); return False
     async def finish(self):
+        # This should contain the full logic from your working file to save/update the event
         if self.is_finished: return
         self.is_finished = True
-        # ... full finish logic from your working file ...
+        # ... full finish logic ...
+        print("Conversation finished.")
     async def cancel(self):
         if self.is_finished: return
         self.is_finished = True
@@ -219,26 +219,27 @@ class EventManagement(commands.Cog):
         self.db = db
         self.active_conversations = {}
 
-    # --- Event Command Group ---
+    # --- Only the 'event' command group lives here now ---
     event_group = app_commands.Group(name="event", description="Commands for creating and managing events.")
 
     @event_group.command(name="create", description="Create a new event via DM.")
     async def create(self, interaction: discord.Interaction):
         await self.start_conversation(interaction)
-    
-    # ... other event commands ...
 
-    # --- Setup Command Group ---
-    setup_group = app_commands.Group(name="setup", description="Commands for setting up the bot.", default_permissions=discord.Permissions(administrator=True))
-    squad_config_group = app_commands.Group(name="squad_config", description="Commands for configuring squad roles.", parent=setup_group)
+    @event_group.command(name="edit", description="Edit an existing event via DM.")
+    @app_commands.describe(event_id="The ID of the event to edit.")
+    async def edit(self, interaction: discord.Interaction, event_id: int):
+        event = await self.db.get_event_by_id(event_id)
+        if not event or event['guild_id'] != interaction.guild_id:
+            await interaction.response.send_message("Event not found.", ephemeral=True)
+            return
+        await self.start_conversation(interaction, event_id)
 
-    @squad_config_group.command(name="attack_role", description="Set the role for Attack specialty.")
-    async def set_attack_role(self, interaction: discord.Interaction, role: discord.Role):
-        await self.db.set_squad_config_role(interaction.guild.id, "attack", role.id)
-        await interaction.response.send_message(f"Attack specialty role set to {role.mention}.", ephemeral=True)
-    
-    # ... other setup commands ...
-    
+    @event_group.command(name="delete", description="Delete an existing event by its ID.")
+    @app_commands.describe(event_id="The ID of the event to delete.")
+    async def delete(self, interaction: discord.Interaction, event_id: int):
+        await interaction.response.send_message("Delete functionality placeholder.", ephemeral=True)
+
     # Helper method to start conversations
     async def start_conversation(self, interaction: discord.Interaction, event_id: int = None):
         if interaction.user.id in self.active_conversations:

@@ -80,7 +80,7 @@
                     <input type="password" id="confirm-new-password" required class="mt-1 block w-full bg-gray-700 border-gray-600 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500">
                 </div>
                 <div class="md:col-span-3">
-                    <button type="submit" class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-md">Change Password</button>
+                    <button type="submit" class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-md">Change My Password</button>
                 </div>
             </form>
             <div class="mt-4 text-sm text-gray-400">
@@ -96,6 +96,26 @@
             <p id="password-change-message" class="text-center mt-4"></p>
         </section>
     </main>
+
+    <!-- Admin Change Password Modal -->
+    <div id="admin-change-password-modal" class="hidden fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50">
+        <div class="bg-gray-800 p-8 rounded-lg shadow-xl w-full max-w-md">
+            <h2 class="text-xl font-semibold mb-4 text-white">Change Password for <span id="modal-username" class="font-bold"></span></h2>
+            <form id="admin-change-password-form-modal">
+                <input type="hidden" id="modal-user-id">
+                <div>
+                    <label for="modal-new-password" class="block text-sm font-medium">New Password</label>
+                    <input type="password" id="modal-new-password" required class="mt-1 block w-full bg-gray-700 border-gray-600 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                </div>
+                <p id="modal-password-change-message" class="text-center my-4"></p>
+                <div class="mt-6 flex justify-end space-x-4">
+                    <button type="button" id="modal-cancel-btn" class="bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-md">Cancel</button>
+                    <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md">Submit</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
 
     <script src="/static/auth.js"></script>
     <script src="/static/admin.js"></script>

@@ -30,7 +30,7 @@ EMOJI_MAPPING = {
     "Officer": os.getenv("EMOJI_OFFICER", "🫡"),
     "Rifleman": os.getenv("EMOJI_RIFLEMAN", "👤"),
     "Support": os.getenv("EMOJI_SUPPORT", "🔧"),
-    "Tank Commander": os.getenv("EMOJI_TANK_COMMANDER", "🧑‍✈️"),
+    "Tank Commander": os.getenv("EMOJI_TANK_COMMANDER", "�‍✈️"),
     "Crewman": os.getenv("EMOJI_CREWMAN", "👨‍🔧"),
     "Spotter": os.getenv("EMOJI_SPOTTER", "👀"),
     "Sniper": os.getenv("EMOJI_SNIPER", "🎯"),
@@ -252,6 +252,7 @@ class EventCreationConversation:
         self.interaction = interaction
         self.user = interaction.user
         self.channel = channel
+        self.guild = interaction.guild
         self.db = cog.db
         self.data = {}
         self.dm_channel = None
@@ -358,7 +359,7 @@ class EventCreationConversation:
         role_names = [r.strip() for r in content.split(',')]
         roles = []
         for name in role_names:
-            role = discord.utils.get(self.interaction.guild.roles, name=name)
+            role = discord.utils.get(self.guild.roles, name=name)
             if role:
                 roles.append(role)
             else:
@@ -375,7 +376,7 @@ class EventCreationConversation:
         
         try:
             event_id = await self.db.create_event(
-                self.interaction.guild.id,
+                self.guild.id,
                 self.channel.id,
                 self.user.id,
                 self.data
@@ -409,6 +410,8 @@ class EventManagement(commands.Cog):
     async def _start_dm_conversation_task(self, interaction: discord.Interaction, channel: discord.TextChannel):
         """A helper function to run the conversation as a background task."""
         try:
+            # We send an initial followup to the deferred response so the user knows what's happening.
+            await interaction.followup.send("I've sent you a DM to start creating the event!", ephemeral=True)
             conv = EventCreationConversation(self, interaction, channel)
             self.active_conversations[interaction.user.id] = conv
             await conv.start()
@@ -434,7 +437,7 @@ class EventManagement(commands.Cog):
             return await interaction.response.send_message("You are already creating an event.", ephemeral=True)
         
         # Defer the response immediately to guarantee a response within 3 seconds.
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.defer(ephemeral=True, thinking=True)
         
         # Run the actual conversation logic in a background task.
         asyncio.create_task(self._start_dm_conversation_task(interaction, channel))
@@ -467,3 +470,4 @@ async def setup(bot: commands.Bot):
     db = bot.web_app.state.db
     await bot.add_cog(EventManagement(bot, db))
     bot.add_view(PersistentEventView(db))
+�

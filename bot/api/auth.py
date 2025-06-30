@@ -1,15 +1,15 @@
 import os
 from datetime import datetime, timedelta
 from typing import Optional
-
 from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from passlib.context import CryptContext
+from fastapi import APIRouter
 
-# This import will be relative when the app runs
-from ..utils.database import Database
-from .models import Token, TokenData, UserInDB # <--- ADDED Token to this import
+# Changed to absolute imports
+from bot.utils.database import Database
+from bot.api.models import Token, TokenData, UserInDB
 
 # --- Configuration ---
 SECRET_KEY = os.getenv("SECRET_KEY")
@@ -101,9 +101,6 @@ async def get_current_admin_user(current_user: UserInDB = Depends(get_current_ac
     return current_user
 
 # --- API Router for Authentication ---
-from fastapi import APIRouter
-from datetime import timedelta
-
 router = APIRouter()
 
 @router.post("/token", response_model=Token)

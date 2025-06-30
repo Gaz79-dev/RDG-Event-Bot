@@ -37,15 +37,115 @@ class Database:
             raise
 
     async def _initial_setup(self):
-        # ... The _initial_setup method remains the same ...
-        pass
-    
-    # --- FIX: Added the correct database method to fetch events for the website ---
+        """Sets up all necessary tables and performs schema migrations."""
+        async with self.pool.acquire() as connection:
+            async with connection.transaction():
+                # --- FIX: Added the 'users' table required by the Web UI ---
+                await connection.execute("""
+                    CREATE TABLE IF NOT EXISTS users (
+                        id SERIAL PRIMARY KEY,
+                        username VARCHAR(50) UNIQUE NOT NULL,
+                        hashed_password VARCHAR(255) NOT NULL,
+                        is_active BOOLEAN DEFAULT TRUE,
+                        is_admin BOOLEAN DEFAULT FALSE
+                    );
+                """)
+                await connection.execute("""
+                    CREATE TABLE IF NOT EXISTS guilds (
+                        guild_id BIGINT PRIMARY KEY, event_manager_role_ids BIGINT[],
+                        commander_role_id BIGINT, recon_role_id BIGINT, officer_role_id BIGINT,
+                        tank_commander_role_id BIGINT, thread_creation_hours INT DEFAULT 24,
+                        squad_attack_role_id BIGINT, squad_defence_role_id BIGINT,
+                        squad_arty_role_id BIGINT, squad_armour_role_id BIGINT
+                    );
+                """)
+                await connection.execute("""
+                    CREATE TABLE IF NOT EXISTS events (
+                        event_id SERIAL PRIMARY KEY, guild_id BIGINT NOT NULL, creator_id BIGINT NOT NULL,
+                        message_id BIGINT UNIQUE, channel_id BIGINT NOT NULL, thread_id BIGINT,
+                        title VARCHAR(255) NOT NULL, description TEXT, 
+                        event_time TIMESTAMP WITH TIME ZONE NOT NULL, end_time TIMESTAMP WITH TIME ZONE,
+                        timezone VARCHAR(100), created_at TIMESTAMP WITH TIME ZONE DEFAULT (NOW() AT TIME ZONE 'utc'),
+                        thread_created BOOLEAN DEFAULT FALSE, is_recurring BOOLEAN DEFAULT FALSE,
+                        recurrence_rule VARCHAR(50), mention_role_ids BIGINT[], restrict_to_role_ids BIGINT[],
+                        recreation_hours INT, parent_event_id INT REFERENCES events(event_id) ON DELETE SET NULL,
+                        last_recreated_at TIMESTAMP WITH TIME ZONE
+                    );
+                """)
+                await connection.execute("""
+                    CREATE TABLE IF NOT EXISTS signups (
+                        signup_id SERIAL PRIMARY KEY, event_id INT REFERENCES events(event_id) ON DELETE CASCADE,
+                        user_id BIGINT NOT NULL, role_name VARCHAR(100), subclass_name VARCHAR(100),
+                        rsvp_status VARCHAR(10) NOT NULL, UNIQUE(event_id, user_id)
+                    );
+                """)
+                await connection.execute("""
+                    CREATE TABLE IF NOT EXISTS squads (
+                        squad_id SERIAL PRIMARY KEY,
+                        event_id INT NOT NULL REFERENCES events(event_id) ON DELETE CASCADE,
+                        name VARCHAR(100) NOT NULL, squad_type VARCHAR(50) NOT NULL
+                    );
+                """)
+                await connection.execute("""
+                    CREATE TABLE IF NOT EXISTS squad_members (
+                        squad_member_id SERIAL PRIMARY KEY,
+                        squad_id INT NOT NULL REFERENCES squads(squad_id) ON DELETE CASCADE,
+                        user_id BIGINT NOT NULL, assigned_role_name VARCHAR(100) NOT NULL,
+                        UNIQUE(squad_id, user_id)
+                    );
+                """)
+                print("Database setup is complete.")
+
+    # --- FIX: Added all missing User Management Functions ---
+    async def get_user_by_username(self, username: str) -> Optional[Dict]:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT * FROM users WHERE username = $1", username)
+            return dict(row) if row else None
+
+    async def get_user_by_id(self, user_id: int) -> Optional[Dict]:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT * FROM users WHERE id = $1", user_id)
+            return dict(row) if row else None
+
+    async def get_all_users(self) -> List[Dict]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("SELECT * FROM users ORDER BY username;")
+            return [dict(row) for row in rows]
+
+    async def create_user(self, username: str, hashed_password: str, is_admin: bool = False) -> int:
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval(
+                "INSERT INTO users (username, hashed_password, is_admin) VALUES ($1, $2, $3) RETURNING id",
+                username, hashed_password, is_admin
+            )
+
+    async def update_user_password(self, user_id: int, new_hashed_password: str):
+        async with self.pool.acquire() as conn:
+            await conn.execute("UPDATE users SET hashed_password = $1 WHERE id = $2", new_hashed_password, user_id)
+
+    async def update_user_status(self, user_id: int, is_active: Optional[bool], is_admin: Optional[bool]):
+        query_parts = []
+        params = []
+        if is_active is not None:
+            params.append(is_active)
+            query_parts.append(f"is_active = ${len(params)}")
+        if is_admin is not None:
+            params.append(is_admin)
+            query_parts.append(f"is_admin = ${len(params)}")
+        
+        if not query_parts: return
+        
+        params.append(user_id)
+        query = f"UPDATE users SET {', '.join(query_parts)} WHERE id = ${len(params)}"
+        async with self.pool.acquire() as conn:
+            await conn.execute(query, *params)
+
+    async def delete_user(self, user_id: int):
+        async with self.pool.acquire() as conn:
+            await conn.execute("DELETE FROM users WHERE id = $1", user_id)
+
+    # --- Event & Scheduler Functions ---
     async def get_upcoming_events(self) -> List[Dict]:
-        """
-        Fetches events that are active or upcoming.
-        This includes events that have ended within the last 12 hours to allow for late squad building.
-        """
         query = """
             SELECT event_id, title, event_time 
             FROM events
@@ -55,5 +155,4 @@ class Database:
         async with self.pool.acquire() as connection:
             return await connection.fetch(query)
 
-    # --- All other database methods remain the same ---
-    # ... (get_events_for_thread_creation, create_squad, etc.) ...
+    # ... all other existing methods (get_events_for_recreation, create_squad, etc.) remain below ...

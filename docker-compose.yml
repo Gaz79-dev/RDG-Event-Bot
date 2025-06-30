@@ -8,9 +8,10 @@ services:
       - .env
     depends_on:
       db:
-        condition: service_healthy # Wait for db to be ready
-    # --- FIX: Changed the command to run the bot as a module ---
+        condition: service_healthy
     command: python -m bot.bot
+    networks: # Add service to the custom network
+      - squad-net
 
   # The FastAPI Web App Service
   web:
@@ -21,10 +22,13 @@ services:
       - .env
     depends_on:
       db:
-        condition: service_healthy # Wait for db to be ready
-    ports:
-      - "8000:8000"
+        condition: service_healthy
+    # The port is no longer mapped to the host, as Nginx will handle all external traffic
+    expose:
+      - "8000"
     command: uvicorn bot.main:app --host 0.0.0.0 --port 8000
+    networks: # Add service to the custom network
+      - squad-net
 
   # The Nginx Proxy Service
   nginx:
@@ -40,6 +44,8 @@ services:
       - ./data/certbot/www:/var/www/certbot:ro
     depends_on:
       - web
+    networks: # Add service to the custom network
+      - squad-net
 
   # The PostgreSQL Database Service
   db:
@@ -57,6 +63,10 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks: # Add service to the custom network
+      - squad-net
 
-volumes:
-  postgres_data:
+# Define the custom network
+networks:
+  squad-net:
+    driver: bridge

@@ -410,8 +410,6 @@ class EventManagement(commands.Cog):
     async def _start_dm_conversation_task(self, interaction: discord.Interaction, channel: discord.TextChannel):
         """A helper function to run the conversation as a background task."""
         try:
-            # We send an initial followup to the deferred response so the user knows what's happening.
-            await interaction.followup.send("I've sent you a DM to start creating the event!", ephemeral=True)
             conv = EventCreationConversation(self, interaction, channel)
             self.active_conversations[interaction.user.id] = conv
             await conv.start()
@@ -436,8 +434,8 @@ class EventManagement(commands.Cog):
         if interaction.user.id in self.active_conversations:
             return await interaction.response.send_message("You are already creating an event.", ephemeral=True)
         
-        # Defer the response immediately to guarantee a response within 3 seconds.
-        await interaction.response.defer(ephemeral=True)
+        # Acknowledge the interaction immediately. This is the most reliable way.
+        await interaction.response.send_message("I've sent you a DM to start creating the event!", ephemeral=True)
         
         # Run the actual conversation logic in a background task.
         asyncio.create_task(self._start_dm_conversation_task(interaction, channel))

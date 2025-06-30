@@ -19,14 +19,11 @@ document.addEventListener('DOMContentLoaded', () => {
                  return;
             }
             if (!response.ok) {
-                // Try to get error detail from the server
                 let errorMsg = 'Failed to fetch users';
                 try {
                     const errorData = await response.json();
                     errorMsg = errorData.detail || errorMsg;
-                } catch (e) {
-                    // Ignore if response is not JSON
-                }
+                } catch (e) { /* Ignore if response is not JSON */ }
                 throw new Error(errorMsg);
             }
             
@@ -85,13 +82,60 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Handle change password form submission
     if (changePasswordForm) {
+        const newPasswordInput = document.getElementById('new-password-change');
+        const confirmPasswordInput = document.getElementById('confirm-new-password');
+        const messageEl = document.getElementById('password-change-message');
+
+        // Password validation UI elements
+        const pwLength = document.getElementById('pw-length');
+        const pwCase = document.getElementById('pw-case');
+        const pwNumber = document.getElementById('pw-number');
+        const pwSpecial = document.getElementById('pw-special');
+
+        function validatePassword(password) {
+            const validations = {
+                length: password.length >= 8,
+                case: /[a-z]/.test(password) && /[A-Z]/.test(password),
+                number: /[0-9]/.test(password),
+                special: /[!@#$%^&*()_+\-=\[\]{}|;':",./<>?]/.test(password)
+            };
+
+            // Update UI feedback for password requirements
+            pwLength.style.color = validations.length ? 'lightgreen' : 'inherit';
+            pwCase.style.color = validations.case ? 'lightgreen' : 'inherit';
+            pwNumber.style.color = validations.number ? 'lightgreen' : 'inherit';
+            pwSpecial.style.color = validations.special ? 'lightgreen' : 'inherit';
+
+            return Object.values(validations).every(Boolean);
+        }
+
+        // Add live validation feedback as the user types
+        newPasswordInput.addEventListener('input', () => {
+            validatePassword(newPasswordInput.value);
+        });
+
         changePasswordForm.addEventListener('submit', async (e) => {
             e.preventDefault();
-            const currentPassword = e.target['current-password'].value;
-            const newPassword = e.target['new-password-change'].value;
-            const messageEl = document.getElementById('password-change-message');
+            const currentPassword = document.getElementById('current-password').value;
+            const newPassword = newPasswordInput.value;
+            const confirmPassword = confirmPasswordInput.value;
+            
             messageEl.textContent = '';
             messageEl.classList.remove('text-green-400', 'text-red-400');
+
+            // --- Validation Checks ---
+            if (newPassword !== confirmPassword) {
+                messageEl.textContent = 'Error: New passwords do not match.';
+                messageEl.classList.add('text-red-400');
+                return;
+            }
+
+            if (!validatePassword(newPassword)) {
+                messageEl.textContent = 'Error: New password does not meet all requirements.';
+                messageEl.classList.add('text-red-400');
+                return;
+            }
+            // --- End Validation ---
 
             try {
                 const response = await fetch('/api/users/me/password', {
@@ -108,6 +152,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 messageEl.textContent = 'Password changed successfully!';
                 messageEl.classList.add('text-green-400');
                 changePasswordForm.reset();
+                // Reset validation UI colors
+                validatePassword('');
 
             } catch (error) {
                 messageEl.textContent = `Error: ${error.message}`;
@@ -124,7 +170,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const userId = e.target.dataset.id;
 
         if (action === 'delete') {
-            // Using a custom modal/confirm is better, but for simplicity:
             if (!window.confirm('Are you sure you want to delete this user? This cannot be undone.')) return;
             try {
                 await fetch(`/api/users/${userId}`, { method: 'DELETE', headers });

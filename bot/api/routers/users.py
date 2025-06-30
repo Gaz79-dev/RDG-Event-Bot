@@ -4,7 +4,7 @@ from typing import List
 # Adjust imports for the new structure
 from ...utils.database import Database
 from .. import auth
-from ..models import User, UserCreate, UserUpdate, PasswordChange, UserInDB
+from ..models import User, UserCreate, UserUpdate, PasswordChange, UserInDB, AdminPasswordChange
 
 router = APIRouter(
     prefix="/api/users",
@@ -19,7 +19,6 @@ async def read_users(db: Database = Depends(auth.get_db)):
     Retrieve all users. Only accessible by admin users.
     """
     users_records = await db.get_all_users()
-    # Explicitly cast each database record to a dict before validation.
     return [User.model_validate(dict(user)) for user in users_records]
 
 @router.post("/", response_model=User, status_code=status.HTTP_201_CREATED, dependencies=[Depends(auth.get_current_admin_user)])
@@ -37,9 +36,7 @@ async def create_user(user: UserCreate, db: Database = Depends(auth.get_db)):
     created_user_record = await db.get_user_by_id(user_id)
     if not created_user_record:
          raise HTTPException(status_code=500, detail="Failed to retrieve created user")
-    # Explicitly cast the database record to a dict before validation.
     return User.model_validate(dict(created_user_record))
-
 
 @router.get("/me", response_model=User)
 async def read_users_me(current_user: User = Depends(auth.get_current_active_user)):
@@ -64,6 +61,23 @@ async def change_own_password(
     await db.update_user_password(user_id=current_user.id, new_hashed_password=new_hashed_password)
     return
 
+@router.put("/{user_id}/password", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(auth.get_current_admin_user)])
+async def admin_change_user_password(
+    user_id: int,
+    password_data: AdminPasswordChange,
+    db: Database = Depends(auth.get_db)
+):
+    """
+    Allows an admin to change any user's password.
+    """
+    db_user = await db.get_user_by_id(user_id)
+    if not db_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    new_hashed_password = auth.get_password_hash(password_data.new_password)
+    await db.update_user_password(user_id=user_id, new_hashed_password=new_hashed_password)
+    return
+
 @router.put("/{user_id}", response_model=User, dependencies=[Depends(auth.get_current_admin_user)])
 async def update_user(
     user_id: int, 
@@ -81,7 +95,6 @@ async def update_user(
     updated_user_record = await db.get_user_by_id(user_id)
     if not updated_user_record:
          raise HTTPException(status_code=500, detail="Failed to retrieve updated user")
-    # Explicitly cast the database record to a dict before validation.
     return User.model_validate(dict(updated_user_record))
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(auth.get_current_admin_user)])

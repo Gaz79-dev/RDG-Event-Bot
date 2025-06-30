@@ -106,8 +106,21 @@ class SquadBuilder(commands.Cog):
         embed = discord.Embed(title=f"🛠️ Squad Workshop for: {event['title']}", color=discord.Color.gold())
         for squad in squads:
             members = await self.db.get_squad_members(squad['squad_id'])
-            member_list = [f"**{m['assigned_role_name']}:** {(guild.get_member(m['user_id']) or f'ID: {m["user_id"]}').display_name}" for m in members]
+            
+            # --- FIX START: Replaced the problematic list comprehension ---
+            member_list = []
+            for m in members:
+                member_obj = guild.get_member(m['user_id'])
+                if member_obj:
+                    name = member_obj.display_name
+                else:
+                    name = f"ID: {m['user_id']}"
+                
+                member_list.append(f"**{m['assigned_role_name']}:** {name}")
+            # --- FIX END ---
+            
             embed.add_field(name=f"__**{squad['name']}**__ ({squad['squad_type']})", value="\n".join(member_list) or "Empty", inline=True)
+            
         embed.set_footer(text=f"Event ID: {event_id}")
         return embed
 

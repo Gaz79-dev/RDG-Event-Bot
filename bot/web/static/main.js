@@ -50,7 +50,6 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         
-        // Fetch and display roster
         const response = await fetch(`/api/events/${eventId}/signups`, { headers });
         const roster = await response.json();
         rosterList.innerHTML = '';
@@ -61,7 +60,6 @@ document.addEventListener('DOMContentLoaded', () => {
             rosterList.appendChild(div);
         });
 
-        // Populate build form
         const formFields = [
             { label: 'Infantry Squad Size', id: 'infantry_squad_size', value: 6 },
             { label: 'Attack Squads', id: 'attack_squads', value: 2 },
@@ -127,7 +125,8 @@ document.addEventListener('DOMContentLoaded', () => {
         sendBtn.disabled = true;
 
         try {
-            await fetch('/api/send-embed', {
+            // --- FIX: Changed URL from '/api/send-embed' to '/api/events/send-embed' ---
+            await fetch('/api/events/send-embed', {
                 method: 'POST',
                 headers: { ...headers, 'Content-Type': 'application/json' },
                 body: JSON.stringify({ channel_id: parseInt(channelId), squads: currentSquads })

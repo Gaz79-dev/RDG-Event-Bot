@@ -241,7 +241,7 @@ class PersistentEventView(ui.View):
         await self.db.update_signup_role(event['event_id'], interaction.user.id, None, None)
         await self.update_embed(interaction, event['event_id'])
 
-# --- FIX START: New Modal for Event Creation ---
+# --- Modal for Event Creation ---
 class EventCreationModal(ui.Modal, title='Create a New Event'):
     def __init__(self, bot: commands.Bot, db: Database, channel: discord.TextChannel):
         super().__init__()
@@ -249,7 +249,7 @@ class EventCreationModal(ui.Modal, title='Create a New Event'):
         self.db = db
         self.target_channel = channel
 
-    # --- Modal Fields ---
+    # --- Modal Fields (Limited to 5) ---
     event_title = ui.TextInput(label='Event Title', placeholder='e.g., Operation Overlord', required=True)
     event_description = ui.TextInput(label='Description', style=discord.TextStyle.long, placeholder='Details about the event...', required=False)
     event_timezone = ui.TextInput(label='Timezone', placeholder='e.g., Europe/London, US/Eastern, EST, BST', required=True, default='UTC')
@@ -261,19 +261,21 @@ class EventCreationModal(ui.Modal, title='Create a New Event'):
         
         data = {}
         errors = []
+        tz = None
 
         # --- Data Validation ---
         try:
             tz = pytz.timezone(self.event_timezone.value)
-            data['timezone'] = tz
+            data['timezone'] = str(tz)
         except pytz.UnknownTimeZoneError:
             errors.append(f"Invalid Timezone: `{self.event_timezone.value}`. Please use a valid identifier like `Europe/London`.")
         
-        try:
-            start_dt_naive = datetime.datetime.strptime(self.start_datetime.value, "%d-%m-%Y %H:%M")
-            data['start_time'] = tz.localize(start_dt_naive) if 'timezone' in data else start_dt_naive
-        except ValueError:
-            errors.append(f"Invalid Start Date/Time format: `{self.start_datetime.value}`. Must be `DD-MM-YYYY HH:MM`.")
+        if tz:
+            try:
+                start_dt_naive = datetime.datetime.strptime(self.start_datetime.value, "%d-%m-%Y %H:%M")
+                data['start_time'] = tz.localize(start_dt_naive)
+            except ValueError:
+                errors.append(f"Invalid Start Date/Time format: `{self.start_datetime.value}`. Must be `DD-MM-YYYY HH:MM`.")
 
         if self.end_time.value:
             try:
@@ -285,7 +287,10 @@ class EventCreationModal(ui.Modal, title='Create a New Event'):
                         end_dt += datetime.timedelta(days=1)
                     data['end_time'] = end_dt
             except (ValueError, KeyError):
-                errors.append(f"Invalid End Time format: `{self.end_time.value}`. Must be `HH:MM`.")
+                 if 'start_time' not in data:
+                     errors.append("Cannot set End Time without a valid Start Time.")
+                 else:
+                    errors.append(f"Invalid End Time format: `{self.end_time.value}`. Must be `HH:MM`.")
 
         if errors:
             await interaction.followup.send("Please correct the following errors:\n- " + "\n- ".join(errors), ephemeral=True)
@@ -294,7 +299,7 @@ class EventCreationModal(ui.Modal, title='Create a New Event'):
         # --- Data Preparation & DB Insertion ---
         data['title'] = self.event_title.value
         data['description'] = self.event_description.value or "No description provided."
-        # For this simplified example, we'll hardcode these. They could be added as modal fields.
+        # Advanced features are hardcoded here but could be implemented via an `/event edit` command.
         data['is_recurring'] = False
         data['mention_role_ids'] = []
         data['restrict_to_role_ids'] = []
@@ -323,35 +328,21 @@ class EventCreationModal(ui.Modal, title='Create a New Event'):
     async def on_error(self, interaction: discord.Interaction, error: Exception):
         traceback.print_exc()
         await interaction.followup.send('Oops! Something went wrong with the form.', ephemeral=True)
-# --- FIX END ---
 
 # --- Main Cog ---
 class EventManagement(commands.Cog):
     def __init__(self, bot: commands.Bot, db: Database):
         self.bot = bot
         self.db = db
-        # The active_conversations dictionary is no longer needed.
-        # self.active_conversations = {}
 
-    # The end_conversation method is no longer needed.
-    # def end_conversation(self, user_id: int): ...
-
-    # The DM conversation task is no longer needed.
-    # async def _start_dm_conversation_task(...): ...
-
-    # --- Event Command Group ---
     event_group = app_commands.Group(name="event", description="Commands for creating and managing events.")
 
-    # --- FIX START: Refactored 'create' command to use the Modal ---
     @event_group.command(name="create", description="Create a new event.")
     @app_commands.describe(channel="The channel where the event announcement will be posted.")
     async def create(self, interaction: discord.Interaction, channel: discord.TextChannel):
         """Opens a form to create a new event."""
-        # This is now the only action: send the modal to the user.
-        # It's instant and guarantees no timeout.
         modal = EventCreationModal(self.bot, self.db, channel)
         await interaction.response.send_modal(modal)
-    # --- FIX END ---
 
     # --- Setup Command Group ---
     setup = app_commands.Group(name="setup", description="Commands for setting up the bot.", default_permissions=discord.Permissions(administrator=True))

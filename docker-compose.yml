@@ -10,7 +10,7 @@ services:
       db:
         condition: service_healthy
     command: python -m bot.bot
-    networks: # Add service to the custom network
+    networks:
       - squad-net
 
   # The FastAPI Web App Service
@@ -23,11 +23,10 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    # The port is no longer mapped to the host, as Nginx will handle all external traffic
     expose:
       - "8000"
     command: uvicorn bot.main:app --host 0.0.0.0 --port 8000
-    networks: # Add service to the custom network
+    networks:
       - squad-net
 
   # The Nginx Proxy Service
@@ -44,8 +43,11 @@ services:
       - ./data/certbot/www:/var/www/certbot:ro
     depends_on:
       - web
-    networks: # Add service to the custom network
+    networks:
       - squad-net
+    # --- FIX: Added extra_hosts to resolve host.docker.internal ---
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   # The PostgreSQL Database Service
   db:
@@ -63,7 +65,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    networks: # Add service to the custom network
+    networks:
       - squad-net
 
 # Define the custom network

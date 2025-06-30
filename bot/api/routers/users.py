@@ -19,6 +19,7 @@ async def read_users(db: Database = Depends(auth.get_db)):
     Retrieve all users. Only accessible by admin users.
     """
     users_records = await db.get_all_users()
+    # Explicitly cast each database record to a dict before validation.
     return [User.model_validate(dict(user)) for user in users_records]
 
 @router.post("/", response_model=User, status_code=status.HTTP_201_CREATED, dependencies=[Depends(auth.get_current_admin_user)])
@@ -36,7 +37,9 @@ async def create_user(user: UserCreate, db: Database = Depends(auth.get_db)):
     created_user_record = await db.get_user_by_id(user_id)
     if not created_user_record:
          raise HTTPException(status_code=500, detail="Failed to retrieve created user")
+    # Explicitly cast the database record to a dict before validation.
     return User.model_validate(dict(created_user_record))
+
 
 @router.get("/me", response_model=User)
 async def read_users_me(current_user: User = Depends(auth.get_current_active_user)):
@@ -95,6 +98,7 @@ async def update_user(
     updated_user_record = await db.get_user_by_id(user_id)
     if not updated_user_record:
          raise HTTPException(status_code=500, detail="Failed to retrieve updated user")
+    # Explicitly cast the database record to a dict before validation.
     return User.model_validate(dict(updated_user_record))
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(auth.get_current_admin_user)])

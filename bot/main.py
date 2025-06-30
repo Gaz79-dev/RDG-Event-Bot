@@ -4,6 +4,7 @@ import os
 import asyncio
 import traceback
 from contextlib import asynccontextmanager
+from pathlib import Path # Import the Path object
 from dotenv import load_dotenv
 import uvicorn
 from fastapi import FastAPI, Request
@@ -18,10 +19,13 @@ from .api import auth
 # Load environment variables
 load_dotenv()
 
-# --- App State ---
-# Define a dictionary to hold our state, like the bot and db instances
-state = {}
+# --- Define Base Directory ---
+# This makes file paths robust by creating absolute paths
+# from this file's location.
+BASE_DIR = Path(__file__).resolve().parent
 
+
+# --- App State & Lifespan ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -29,26 +33,21 @@ async def lifespan(app: FastAPI):
     Connects to the database and starts the Discord bot.
     """
     print("Application startup...")
-    # Initialize and connect to the database
     db_instance = Database()
     await db_instance.connect()
     
-    # Initialize the bot
     intents = discord.Intents.default()
     intents.members = True
     intents.message_content = True
     bot_instance = EventBot(db=db_instance, web_app=app, command_prefix="!", intents=intents)
 
-    # Store instances in the app state
     app.state.db = db_instance
     app.state.bot = bot_instance
     
-    # Start the bot in a background task
     asyncio.create_task(bot_instance.start(os.getenv("DISCORD_TOKEN")))
     
-    yield # The application is now running
+    yield
     
-    # --- Shutdown logic ---
     print("Application shutdown...")
     await bot_instance.close()
     await db_instance.close()
@@ -57,9 +56,10 @@ async def lifespan(app: FastAPI):
 # --- FastAPI App Setup ---
 app = FastAPI(lifespan=lifespan)
 
-# Mount static files and templates
-app.mount("/static", StaticFiles(directory="bot/web/static"), name="static")
-templates = Jinja2Templates(directory="bot/web/templates")
+# Mount static files and templates using absolute paths
+# This is the key change to fix the TemplateNotFound error
+app.mount("/static", StaticFiles(directory=BASE_DIR / "web/static"), name="static")
+templates = Jinja2Templates(directory=BASE_DIR / "web/templates")
 
 # Include API routers
 app.include_router(auth.router)
@@ -81,7 +81,6 @@ class EventBot(commands.Bot):
     async def setup_hook(self):
         """The setup_hook is called when the bot logs in."""
         print("Bot setup hook running...")
-        # Load cogs
         cogs_to_load = [
             'bot.cogs.event_management',
             'bot.cogs.scheduler',
@@ -95,7 +94,6 @@ class EventBot(commands.Bot):
                 print(f"Failed to load cog {cog}:")
                 traceback.print_exc()
         
-        # Sync commands
         try:
             guild_id = os.getenv("GUILD_ID")
             if guild_id:

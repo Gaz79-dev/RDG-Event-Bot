@@ -2,12 +2,12 @@ import os
 import traceback
 from fastapi import APIRouter, Depends, HTTPException
 from typing import List
-import discord
-from discord.ext import commands
+import httpx # Import the new library
 
+# All other existing imports remain the same
 from ...utils.database import Database
 from .. import auth
-from ..dependencies import get_db, get_bot
+from ..dependencies import get_db
 from ..models import Event, Signup, Channel, Squad, SquadBuildRequest, SendEmbedRequest, SquadMember
 
 router = APIRouter(
@@ -17,61 +17,56 @@ router = APIRouter(
     responses={404: {"description": "Not found"}},
 )
 
-GUILD_ID = int(os.getenv("GUILD_ID"))
+GUILD_ID = os.getenv("GUILD_ID")
+BOT_TOKEN = os.getenv("DISCORD_TOKEN")
 
 @router.get("/", response_model=List[Event])
 async def get_events(db: Database = Depends(get_db)):
     """
     Get a list of all upcoming, non-recurring events for the website dropdown.
     """
-    # --- FIX: Changed this to call the new, correct database method ---
     events = await db.get_upcoming_events()
     return [dict(event) for event in events]
 
-
+# --- FIX: Refactored this endpoint to call the Discord API directly ---
 @router.get("/{event_id}/signups", response_model=List[Signup])
-async def get_event_signups(event_id: int, db: Database = Depends(get_db), bot: commands.Bot = Depends(get_bot)):
+async def get_event_signups(event_id: int, db: Database = Depends(get_db)):
     """
-    Get the roster of accepted signups for a specific event.
-    NOTE: This endpoint will not work correctly in the decoupled architecture
-    as the 'bot' dependency is not available to the web service.
-    This will need to be refactored later.
+    Get the roster of accepted signups for a specific event by calling the Discord API.
     """
-    # For now, return an empty list to prevent crashes.
-    return []
+    if not BOT_TOKEN or not GUILD_ID:
+        raise HTTPException(status_code=500, detail="Bot token or Guild ID not configured on server.")
 
-@router.get("/channels", response_model=List[Channel])
-async def get_guild_channels(bot: commands.Bot = Depends(get_bot)):
-    """
-    Get a list of all text channels in the configured guild.
-    NOTE: This endpoint will not work correctly in the decoupled architecture.
-    """
-    # For now, return an empty list to prevent crashes.
-    return []
+    signups_records = await db.get_signups_for_event(event_id)
+    roster = []
+    headers = {"Authorization": f"Bot {BOT_TOKEN}"}
 
-@router.post("/{event_id}/build-squads", response_model=List[Squad])
-async def build_squads_for_event(
-    event_id: int, 
-    request: SquadBuildRequest,
-    db: Database = Depends(get_db), 
-    bot: commands.Bot = Depends(get_bot)
-):
-    """
-    Triggers the squad building logic and returns the generated squads.
-    NOTE: This endpoint will not work correctly in the decoupled architecture.
-    """
-    # For now, return an empty list to prevent crashes.
-    return []
+    async with httpx.AsyncClient() as client:
+        for record in signups_records:
+            if record['rsvp_status'] != RsvpStatus.ACCEPTED:
+                continue
+            
+            display_name = f"User ID: {record['user_id']}" # Default name
+            
+            # Fetch member data from Discord API
+            url = f"https://discord.com/api/v10/guilds/{GUILD_ID}/members/{record['user_id']}"
+            try:
+                response = await client.get(url, headers=headers)
+                if response.is_success:
+                    member_data = response.json()
+                    display_name = member_data.get('nick') or member_data['user'].get('global_name') or member_data['user']['username']
+                else:
+                    print(f"Failed to fetch member {record['user_id']} from Discord API: {response.status_code}")
+            except Exception as e:
+                print(f"Error fetching member {record['user_id']} from Discord API: {e}")
 
-@router.post("/send-embed", status_code=204)
-async def send_squad_embed(
-    request: SendEmbedRequest,
-    db: Database = Depends(get_db),
-    bot: commands.Bot = Depends(get_bot)
-):
-    """
-    Takes a generated squad composition and posts it as an embed to a specified channel.
-    NOTE: This endpoint will not work correctly in the decoupled architecture.
-    """
-    # For now, return no content to prevent crashes.
-    return
+            roster.append(Signup(
+                user_id=record['user_id'],
+                display_name=display_name,
+                role_name=record['role_name'],
+                subclass_name=record['subclass_name']
+            ))
+    return roster
+
+# The other endpoints are removed for now as they also depend on the bot object
+# and are not required for the event selection/roster display to work.

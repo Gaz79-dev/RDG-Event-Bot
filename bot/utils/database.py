@@ -69,8 +69,11 @@ class Database:
 
     async def create_user(self, username: str, hashed_password: str, is_admin: bool = False) -> int:
         async with self.pool.acquire() as conn:
-            return await conn.fetchval("INSERT INTO users (username, hashed_password, is_admin) VALUES ($1, $2, $3) RETURNING id", username, hashed_password, is_admin)
-
+            return await conn.fetchval(
+                "INSERT INTO users (username, hashed_password, is_admin) VALUES ($1, $2, $3) RETURNING id",
+                username, hashed_password, is_admin
+            )
+            
     async def update_user_password(self, user_id: int, new_hashed_password: str):
         async with self.pool.acquire() as conn:
             await conn.execute("UPDATE users SET hashed_password = $1 WHERE id = $2", new_hashed_password, user_id)
@@ -90,14 +93,16 @@ class Database:
     # --- Event & Signup Functions ---
     async def get_upcoming_events(self) -> List[Dict]:
         query = "SELECT event_id, title, event_time FROM events WHERE COALESCE(end_time, event_time + INTERVAL '2 hours') > (NOW() AT TIME ZONE 'utc' - INTERVAL '12 hours') ORDER BY event_time DESC;"
-        async with self.pool.acquire() as conn: return [dict(r) for r in await conn.fetch(query)]
+        async with self.pool.acquire() as connection:
+            return [dict(row) for row in await connection.fetch(query)]
 
     async def get_signups_for_event(self, event_id: int) -> List[Dict]:
-        async with self.pool.acquire() as conn: return [dict(r) for r in await conn.fetch("SELECT * FROM signups WHERE event_id = $1;", event_id)]
+        async with self.pool.acquire() as connection:
+            return [dict(row) for row in await connection.fetch("SELECT * FROM signups WHERE event_id = $1;", event_id)]
 
     async def get_event_by_id(self, event_id: int) -> Optional[Dict]:
-        async with self.pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT * FROM events WHERE event_id = $1;", event_id)
+        async with self.pool.acquire() as connection:
+            row = await connection.fetchrow("SELECT * FROM events WHERE event_id = $1;", event_id)
             return dict(row) if row else None
             
     # ... other methods from your reference files ...

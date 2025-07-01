@@ -9,7 +9,9 @@ from fastapi.templating import Jinja2Templates
 
 # Use absolute imports from the 'bot' package root
 from bot.utils.database import Database
-from bot.api.routers import events, users, squads, auth
+# --- FIX: Separated the 'auth' import from the 'routers' import ---
+from bot.api.routers import events, users, squads
+from bot.api import auth
 
 # Load environment variables
 load_dotenv()

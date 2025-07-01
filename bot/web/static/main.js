@@ -165,7 +165,8 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     sendBtn.addEventListener('click', async () => {
-        const selectedChannelId = channelDropdown.value; // Read the value at the moment of click
+        // --- FIX: Logic moved inside the listener to get the live value ---
+        const selectedChannelId = document.getElementById('channel-dropdown').value;
         
         if (!selectedChannelId || currentSquads.length === 0) {
             alert('Please select a channel and build squads first.');

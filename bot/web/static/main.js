@@ -1,4 +1,4 @@
-// Helper function to get the token
+// Helper function to get the token, accessible globally
 function getAuthToken() {
     return localStorage.getItem('accessToken');
 }
@@ -6,7 +6,10 @@ function getAuthToken() {
 document.addEventListener('DOMContentLoaded', () => {
     // --- STATE AND HEADERS ---
     const token = getAuthToken();
-    if (!token) { window.location.href = '/login'; return; }
+    if (!token) {
+        window.location.href = '/login';
+        return;
+    }
     const headers = { 'Authorization': `Bearer ${token}` };
     let currentSquads = [];
     let ALL_ROLES = {};
@@ -16,7 +19,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const eventDropdown = document.getElementById('event-dropdown');
     const rosterAndBuildSection = document.getElementById('roster-and-build');
     const rosterList = document.getElementById('roster-list');
-    const buildFormContainer = document.getElementById('build-form-container');
     const buildForm = document.getElementById('build-form');
     const buildBtn = document.getElementById('build-btn');
     const workshopSection = document.getElementById('workshop-section');
@@ -48,18 +50,13 @@ document.addEventListener('DOMContentLoaded', () => {
         return false;
     };
 
-    // --- FIX: New helper function to correctly render any type of emoji ---
     const createEmojiHtml = (emojiString) => {
         if (!emojiString) return '<span>❔</span>';
-        const customEmojiRegex = /<a?:.*?:(\d+?)>/;
-        const match = emojiString.match(customEmojiRegex);
+        const match = emojiString.match(/<a?:.*?:(\d+?)>/);
         if (match) {
-            const emojiId = match[1];
-            const isAnimated = emojiString.startsWith('<a:');
-            const url = `https://cdn.discordapp.com/emojis/${emojiId}.${isAnimated ? 'gif' : 'png'}`;
+            const url = `https://cdn.discordapp.com/emojis/${match[1]}.${emojiString.startsWith('<a:') ? 'gif' : 'png'}`;
             return `<img src="${url}" alt="emoji" class="w-6 h-6 inline-block">`;
         }
-        // It's a standard Unicode emoji
         return `<span class="text-xl">${emojiString}</span>`;
     };
 
@@ -85,9 +82,59 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }).catch(err => console.error("Failed to load initial page data:", err));
 
-    // --- All other event listeners and functions remain the same as the last version ---
-    // The only change is inside the 'renderWorkshop' function below.
-    
+    // --- EVENT LISTENERS ---
+    eventDropdown.addEventListener('change', async () => {
+        workshopSection.classList.add('hidden');
+        const eventId = eventDropdown.value;
+        if (!eventId) { rosterAndBuildSection.classList.add('hidden'); return; }
+
+        try {
+            const rosterResponse = await fetch(`/api/events/${eventId}/signups`, { headers });
+            if(handleApiError(rosterResponse)) return;
+            displayRoster(await rosterResponse.json());
+            
+            populateBuildForm();
+            rosterAndBuildSection.classList.remove('hidden');
+
+            const squadsResponse = await fetch(`/api/events/${eventId}/squads`, { headers });
+            if(handleApiError(squadsResponse)) return;
+            const existingSquads = await squadsResponse.json();
+
+            if (existingSquads?.length > 0) {
+                buildBtn.textContent = 'Re-Build Squads';
+                renderWorkshop(existingSquads);
+            } else {
+                buildBtn.textContent = 'Build Squads';
+            }
+        } catch (error) { console.error("Error loading event data:", error); }
+    });
+
+    buildBtn.addEventListener('click', async () => {
+        const eventId = eventDropdown.value;
+        const formData = new FormData(buildForm);
+        const buildRequest = {};
+        ['infantry_squad_size', 'commander_squads', 'attack_squads', 'defence_squads', 'flex_squads', 'pathfinder_squads', 'armour_squads', 'recon_squads', 'arty_squads'].forEach(key => {
+            buildRequest[key] = parseInt(formData.get(key), 10) || 0;
+        });
+        buildBtn.textContent = 'Building...';
+        buildBtn.disabled = true;
+        try {
+            const response = await fetch(`/api/events/${eventId}/build-squads`, {
+                method: 'POST',
+                headers: { ...headers, 'Content-Type': 'application/json' },
+                body: JSON.stringify(buildRequest)
+            });
+            if (handleApiError(response)) return;
+            renderWorkshop(await response.json());
+        } catch (error) { alert('Error building squads.');
+        } finally {
+            buildBtn.textContent = 'Re-Build Squads';
+            buildBtn.disabled = false;
+        }
+    });
+
+    // ... (All other listeners: refreshRosterBtn, sendBtn, modals) ...
+
     // --- RENDER & HELPER FUNCTIONS ---
     function renderWorkshop(squads) {
         currentSquads = squads;
@@ -110,23 +157,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const memberEl = document.createElement('div');
                 memberEl.className = 'p-2 bg-gray-800 rounded-md flex justify-between items-center member-item cursor-grab';
                 memberEl.dataset.memberId = member.squad_member_id;
-
-                // --- FIX: Use the new helper to generate emoji HTML ---
                 const emojiHtml = createEmojiHtml(EMOJI_MAP[member.assigned_role_name]);
-                
                 memberEl.innerHTML = `
                     <span class="member-info flex items-center">
-                        <span class="member-emoji mr-2 flex-shrink-0 w-6 h-6 flex items-center justify-center">${emojiHtml}</span>
-                        <span class="member-name">${member.display_name}</span>
-                        <span class="assigned-role-text hidden">${member.assigned_role_name}</span>
-                    </span>
-                    <span class="edit-member-btn cursor-pointer text-xs text-gray-400 hover:text-white px-2">EDIT</span>`;
-                memberList.appendChild(memberEl);
-            });
-            squadDiv.appendChild(memberList);
-            targetContainer.appendChild(squadDiv);
-        });
-
-        // ... (The SortableJS init and all other functions remain the same) ...
-    }
-});
+                        <span class="member-emoji mr-2 flex-shrink-0

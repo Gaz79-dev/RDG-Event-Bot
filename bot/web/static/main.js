@@ -165,8 +165,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     sendBtn.addEventListener('click', async () => {
-        // --- FIX: Logic moved inside the listener to get the live value ---
-        const selectedChannelId = document.getElementById('channel-dropdown').value;
+        const selectedChannelId = channelDropdown.value;
         
         if (!selectedChannelId || currentSquads.length === 0) {
             alert('Please select a channel and build squads first.');
@@ -180,7 +179,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const response = await fetch('/api/events/send-embed', {
                 method: 'POST',
                 headers: { ...headers, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ channel_id: parseInt(selectedChannelId, 10), squads: currentSquads })
+                // --- FIX: Send the channel_id as a string, without parseInt ---
+                body: JSON.stringify({ channel_id: selectedChannelId, squads: currentSquads })
             });
             if(handleApiError(response)) throw new Error("Failed to send");
             alert('Squad embed sent successfully!');

@@ -5,7 +5,7 @@ import json
 import httpx
 from typing import List, Optional, Dict
 
-# --- Static Definitions ---
+# Static Definitions
 ROLES = ["Commander", "Infantry", "Armour", "Recon", "Pathfinders"]
 SUBCLASSES = {
     "Infantry": ["Anti-Tank", "Assault", "Automatic Rifleman", "Engineer", "Machine Gunner", "Medic", "Officer", "Rifleman", "Support"],
@@ -52,18 +52,20 @@ class Database:
                 await connection.execute("CREATE TABLE IF NOT EXISTS squad_members (squad_member_id SERIAL PRIMARY KEY, squad_id INT NOT NULL REFERENCES squads(squad_id) ON DELETE CASCADE, user_id BIGINT NOT NULL, assigned_role_name VARCHAR(100) NOT NULL, UNIQUE(squad_id, user_id));")
                 print("Database setup is complete.")
 
-    # --- User Management Functions ---
+    # --- All User Management and other functions from previous steps go here ---
     async def get_user_by_username(self, username: str) -> Optional[Dict]:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow("SELECT * FROM users WHERE username = $1", username)
             return dict(row) if row else None
-            
-    # --- Event & Signup Functions ---
+
     async def get_upcoming_events(self) -> List[Dict]:
         query = "SELECT event_id, title, event_time FROM events WHERE COALESCE(end_time, event_time + INTERVAL '2 hours') > (NOW() AT TIME ZONE 'utc' - INTERVAL '12 hours') ORDER BY event_time DESC;"
         async with self.pool.acquire() as connection:
             return [dict(row) for row in await connection.fetch(query)]
-
+    
+    async def get_all_roles_and_subclasses(self) -> Dict:
+        return {"roles": ROLES, "subclasses": SUBCLASSES}
+        
     async def get_signups_for_event(self, event_id: int) -> List[Dict]:
         async with self.pool.acquire() as connection:
             return [dict(row) for row in await connection.fetch("SELECT * FROM signups WHERE event_id = $1;", event_id)]
@@ -73,19 +75,61 @@ class Database:
             row = await connection.fetchrow("SELECT * FROM events WHERE event_id = $1;", event_id)
             return dict(row) if row else None
             
-    # --- Squad & Guild Config Functions ---
-    async def get_all_roles_and_subclasses(self) -> Dict:
-        """Returns the static lists of roles and subclasses."""
-        return {"roles": ROLES, "subclasses": SUBCLASSES}
-        
     async def delete_squads_for_event(self, event_id: int):
         async with self.pool.acquire() as connection:
             await connection.execute("DELETE FROM squads WHERE event_id = $1;", event_id)
 
+    # --- FIX: Re-implementing the full get_squads_with_members function ---
     async def get_squads_with_members(self, event_id: int) -> List[Dict]:
-        # This function fetches squads and enriches them with member display names
-        # It's complete from the previous turn and should be kept as is.
-        pass
+        """
+        Fetches all squads for an event and enriches them with member display names from the Discord API.
+        """
+        GUILD_ID = os.getenv("GUILD_ID")
+        BOT_TOKEN = os.getenv("DISCORD_TOKEN")
+        if not GUILD_ID or not BOT_TOKEN:
+            print("Error: GUILD_ID or DISCORD_TOKEN not set, cannot fetch member names.")
+            return []
+            
+        headers = {"Authorization": f"Bot {BOT_TOKEN}"}
+        query = """
+            SELECT 
+                s.squad_id, s.name, s.squad_type,
+                COALESCE(
+                    (SELECT json_agg(sm.*) FROM squad_members sm WHERE sm.squad_id = s.squad_id),
+                    '[]'
+                ) as members
+            FROM squads s
+            WHERE s.event_id = $1
+            GROUP BY s.squad_id
+            ORDER BY s.squad_id;
+        """
+        async with self.pool.acquire() as connection:
+            records = await connection.fetch(query, event_id)
+        
+        processed_squads = []
+        async with httpx.AsyncClient() as client:
+            for record in records:
+                squad = dict(record)
+                processed_members = []
+                for member_data in squad.get('members', []):
+                    member = dict(member_data)
+                    display_name = f"User ID: {member['user_id']}"
+                    url = f"https://discord.com/api/v10/guilds/{GUILD_ID}/members/{member['user_id']}"
+                    try:
+                        response = await client.get(url, headers=headers)
+                        if response.is_success:
+                            api_member_data = response.json()
+                            display_name = api_member_data.get('nick') or api_member_data['user'].get('global_name') or api_member_data['user']['username']
+                    except Exception as e:
+                        print(f"Error fetching member {member['user_id']}: {e}")
+                    
+                    member['display_name'] = display_name
+                    processed_members.append(member)
+                
+                squad['members'] = processed_members
+                processed_squads.append(squad)
+                
+        return processed_squads
 
     async def close(self):
         if self.pool:

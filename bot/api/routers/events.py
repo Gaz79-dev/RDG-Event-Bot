@@ -72,17 +72,30 @@ async def build_squads_for_event(event_id: int, request: SquadBuildRequest, db: 
 
 @router.post("/{event_id}/refresh-roster", response_model=List[Squad])
 async def refresh_event_roster(event_id: int, request: RosterUpdateRequest, db: Database = Depends(get_db)):
-    """Refreshes the roster, removing unavailable players and adding new ones to reserves."""
+    """
+    Refreshes the roster, removing unavailable players and adding new ones to reserves.
+    Only users who accepted *after* squads were built, and who are NOT in any squad, should go to reserves.
+    """
+    # IDs from the frontend's current squads
     current_member_ids = {member.user_id for squad in request.squads for member in squad.members}
+    # Get latest signups (RSVPs) from DB
     latest_signups = await db.get_signups_for_event(event_id)
     accepted_user_ids = {s['user_id'] for s in latest_signups if s['rsvp_status'] == RsvpStatus.ACCEPTED}
-    
+
+    # 1. Remove users who are no longer accepted
     users_to_remove = current_member_ids - accepted_user_ids
     for user_id in users_to_remove:
         await db.remove_user_from_all_squads(event_id, user_id)
-        
-    # --- FIX: Only add users who are genuinely new to the roster ---
-    new_users = accepted_user_ids - current_member_ids
+
+    # 2. Fetch up-to-date squad membership from DB
+    squads_with_members = await db.get_squads_with_members(event_id)
+    all_current_db_member_ids = set()
+    for squad in squads_with_members:
+        for member in squad.get('members', []):
+            all_current_db_member_ids.add(member['user_id'])
+
+    # 3. Only add newly accepted users who are not in any squad
+    new_users = accepted_user_ids - all_current_db_member_ids
     if new_users:
         reserves_squad = await db.get_squad_by_name(event_id, "Reserves")
         if reserves_squad:
@@ -91,7 +104,7 @@ async def refresh_event_roster(event_id: int, request: RosterUpdateRequest, db: 
                 if signup:
                     role_name = signup.get('subclass_name') or signup.get('role_name', 'Unassigned')
                     await db.add_squad_member(reserves_squad['squad_id'], user_id, role_name)
-                
+
     return await db.get_squads_with_members(event_id)
 
 @router.get("/channels", response_model=List[Channel])

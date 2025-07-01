@@ -92,8 +92,9 @@ document.addEventListener('DOMContentLoaded', () => {
     
     eventDropdown.addEventListener('change', async () => {
         workshopSection.classList.add('hidden');
+        rosterAndBuildSection.classList.add('hidden');
         const eventId = eventDropdown.value;
-        if (!eventId) { rosterAndBuildSection.classList.add('hidden'); return; }
+        if (!eventId) return;
 
         try {
             const rosterResponse = await fetch(`/api/events/${eventId}/signups`, { headers });
@@ -164,15 +165,21 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     sendBtn.addEventListener('click', async () => {
-        const channelId = channelDropdown.value;
-        if (!channelId || currentSquads.length === 0) { alert('Please select a channel and build squads first.'); return; }
+        const selectedChannelId = channelDropdown.value; // Read the value at the moment of click
+        
+        if (!selectedChannelId || currentSquads.length === 0) {
+            alert('Please select a channel and build squads first.');
+            return;
+        }
+        
         sendBtn.textContent = 'Sending...';
         sendBtn.disabled = true;
+        
         try {
             const response = await fetch('/api/events/send-embed', {
                 method: 'POST',
                 headers: { ...headers, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ channel_id: parseInt(channelId, 10), squads: currentSquads })
+                body: JSON.stringify({ channel_id: parseInt(selectedChannelId, 10), squads: currentSquads })
             });
             if(handleApiError(response)) throw new Error("Failed to send");
             alert('Squad embed sent successfully!');

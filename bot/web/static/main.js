@@ -134,7 +134,7 @@ document.addEventListener('DOMContentLoaded', () => {
             buildBtn.disabled = false;
         }
     });
-    
+
     // ... Other listeners like refreshRosterBtn, sendBtn, and modal listeners are defined below ...
 
     // --- RENDER & HELPER FUNCTIONS ---
@@ -192,13 +192,20 @@ document.addEventListener('DOMContentLoaded', () => {
         loadChannels();
     }
     
-    // --- FIX: All helper functions are now fully implemented ---
+    // --- FIX: This function now renders emojis instead of text ---
     function displayRoster(roster) {
         rosterList.innerHTML = '';
         (roster || []).forEach(player => {
             const div = document.createElement('div');
-            div.className = 'p-2 bg-gray-700 rounded-md text-sm';
-            div.textContent = `${player.display_name} (${player.role_name} / ${player.subclass_name || 'N/A'})`;
+            div.className = 'p-2 bg-gray-700 rounded-md text-sm flex items-center';
+
+            const emojiKey = player.subclass_name || player.role_name;
+            const emojiHtml = createEmojiHtml(EMOJI_MAP[emojiKey]);
+
+            div.innerHTML = `
+                <span class="flex-shrink-0 w-6 h-6 flex items-center justify-center">${emojiHtml}</span>
+                <span class="ml-2">${player.display_name}</span>
+            `;
             rosterList.appendChild(div);
         });
     }
@@ -235,7 +242,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch(err) { console.error("Could not load channels", err)}
     }
     
-    // Listeners that should have been included in previous responses
+    // Listeners for Modal
     editMemberForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         const memberId = modalMemberIdInput.value;
@@ -259,4 +266,23 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     modalCancelBtn.addEventListener('click', () => editModal.classList.add('hidden'));
+
+    document.body.addEventListener('click', (e) => {
+        if (e.target.classList.contains('edit-member-btn')) {
+            const memberItem = e.target.closest('.member-item');
+            modalMemberName.textContent = memberItem.querySelector('.member-name').textContent;
+            modalMemberIdInput.value = memberItem.dataset.memberId;
+            const currentRole = memberItem.querySelector('.assigned-role-text').textContent;
+            
+            modalRoleSelect.innerHTML = '';
+            const allRoles = [...new Set([...ALL_ROLES.roles, ...Object.values(ALL_ROLES.subclasses).flat()])].sort();
+            allRoles.forEach(role => {
+                const option = new Option(role, role);
+                if (role === currentRole) option.selected = true;
+                modalRoleSelect.add(option);
+            });
+            
+            editModal.classList.remove('hidden');
+        }
+    });
 });

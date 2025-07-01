@@ -134,8 +134,92 @@ document.addEventListener('DOMContentLoaded', () => {
             buildBtn.disabled = false;
         }
     });
+    
+    refreshRosterBtn.addEventListener('click', async () => {
+        const eventId = eventDropdown.value;
+        if (!eventId || currentSquads.length === 0) return;
+        refreshRosterBtn.textContent = 'Refreshing...';
+        refreshRosterBtn.disabled = true;
+        try {
+            const response = await fetch(`/api/events/${eventId}/refresh-roster`, {
+                method: 'POST',
+                headers: { ...headers, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ squads: currentSquads })
+            });
+            if (handleApiError(response)) return;
+            renderWorkshop(await response.json());
+            alert('Roster has been updated!');
+        } catch (error) {
+            alert('Error refreshing roster.');
+        } finally {
+            refreshRosterBtn.textContent = 'Refresh Roster';
+            refreshRosterBtn.disabled = false;
+        }
+    });
 
-    // ... Other listeners like refreshRosterBtn, sendBtn, and modal listeners are defined below ...
+    sendBtn.addEventListener('click', async () => {
+        const channelId = channelDropdown.value;
+        if (!channelId || currentSquads.length === 0) { alert('Please select a channel and build squads first.'); return; }
+        sendBtn.textContent = 'Sending...';
+        sendBtn.disabled = true;
+        try {
+            const response = await fetch('/api/events/send-embed', {
+                method: 'POST',
+                headers: { ...headers, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ channel_id: parseInt(channelId), squads: currentSquads })
+            });
+            if(handleApiError(response)) throw new Error("Failed to send");
+            alert('Squad embed sent successfully!');
+        } catch (error) {
+            alert('Failed to send embed.');
+        } finally {
+            sendBtn.textContent = 'Send to Discord Channel';
+            sendBtn.disabled = false;
+        }
+    });
+
+    document.body.addEventListener('click', (e) => {
+        if (e.target.classList.contains('edit-member-btn')) {
+            const memberItem = e.target.closest('.member-item');
+            modalMemberName.textContent = memberItem.querySelector('.member-name').textContent;
+            modalMemberIdInput.value = memberItem.dataset.memberId;
+            const currentRole = memberItem.querySelector('.assigned-role-text').textContent;
+            
+            modalRoleSelect.innerHTML = '';
+            const allRoles = [...new Set([...ALL_ROLES.roles, ...Object.values(ALL_ROLES.subclasses).flat()])].sort();
+            allRoles.forEach(role => {
+                const option = new Option(role, role);
+                if (role === currentRole) option.selected = true;
+                modalRoleSelect.add(option);
+            });
+            
+            editModal.classList.remove('hidden');
+        }
+    });
+
+    modalCancelBtn.addEventListener('click', () => editModal.classList.add('hidden'));
+
+    editMemberForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const memberId = modalMemberIdInput.value;
+        const newRole = modalRoleSelect.value;
+        const eventId = eventDropdown.value;
+        try {
+            const response = await fetch(`/api/squads/members/${memberId}/role`, {
+                method: 'PUT',
+                headers: { ...headers, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ new_role_name: newRole, event_id: parseInt(eventId) })
+            });
+            if (handleApiError(response)) return;
+            
+            const memberEl = document.querySelector(`[data-member-id='${memberId}']`);
+            if (memberEl) {
+                memberEl.querySelector('.member-emoji').innerHTML = createEmojiHtml(EMOJI_MAP[newRole]);
+                memberEl.querySelector('.assigned-role-text').textContent = newRole;
+            }
+            editModal.classList.add('hidden');
+        } catch (err) { alert("Error: Could not update role."); }
+    });
 
     // --- RENDER & HELPER FUNCTIONS ---
 
@@ -191,17 +275,14 @@ document.addEventListener('DOMContentLoaded', () => {
         workshopSection.classList.remove('hidden');
         loadChannels();
     }
-    
-    // --- FIX: This function now renders emojis instead of text ---
+
     function displayRoster(roster) {
         rosterList.innerHTML = '';
         (roster || []).forEach(player => {
             const div = document.createElement('div');
             div.className = 'p-2 bg-gray-700 rounded-md text-sm flex items-center';
-
             const emojiKey = player.subclass_name || player.role_name;
             const emojiHtml = createEmojiHtml(EMOJI_MAP[emojiKey]);
-
             div.innerHTML = `
                 <span class="flex-shrink-0 w-6 h-6 flex items-center justify-center">${emojiHtml}</span>
                 <span class="ml-2">${player.display_name}</span>
@@ -241,48 +322,4 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         } catch(err) { console.error("Could not load channels", err)}
     }
-    
-    // Listeners for Modal
-    editMemberForm.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const memberId = modalMemberIdInput.value;
-        const newRole = modalRoleSelect.value;
-        const eventId = eventDropdown.value;
-        try {
-            const response = await fetch(`/api/squads/members/${memberId}/role`, {
-                method: 'PUT',
-                headers: { ...headers, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ new_role_name: newRole, event_id: parseInt(eventId) })
-            });
-            if (handleApiError(response)) return;
-            
-            const memberEl = document.querySelector(`[data-member-id='${memberId}']`);
-            if (memberEl) {
-                memberEl.querySelector('.member-emoji').innerHTML = createEmojiHtml(EMOJI_MAP[newRole]);
-                memberEl.querySelector('.assigned-role-text').textContent = newRole;
-            }
-            editModal.classList.add('hidden');
-        } catch (err) { alert("Error: Could not update role."); }
-    });
-
-    modalCancelBtn.addEventListener('click', () => editModal.classList.add('hidden'));
-
-    document.body.addEventListener('click', (e) => {
-        if (e.target.classList.contains('edit-member-btn')) {
-            const memberItem = e.target.closest('.member-item');
-            modalMemberName.textContent = memberItem.querySelector('.member-name').textContent;
-            modalMemberIdInput.value = memberItem.dataset.memberId;
-            const currentRole = memberItem.querySelector('.assigned-role-text').textContent;
-            
-            modalRoleSelect.innerHTML = '';
-            const allRoles = [...new Set([...ALL_ROLES.roles, ...Object.values(ALL_ROLES.subclasses).flat()])].sort();
-            allRoles.forEach(role => {
-                const option = new Option(role, role);
-                if (role === currentRole) option.selected = true;
-                modalRoleSelect.add(option);
-            });
-            
-            editModal.classList.remove('hidden');
-        }
-    });
 });

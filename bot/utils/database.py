@@ -53,6 +53,29 @@ class Database:
                 print("Database setup is complete.")
 
     # --- User Management Functions ---
+    async def create_event(self, guild_id: int, channel_id: int, creator_id: int, data: dict) -> int:
+    """Creates a new event and returns its event_id."""
+    async with self.pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO events (guild_id, channel_id, creator_id, title, event_time, finish_time, description, recurring, mention_role_ids, restrict_role_ids, timezone)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            RETURNING event_id
+            """,
+            guild_id,
+            channel_id,
+            creator_id,
+            data.get('title'),
+            data.get('start_datetime'),
+            data.get('finish_datetime'),
+            data.get('description'),
+            data.get('recurring', False),
+            data.get('mention_role_ids', []),
+            data.get('restrict_role_ids', []),
+            data.get('timezone')
+        )
+        return row['event_id']
+    
     async def get_user_by_username(self, username: str) -> Optional[Dict]:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow("SELECT * FROM users WHERE username = $1", username)

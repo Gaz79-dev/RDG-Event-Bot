@@ -9,9 +9,7 @@ from fastapi.templating import Jinja2Templates
 
 # Use absolute imports from the 'bot' package root
 from bot.utils.database import Database
-# --- FIX: Separated the 'auth' import from the 'routers' import ---
-from bot.api.routers import events, users, squads
-from bot.api import auth
+from bot.api.routers import events, users, squads, auth
 
 # Load environment variables
 load_dotenv()
@@ -38,7 +36,6 @@ async def lifespan(app: FastAPI):
     
     print("Web server shutdown...")
     await db_instance.close()
-
 
 # --- FastAPI App Setup ---
 app = FastAPI(lifespan=lifespan)

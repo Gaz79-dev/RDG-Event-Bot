@@ -42,7 +42,6 @@ class UserInDB(User):
 # --- Event & Squad Models ---
 class Event(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-
     event_id: int
     title: str
     event_time: datetime
@@ -58,6 +57,7 @@ class Channel(BaseModel):
     name: str
 
 class SquadMember(BaseModel):
+    squad_member_id: int
     user_id: int
     display_name: str
     assigned_role_name: str
@@ -73,10 +73,21 @@ class SquadBuildRequest(BaseModel):
     attack_squads: int = 0
     defence_squads: int = 0
     flex_squads: int = 0
+    pathfinder_squads: int = 0 # Added for the new squad type
     armour_squads: int = 0
     recon_squads: int = 0
     arty_squads: int = 0
 
 class SendEmbedRequest(BaseModel):
     channel_id: int
+    squads: List[Squad]
+
+# --- FIX: Added new models for editing and refreshing squads ---
+class RoleUpdateRequest(BaseModel):
+    new_role_name: str
+
+class SquadMoveRequest(BaseModel):
+    new_squad_id: int
+
+class RosterUpdateRequest(BaseModel):
     squads: List[Squad]

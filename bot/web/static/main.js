@@ -83,6 +83,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }).catch(err => console.error("Failed to load initial page data:", err));
 
     // --- EVENT LISTENERS ---
+
     eventDropdown.addEventListener('change', async () => {
         workshopSection.classList.add('hidden');
         const eventId = eventDropdown.value;
@@ -126,16 +127,18 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             if (handleApiError(response)) return;
             renderWorkshop(await response.json());
-        } catch (error) { alert('Error building squads.');
+        } catch (error) {
+            alert('Error building squads.');
         } finally {
             buildBtn.textContent = 'Re-Build Squads';
             buildBtn.disabled = false;
         }
     });
-
-    // ... (All other listeners: refreshRosterBtn, sendBtn, modals) ...
+    
+    // ... Other listeners like refreshRosterBtn, sendBtn, and modal listeners are defined below ...
 
     // --- RENDER & HELPER FUNCTIONS ---
+
     function renderWorkshop(squads) {
         currentSquads = squads;
         workshopArea.innerHTML = '';
@@ -160,4 +163,100 @@ document.addEventListener('DOMContentLoaded', () => {
                 const emojiHtml = createEmojiHtml(EMOJI_MAP[member.assigned_role_name]);
                 memberEl.innerHTML = `
                     <span class="member-info flex items-center">
-                        <span class="member-emoji mr-2 flex-shrink-0
+                        <span class="member-emoji mr-2 flex-shrink-0 w-6 h-6 flex items-center justify-center">${emojiHtml}</span>
+                        <span class="member-name">${member.display_name}</span>
+                        <span class="assigned-role-text hidden">${member.assigned_role_name}</span>
+                    </span>
+                    <span class="edit-member-btn cursor-pointer text-xs text-gray-400 hover:text-white px-2">EDIT</span>`;
+                memberList.appendChild(memberEl);
+            });
+            squadDiv.appendChild(memberList);
+            targetContainer.appendChild(squadDiv);
+        });
+
+        document.querySelectorAll('.member-list').forEach(list => {
+            new Sortable(list, { group: 'squads', animation: 150, onEnd: async (evt) => {
+                const memberId = evt.item.dataset.memberId;
+                const newSquadId = evt.to.dataset.squadId;
+                try {
+                    const response = await fetch(`/api/squads/members/${memberId}/move`, {
+                        method: 'PUT', headers: { ...headers, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ new_squad_id: parseInt(newSquadId) })
+                    });
+                    if(handleApiError(response)) throw new Error('Move failed on server');
+                } catch (err) { alert("Error: Could not move member."); }
+            }});
+        });
+        
+        workshopSection.classList.remove('hidden');
+        loadChannels();
+    }
+    
+    // --- FIX: All helper functions are now fully implemented ---
+    function displayRoster(roster) {
+        rosterList.innerHTML = '';
+        (roster || []).forEach(player => {
+            const div = document.createElement('div');
+            div.className = 'p-2 bg-gray-700 rounded-md text-sm';
+            div.textContent = `${player.display_name} (${player.role_name} / ${player.subclass_name || 'N/A'})`;
+            rosterList.appendChild(div);
+        });
+    }
+
+    function populateBuildForm() {
+        const formFields = [
+            { label: 'Infantry Squad Size', id: 'infantry_squad_size', value: 6 },
+            { label: 'Commander Squads', id: 'commander_squads', value: 1 },
+            { label: 'Attack Squads', id: 'attack_squads', value: 2 },
+            { label: 'Defence Squads', id: 'defence_squads', value: 2 },
+            { label: 'Flex Squads', id: 'flex_squads', value: 1 },
+            { label: 'Pathfinder Squads', id: 'pathfinder_squads', value: 1 },
+            { label: 'Armour Squads', id: 'armour_squads', value: 1 },
+            { label: 'Recon Squads', id: 'recon_squads', value: 1 },
+            { label: 'Arty Squads', id: 'arty_squads', value: 0 },
+        ];
+        buildForm.innerHTML = formFields.map(field => `
+            <div>
+                <label for="${field.id}" class="block text-sm font-medium">${field.label}</label>
+                <input type="number" id="${field.id}" name="${field.id}" value="${field.value}" min="0" required class="mt-1 w-full bg-gray-700 border-gray-600 rounded-md p-2">
+            </div>
+        `).join('');
+    }
+
+    async function loadChannels() {
+        try {
+            const response = await fetch('/api/events/channels', { headers });
+            if (handleApiError(response)) return;
+            const channels = await response.json();
+            channelDropdown.innerHTML = '<option value="">-- Select a Channel --</option>';
+            (channels || []).forEach(channel => {
+                channelDropdown.add(new Option(channel.name, channel.id));
+            });
+        } catch(err) { console.error("Could not load channels", err)}
+    }
+    
+    // Listeners that should have been included in previous responses
+    editMemberForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const memberId = modalMemberIdInput.value;
+        const newRole = modalRoleSelect.value;
+        const eventId = eventDropdown.value;
+        try {
+            const response = await fetch(`/api/squads/members/${memberId}/role`, {
+                method: 'PUT',
+                headers: { ...headers, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ new_role_name: newRole, event_id: parseInt(eventId) })
+            });
+            if (handleApiError(response)) return;
+            
+            const memberEl = document.querySelector(`[data-member-id='${memberId}']`);
+            if (memberEl) {
+                memberEl.querySelector('.member-emoji').innerHTML = createEmojiHtml(EMOJI_MAP[newRole]);
+                memberEl.querySelector('.assigned-role-text').textContent = newRole;
+            }
+            editModal.classList.add('hidden');
+        } catch (err) { alert("Error: Could not update role."); }
+    });
+
+    modalCancelBtn.addEventListener('click', () => editModal.classList.add('hidden'));
+});

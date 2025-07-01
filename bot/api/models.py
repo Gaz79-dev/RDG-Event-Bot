@@ -38,27 +38,20 @@ class Channel(BaseModel):
 class SquadMember(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     squad_member_id: int; user_id: int; assigned_role_name: str
-    display_name: Optional[str] = None # Added optional for initial fetch
+    display_name: Optional[str] = None
 class Squad(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     squad_id: int; name: str; squad_type: str; members: List[SquadMember]
     
-# Updated SquadBuildRequest to include commander_squads
 class SquadBuildRequest(BaseModel):
-    infantry_squad_size: int = 6
-    commander_squads: int = 1
-    attack_squads: int = 0
-    defence_squads: int = 0
-    flex_squads: int = 0
-    pathfinder_squads: int = 0
-    armour_squads: int = 0
-    recon_squads: int = 0
-    arty_squads: int = 0
-
+    infantry_squad_size: int = 6; commander_squads: int = 1; attack_squads: int = 0; defence_squads: int = 0
+    flex_squads: int = 0; pathfinder_squads: int = 0; armour_squads: int = 0; recon_squads: int = 0; arty_squads: int = 0
 class SendEmbedRequest(BaseModel):
     channel_id: int; squads: List[Squad]
+
+# Add event_id to the role update request
 class RoleUpdateRequest(BaseModel):
-    new_role_name: str
+    new_role_name: str; event_id: int
 class SquadMoveRequest(BaseModel):
     new_squad_id: int
 class RosterUpdateRequest(BaseModel):

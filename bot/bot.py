@@ -5,7 +5,6 @@ import asyncio
 import traceback
 from dotenv import load_dotenv
 
-# --- FIX: The sys.path hack is removed. Imports are now relative to the project root. ---
 from bot.utils.database import Database
 
 # Load environment variables from .env file
@@ -48,12 +47,25 @@ class EventBot(commands.Bot):
             synced = await self.tree.sync()
             print(f"Synced {len(synced)} command(s) globally.")
 
+def build_db_dsn():
+    """Build the DSN from DATABASE_URL or POSTGRES_* environment variables."""
+    dsn = os.getenv("DATABASE_URL")
+    if dsn:
+        return dsn
+    user = os.getenv("POSTGRES_USER")
+    password = os.getenv("POSTGRES_PASSWORD")
+    db = os.getenv("POSTGRES_DB")
+    host = os.getenv("POSTGRES_HOST", "localhost")
+    port = os.getenv("POSTGRES_PORT", "5432")
+    if user and password and db and host and port:
+        return f"postgresql://{user}:{password}@{host}:{port}/{db}"
+    return None
 
 async def main():
     """Main function to connect to the database and run the bot."""
-    dsn = os.getenv("DATABASE_URL")
+    dsn = build_db_dsn()
     if not dsn:
-        print("Error: DATABASE_URL not found in environment or .env file.")
+        print("Error: DATABASE_URL or POSTGRES_* vars not found in environment or .env file.")
         return
 
     db = Database(dsn)
@@ -79,7 +91,6 @@ async def main():
         await db.close()
         await bot.close()
         print("Bot cleanup complete.")
-
 
 if __name__ == "__main__":
     try:

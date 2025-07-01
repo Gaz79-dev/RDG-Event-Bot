@@ -2,6 +2,7 @@ import os
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from typing import List
+import discord
 
 # Use absolute imports from the 'bot' package root
 from bot.utils.database import Database, RsvpStatus
@@ -80,6 +81,7 @@ async def refresh_event_roster(event_id: int, request: RosterUpdateRequest, db: 
     for user_id in users_to_remove:
         await db.remove_user_from_all_squads(event_id, user_id)
         
+    # --- FIX: Only add users who are genuinely new to the roster ---
     new_users = accepted_user_ids - current_member_ids
     if new_users:
         reserves_squad = await db.get_squad_by_name(event_id, "Reserves")
@@ -113,7 +115,7 @@ async def get_guild_channels():
             raise HTTPException(status_code=502, detail="Failed to fetch channels from Discord.")
 
 @router.post("/send-embed", status_code=204)
-async def send_squad_embed(request: SendEmbedRequest):
+async def send_squad_embed(request: SendEmbedRequest, db: Database = Depends(get_db)):
     """Sends the finalized squad composition as an embed to a Discord channel."""
     if not BOT_TOKEN:
         raise HTTPException(status_code=500, detail="Bot token not configured on server.")
@@ -121,19 +123,45 @@ async def send_squad_embed(request: SendEmbedRequest):
     url = f"https://discord.com/api/v10/channels/{request.channel_id}/messages"
     headers = {"Authorization": f"Bot {BOT_TOKEN}"}
     
+    # --- FIX: Logic to add event time and reserves list to the embed ---
+    # Find the event_id from the first squad
+    event_id = None
+    if request.squads:
+        first_squad = await db.get_squad_by_id(request.squads[0].squad_id)
+        if first_squad:
+            event_id = first_squad['event_id']
+
+    # Fetch event details to get the time
+    event_details = await db.get_event_by_id(event_id) if event_id else None
+    event_time_str = ""
+    if event_details:
+        event_timestamp = int(event_details['event_time'].timestamp())
+        event_time_str = f" - <t:{event_timestamp}:F>"
+
+    # Find the reserves squad and get the names of its members
+    reserves_list = []
+    for squad in request.squads:
+        if squad.squad_type == "Reserves":
+            reserves_list = [m.display_name for m in squad.members]
+            break
+
+    # Build the embed fields
     fields = []
     for squad in request.squads:
-        if squad.squad_type == "Reserves": continue
+        if squad.squad_type == "Reserves": continue # Don't include reserves as a main field
         member_list = [f"**{m.assigned_role_name}:** {m.display_name}" for m in squad.members]
         value = "\n".join(member_list) or "Empty"
         fields.append({"name": f"__**{squad.name}**__ ({squad.squad_type})", "value": value, "inline": True})
         
     embed_payload = {
         "embeds": [{
-            "title": "🛠️ Finalized Team Composition",
+            "title": f"🛠️ Finalized Team Composition{event_time_str}",
             "description": "The following squads have been finalized for the event.",
             "color": 15844367,
-            "fields": fields
+            "fields": fields,
+            "footer": {
+                "text": f"Reserves: {', '.join(reserves_list) if reserves_list else 'None'}"
+            }
         }]
     }
 

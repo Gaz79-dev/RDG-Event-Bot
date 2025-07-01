@@ -51,7 +51,12 @@ class EventBot(commands.Bot):
 
 async def main():
     """Main function to connect to the database and run the bot."""
-    db = Database()
+    dsn = os.getenv("DATABASE_URL")
+    if not dsn:
+        print("Error: DATABASE_URL not found in environment or .env file.")
+        return
+
+    db = Database(dsn)
     await db.connect()
     
     intents = discord.Intents.default()

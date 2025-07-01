@@ -9,7 +9,9 @@ from fastapi.templating import Jinja2Templates
 
 # Use absolute imports from the 'bot' package root
 from bot.utils.database import Database
-from bot.api.routers import events, users, squads, auth
+# --- FIX: Separated the 'auth' import from the 'routers' import ---
+from bot.api.routers import events, users, squads
+from bot.api import auth
 
 # Load environment variables
 load_dotenv()
@@ -37,6 +39,7 @@ async def lifespan(app: FastAPI):
     print("Web server shutdown...")
     await db_instance.close()
 
+
 # --- FastAPI App Setup ---
 app = FastAPI(lifespan=lifespan)
 templates_dir = BASE_DIR / "web/templates"
@@ -50,14 +53,14 @@ app.include_router(events.router)
 app.include_router(squads.router)
 
 # --- Web Page Routes ---
-@app.get("/login", tags=["HTML"])
+@app.get("/login", tags=["HTML"], summary="Serves the login page")
 async def login_page(request: Request):
     return templates.TemplateResponse("login.html", {"request": request})
 
-@app.get("/", tags=["HTML"])
+@app.get("/", tags=["HTML"], summary="Serves the main squad builder page")
 async def main_page(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
-@app.get("/admin", tags=["HTML"])
+@app.get("/admin", tags=["HTML"], summary="Serves the admin page")
 async def admin_page(request: Request):
     return templates.TemplateResponse("admin.html", {"request": request})

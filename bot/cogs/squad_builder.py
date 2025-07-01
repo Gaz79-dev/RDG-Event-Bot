@@ -155,9 +155,72 @@ class SquadBuilder(commands.Cog):
 
     async def _run_automated_draft(self, guild: discord.Guild, event_id: int, modal: SquadBuilderModal):
         """The core logic for drafting players into squads."""
+
         print("--- RUNNING AUTOMATED DRAFT ---")
         await self.db.delete_squads_for_event(event_id)
-        # ... implementation from previous version ...
+        signups = await self.db.get_signups_for_event(event_id)
+        pools = await self._get_player_pools(guild, signups)
+
+        # 1. Always create a single Commander squad (no letter/suffix)
+        commander_pool = pools['commander'].get('Commander', [])
+        commander_squad_id = await self.db.create_squad(event_id, name="Commander", squad_type="Commander")
+        if commander_pool:
+            # Only assign one user, extras go to reserves or unassigned
+            commander = commander_pool[0]
+            await self.db.add_squad_member(commander_squad_id, commander['user_id'], "Commander")
+            # Any additional commanders can be added to reserves or left out; here we do nothing for extras
+
+        # 2. Infantry Squads
+        infantry_pool = []
+        for subclass in SUBCLASSES.get("Infantry", []):
+            infantry_pool.extend(pools['general'].get(subclass, []))
+        infantry_pool.extend(pools['general'].get('Unassigned', []))
+        infantry_squad_size = modal.infantry_squad_size_val
+
+        infantry_count = 0
+        for idx in range(0, len(infantry_pool), infantry_squad_size):
+            members = infantry_pool[idx:idx + infantry_squad_size]
+            squad_name = f"Infantry {get_squad_letter(infantry_count)}"
+            squad_id = await self.db.create_squad(event_id, name=squad_name, squad_type="Infantry")
+            for m in members:
+                await self.db.add_squad_member(squad_id, m['user_id'], m.get('subclass_name') or m.get('role_name', 'Infantry'))
+            infantry_count += 1
+
+        # 3. Other squads (Attack, Defence, Flex, Armour, Recon, Arty)
+        squad_types = [
+            ("attack", modal.attack_squads_val, "Attack"),
+            ("defence", modal.defence_squads_val, "Defence"),
+            ("flex", modal.flex_squads_val, "Flex"),
+            ("armour", modal.armour_squads_val, "Armour"),
+            ("recon", modal.recon_squads_val, "Recon"),
+            ("arty", modal.arty_squads_val, "Arty")
+        ]
+        for pool_key, num_squads, squad_label in squad_types:
+            if num_squads > 0 and pool_key in pools:
+                pool_members = []
+                for subclass_list in pools[pool_key].values():
+                    pool_members.extend(subclass_list)
+                count = 0
+                size = infantry_squad_size if squad_label not in ("Armour", "Recon", "Arty") else 3  # Example size logic
+                for idx in range(0, len(pool_members), size):
+                    members = pool_members[idx:idx + size]
+                    squad_name = f"{squad_label} {get_squad_letter(count)}"
+                    squad_id = await self.db.create_squad(event_id, name=squad_name, squad_type=squad_label)
+                    for m in members:
+                        await self.db.add_squad_member(squad_id, m['user_id'], m.get('subclass_name') or m.get('role_name', squad_label))
+                    count += 1
+
+        # 4. Reserves squad: anyone not assigned above
+        assigned_ids = set()
+        squads = await self.db.get_squads_with_members(event_id)
+        for squad in squads:
+            for m in squad.get('members', []):
+                assigned_ids.add(m['user_id'])
+        reserves = [s for s in signups if s['user_id'] not in assigned_ids and s['rsvp_status'] == RsvpStatus.ACCEPTED]
+        if reserves:
+            reserves_squad_id = await self.db.create_squad(event_id, name="Reserves", squad_type="Reserves")
+            for s in reserves:
+                await self.db.add_squad_member(reserves_squad_id, s['user_id'], s.get('subclass_name') or s.get('role_name', 'Unassigned'))
 
     async def _generate_workshop_embed(self, guild: discord.Guild, event_id: int) -> discord.Embed:
         """Generates the final embed showing the built squads."""
@@ -183,7 +246,7 @@ class SquadBuilder(commands.Cog):
                 member_list.append(f"**{m['assigned_role_name']}:** {name}")
             
             value = "\n".join(member_list) or "Empty"
-            embed.add_field(name=f"__**{squad['name']}**__ ({squad['squad_type']})", value=value, inline=True)
+            embed.add_field(name=f"__**{squad['name']}**__", value=value, inline=True)
             
         embed.set_footer(text=f"Event ID: {event_id}")
         return embed

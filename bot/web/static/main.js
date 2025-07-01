@@ -134,7 +134,7 @@ document.addEventListener('DOMContentLoaded', () => {
             buildBtn.disabled = false;
         }
     });
-
+    
     refreshRosterBtn.addEventListener('click', async () => {
         const eventId = eventDropdown.value;
         if (!eventId || currentSquads.length === 0) return;
@@ -166,7 +166,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const response = await fetch('/api/events/send-embed', {
                 method: 'POST',
                 headers: { ...headers, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ channel_id: parseInt(channelId), squads: currentSquads })
+                body: JSON.stringify({ channel_id: parseInt(channelId, 10), squads: currentSquads })
             });
             if(handleApiError(response)) throw new Error("Failed to send");
             alert('Squad embed sent successfully!');

@@ -10,6 +10,9 @@ from bot.api import auth, squad_logic
 from bot.api.dependencies import get_db
 from bot.api.models import Event, Signup, Squad, SquadBuildRequest, RosterUpdateRequest, SendEmbedRequest, Channel
 
+# Import the emoji mapping for use in the embed
+from bot.cogs.event_management import EMOJI_MAPPING
+
 router = APIRouter(
     prefix="/api/events",
     tags=["events"],
@@ -130,42 +133,47 @@ async def get_guild_channels():
 @router.post("/send-embed", status_code=204)
 async def send_squad_embed(request: SendEmbedRequest, db: Database = Depends(get_db)):
     """Sends the finalized squad composition as an embed to a Discord channel."""
+    BOT_TOKEN = os.getenv("DISCORD_TOKEN")
     if not BOT_TOKEN:
         raise HTTPException(status_code=500, detail="Bot token not configured on server.")
 
     url = f"https://discord.com/api/v10/channels/{request.channel_id}/messages"
     headers = {"Authorization": f"Bot {BOT_TOKEN}"}
     
-    # --- FIX: Logic to add event time and reserves list to the embed ---
-    # Find the event_id from the first squad
     event_id = None
     if request.squads:
         first_squad = await db.get_squad_by_id(request.squads[0].squad_id)
         if first_squad:
             event_id = first_squad['event_id']
 
-    # Fetch event details to get the time
     event_details = await db.get_event_by_id(event_id) if event_id else None
     event_time_str = ""
     if event_details:
         event_timestamp = int(event_details['event_time'].timestamp())
         event_time_str = f" - <t:{event_timestamp}:F>"
 
-    # Find the reserves squad and get the names of its members
     reserves_list = []
     for squad in request.squads:
         if squad.squad_type == "Reserves":
             reserves_list = [m.display_name for m in squad.members]
             break
 
-    # Build the embed fields
+    # --- UPDATED: Use emoji and remove squad type ---
     fields = []
     for squad in request.squads:
-        if squad.squad_type == "Reserves": continue # Don't include reserves as a main field
-        member_list = [f"**{m.assigned_role_name}:** {m.display_name}" for m in squad.members]
+        if squad.squad_type == "Reserves":
+            continue
+        member_list = []
+        for m in squad.members:
+            emoji = EMOJI_MAPPING.get(m.assigned_role_name, "❔")
+            member_list.append(f"{emoji} **{m.assigned_role_name}:** {m.display_name}")
         value = "\n".join(member_list) or "Empty"
-        fields.append({"name": f"__**{squad.name}**__ ({squad.squad_type})", "value": value, "inline": True})
-        
+        fields.append({
+            "name": f"__**{squad.name}**__",
+            "value": value,
+            "inline": True
+        })
+
     embed_payload = {
         "embeds": [{
             "title": f"🛠️ Finalized Team Composition{event_time_str}",

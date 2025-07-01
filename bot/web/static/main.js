@@ -134,7 +134,7 @@ document.addEventListener('DOMContentLoaded', () => {
             buildBtn.disabled = false;
         }
     });
-    
+
     refreshRosterBtn.addEventListener('click', async () => {
         const eventId = eventDropdown.value;
         if (!eventId || currentSquads.length === 0) return;
@@ -222,7 +222,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // --- RENDER & HELPER FUNCTIONS ---
-
     function renderWorkshop(squads) {
         currentSquads = squads;
         workshopArea.innerHTML = '';

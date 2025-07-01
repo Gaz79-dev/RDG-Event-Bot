@@ -1,10 +1,7 @@
 document.addEventListener('DOMContentLoaded', () => {
     // --- STATE AND HEADERS ---
     const token = getAuthToken();
-    if (!token) {
-        window.location.href = '/login';
-        return;
-    }
+    if (!token) { window.location.href = '/login'; return; }
     const headers = { 'Authorization': `Bearer ${token}` };
     let currentSquads = [];
     let ALL_ROLES = {};
@@ -30,31 +27,29 @@ document.addEventListener('DOMContentLoaded', () => {
     const modalRoleSelect = document.getElementById('modal-role-select');
     const modalCancelBtn = document.getElementById('modal-cancel-btn');
 
-    // --- FIX: Add a robust error handler for failed API calls ---
+    // --- UTILITY FUNCTIONS ---
     const handleApiError = (response) => {
         if (response.status === 401) {
-            // If unauthorized, the token is bad. Clear it and force a re-login.
             localStorage.removeItem('accessToken');
             window.location.href = '/login';
             return true;
         }
         if (!response.ok) {
-            // For other errors, log them and stop.
             console.error('API request failed:', response);
+            alert('An API error occurred. Please check the console.');
             return true;
         }
         return false;
     };
 
     // --- INITIAL DATA FETCHES ---
-    // Fetch all necessary data, using the error handler
     Promise.all([
         fetch('/api/users/me', { headers }),
         fetch('/api/squads/roles', { headers }),
         fetch('/api/events', { headers })
     ]).then(async ([userResponse, rolesResponse, eventsResponse]) => {
         if (handleApiError(userResponse) || handleApiError(rolesResponse) || handleApiError(eventsResponse)) return;
-
+        
         const user = await userResponse.json();
         if (user && user.is_admin) adminLink.classList.remove('hidden');
 
@@ -68,14 +63,131 @@ document.addEventListener('DOMContentLoaded', () => {
             option.textContent = `${event.title} (${new Date(event.event_time).toLocaleString()})`;
             eventDropdown.appendChild(option);
         });
+    }).catch(error => { console.error("Failed to load initial page data:", error); });
 
-    }).catch(error => {
-        console.error("Failed to load initial page data:", error);
-        // Handle network errors or other issues by redirecting to login
-        localStorage.removeItem('accessToken');
-        window.location.href = '/login';
+    // --- EVENT LISTENERS ---
+
+    eventDropdown.addEventListener('change', async () => {
+        workshopSection.classList.add('hidden');
+        rosterAndBuildSection.classList.add('hidden');
+        const eventId = eventDropdown.value;
+        if (!eventId) return;
+
+        try {
+            const squadsResponse = await fetch(`/api/events/${eventId}/squads`, { headers });
+            if(handleApiError(squadsResponse)) return;
+            const existingSquads = await squadsResponse.json();
+
+            if (existingSquads && existingSquads.length > 0) {
+                renderWorkshop(existingSquads);
+            } else {
+                const rosterResponse = await fetch(`/api/events/${eventId}/signups`, { headers });
+                if(handleApiError(rosterResponse)) return;
+                const roster = await rosterResponse.json();
+                
+                rosterList.innerHTML = '';
+                roster.forEach(player => {
+                    const div = document.createElement('div');
+                    div.className = 'p-2 bg-gray-700 rounded-md text-sm';
+                    div.textContent = `${player.display_name} (${player.role_name} / ${player.subclass_name})`;
+                    rosterList.appendChild(div);
+                });
+                
+                populateBuildForm();
+                buildFormContainer.style.display = 'block';
+                rosterAndBuildSection.classList.remove('hidden');
+            }
+        } catch (error) {
+            console.error("Error loading event data:", error);
+        }
+    });
+
+    buildBtn.addEventListener('click', async () => {
+        const eventId = eventDropdown.value;
+        const formData = new FormData(buildForm);
+        const buildRequest = {};
+        ['infantry_squad_size', 'attack_squads', 'defence_squads', 'flex_squads', 'pathfinder_squads', 'armour_squads', 'recon_squads', 'arty_squads'].forEach(key => {
+            buildRequest[key] = parseInt(formData.get(key), 10) || 0;
+        });
+        buildBtn.textContent = 'Building...';
+        buildBtn.disabled = true;
+        try {
+            const response = await fetch(`/api/events/${eventId}/build-squads`, {
+                method: 'POST',
+                headers: { ...headers, 'Content-Type': 'application/json' },
+                body: JSON.stringify(buildRequest)
+            });
+            if (handleApiError(response)) return;
+            renderWorkshop(await response.json());
+        } catch (error) {
+            alert('Error building squads. Check console for details.');
+        } finally {
+            buildBtn.textContent = 'Build Squads';
+            buildBtn.disabled = false;
+        }
     });
     
-    // --- All other event listeners and functions from the previous version should be kept below ---
-    // (eventDropdown, buildBtn, refreshRosterBtn, sendBtn, modal listeners, etc.)
+    // --- All other event listeners for refresh, send, modals go here ---
+    // ...
+
+    // --- RENDER & HELPER FUNCTIONS ---
+
+    function renderWorkshop(squads) {
+        currentSquads = squads;
+        workshopArea.innerHTML = '';
+        reservesArea.innerHTML = '';
+
+        squads.forEach(squad => {
+            const isReserves = squad.squad_type === 'Reserves';
+            const targetContainer = isReserves ? reservesArea : workshopArea;
+            const squadDiv = document.createElement('div');
+            if (!isReserves) {
+                squadDiv.className = 'bg-gray-700 p-4 rounded-lg';
+                squadDiv.innerHTML = `<h3 class="font-bold text-white border-b border-gray-600 pb-2 mb-2">${squad.name}</h3>`;
+            }
+            const memberList = document.createElement('div');
+            memberList.className = 'member-list space-y-1 min-h-[40px]';
+            memberList.dataset.squadId = squad.squad_id;
+
+            squad.members.forEach(member => {
+                const memberEl = document.createElement('div');
+                memberEl.className = 'p-2 bg-gray-800 rounded-md flex justify-between items-center member-item cursor-grab';
+                memberEl.dataset.memberId = member.squad_member_id;
+                memberEl.innerHTML = `
+                    <span class="member-info">
+                        <strong class="member-role">${member.assigned_role_name}:</strong>
+                        <span class="member-name">${member.display_name}</span>
+                    </span>
+                    <span class="edit-member-btn cursor-pointer text-xs text-gray-400 hover:text-white px-2">EDIT</span>`;
+                memberList.appendChild(memberEl);
+            });
+            squadDiv.appendChild(memberList);
+            targetContainer.appendChild(squadDiv);
+        });
+
+        document.querySelectorAll('.member-list').forEach(list => {
+            new Sortable(list, {
+                group: 'squads',
+                animation: 150,
+                onEnd: async (evt) => {
+                    const memberId = evt.item.dataset.memberId;
+                    const newSquadId = evt.to.dataset.squadId;
+                    try {
+                        const response = await fetch(`/api/squads/members/${memberId}/move`, {
+                            method: 'PUT',
+                            headers: { ...headers, 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ new_squad_id: parseInt(newSquadId) })
+                        });
+                        if(handleApiError(response)) throw new Error('Move failed on server');
+                    } catch (err) { alert("Error: Could not move member."); }
+                }
+            });
+        });
+        
+        rosterAndBuildSection.classList.add('hidden');
+        workshopSection.classList.remove('hidden');
+        loadChannels();
+    }
+    
+    // ... all other functions and modal logic from the previous proposal ...
 });

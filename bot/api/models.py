@@ -4,55 +4,93 @@ from datetime import datetime
 
 # --- Token Models ---
 class Token(BaseModel):
-    access_token: str; token_type: str
+    access_token: str
+    token_type: str
+
 class TokenData(BaseModel):
     username: Optional[str] = None
 
 # --- User Models ---
 class UserBase(BaseModel):
     username: str = Field(..., min_length=3, max_length=50)
+
 class UserCreate(UserBase):
-    password: str = Field(..., min_length=8); is_admin: bool = False
+    password: str = Field(..., min_length=8)
+    is_admin: bool = False
+
 class UserUpdate(BaseModel):
-    is_active: Optional[bool] = None; is_admin: Optional[bool] = None
+    is_active: Optional[bool] = None
+    is_admin: Optional[bool] = None
+
 class PasswordChange(BaseModel):
-    current_password: str; new_password: str = Field(..., min_length=8)
+    current_password: str
+    new_password: str = Field(..., min_length=8)
+
 class AdminPasswordChange(BaseModel):
     new_password: str = Field(..., min_length=8)
+
 class User(UserBase):
     model_config = ConfigDict(from_attributes=True)
-    id: int; is_active: bool; is_admin: bool
+    id: int
+    is_active: bool
+    is_admin: bool
+
 class UserInDB(User):
     hashed_password: str
 
 # --- Event & Squad Models ---
 class Event(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    event_id: int; title: str; event_time: datetime
+    event_id: int
+    title: str
+    event_time: datetime
+
 class Signup(BaseModel):
-    user_id: int; display_name: str
+    user_id: int
+    display_name: str
     role_name: Optional[str] = "Unassigned"
     subclass_name: Optional[str] = "N/A"
+
 class Channel(BaseModel):
-    id: str; name: str
+    id: str
+    name: str
+
 class SquadMember(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    squad_member_id: int; user_id: int; assigned_role_name: str
+    squad_member_id: int
+    user_id: int
+    assigned_role_name: str
     display_name: Optional[str] = None
+
 class Squad(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    squad_id: int; name: str; squad_type: str; members: List[SquadMember]
+    squad_id: int
+    name: str
+    squad_type: str
+    members: List[SquadMember]
     
 class SquadBuildRequest(BaseModel):
-    infantry_squad_size: int = 6; commander_squads: int = 1; attack_squads: int = 0; defence_squads: int = 0
-    flex_squads: int = 0; pathfinder_squads: int = 0; armour_squads: int = 0; recon_squads: int = 0; arty_squads: int = 0
-class SendEmbedRequest(BaseModel):
-    channel_id: int; squads: List[Squad]
+    infantry_squad_size: int = 6
+    commander_squads: int = 1
+    attack_squads: int = 0
+    defence_squads: int = 0
+    flex_squads: int = 0
+    pathfinder_squads: int = 0
+    armour_squads: int = 0
+    recon_squads: int = 0
+    arty_squads: int = 0
 
-# Add event_id to the role update request
+class SendEmbedRequest(BaseModel):
+    # --- FIX: Changed channel_id from int to str ---
+    channel_id: str
+    squads: List[Squad]
+
 class RoleUpdateRequest(BaseModel):
-    new_role_name: str; event_id: int
+    new_role_name: str
+    event_id: int
+
 class SquadMoveRequest(BaseModel):
     new_squad_id: int
+
 class RosterUpdateRequest(BaseModel):
     squads: List[Squad]

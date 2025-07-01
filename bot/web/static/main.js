@@ -28,6 +28,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const sendBtn = document.getElementById('send-btn');
     const refreshRosterBtn = document.getElementById('refresh-roster-btn');
     const adminLink = document.getElementById('admin-link');
+    const logoutBtn = document.getElementById('logout-btn');
     const editModal = document.getElementById('edit-member-modal');
     const editMemberForm = document.getElementById('edit-member-form');
     const modalMemberName = document.getElementById('modal-member-name');
@@ -84,6 +85,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- EVENT LISTENERS ---
 
+    logoutBtn.addEventListener('click', () => {
+        localStorage.removeItem('accessToken');
+        window.location.href = '/login';
+    });
+    
     eventDropdown.addEventListener('change', async () => {
         workshopSection.classList.add('hidden');
         const eventId = eventDropdown.value;
@@ -134,7 +140,7 @@ document.addEventListener('DOMContentLoaded', () => {
             buildBtn.disabled = false;
         }
     });
-    
+
     refreshRosterBtn.addEventListener('click', async () => {
         const eventId = eventDropdown.value;
         if (!eventId || currentSquads.length === 0) return;
@@ -158,22 +164,15 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     sendBtn.addEventListener('click', async () => {
-        // --- FIX: Logic moved inside the listener to get the live value ---
-        const selectedChannelId = document.getElementById('channel-dropdown').value;
-        
-        if (!selectedChannelId || currentSquads.length === 0) {
-            alert('Please select a channel and build squads first.');
-            return;
-        }
-        
+        const channelId = channelDropdown.value;
+        if (!channelId || currentSquads.length === 0) { alert('Please select a channel and build squads first.'); return; }
         sendBtn.textContent = 'Sending...';
         sendBtn.disabled = true;
-        
         try {
             const response = await fetch('/api/events/send-embed', {
                 method: 'POST',
                 headers: { ...headers, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ channel_id: parseInt(selectedChannelId, 10), squads: currentSquads })
+                body: JSON.stringify({ channel_id: parseInt(channelId, 10), squads: currentSquads })
             });
             if(handleApiError(response)) throw new Error("Failed to send");
             alert('Squad embed sent successfully!');
@@ -185,4 +184,147 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // ... The rest of the file (modal listeners, render functions, etc.) remains the same
+    document.body.addEventListener('click', (e) => {
+        if (e.target.classList.contains('edit-member-btn')) {
+            const memberItem = e.target.closest('.member-item');
+            modalMemberName.textContent = memberItem.querySelector('.member-name').textContent;
+            modalMemberIdInput.value = memberItem.dataset.memberId;
+            const currentRole = memberItem.querySelector('.assigned-role-text').textContent;
+            
+            modalRoleSelect.innerHTML = '';
+            const allRoles = [...new Set([...ALL_ROLES.roles, ...Object.values(ALL_ROLES.subclasses).flat()])].sort();
+            allRoles.forEach(role => {
+                const option = new Option(role, role);
+                if (role === currentRole) option.selected = true;
+                modalRoleSelect.add(option);
+            });
+            
+            editModal.classList.remove('hidden');
+        }
+    });
+
+    modalCancelBtn.addEventListener('click', () => editModal.classList.add('hidden'));
+
+    editMemberForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const memberId = modalMemberIdInput.value;
+        const newRole = modalRoleSelect.value;
+        const eventId = eventDropdown.value;
+        try {
+            const response = await fetch(`/api/squads/members/${memberId}/role`, {
+                method: 'PUT',
+                headers: { ...headers, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ new_role_name: newRole, event_id: parseInt(eventId) })
+            });
+            if (handleApiError(response)) return;
+            
+            const memberEl = document.querySelector(`[data-member-id='${memberId}']`);
+            if (memberEl) {
+                memberEl.querySelector('.member-emoji').innerHTML = createEmojiHtml(EMOJI_MAP[newRole]);
+                memberEl.querySelector('.assigned-role-text').textContent = newRole;
+            }
+            editModal.classList.add('hidden');
+        } catch (err) { alert("Error: Could not update role."); }
+    });
+
+    // --- RENDER & HELPER FUNCTIONS ---
+    function renderWorkshop(squads) {
+        currentSquads = squads;
+        workshopArea.innerHTML = '';
+        reservesArea.innerHTML = '';
+
+        (squads || []).forEach(squad => {
+            const isReserves = squad.squad_type === 'Reserves';
+            const targetContainer = isReserves ? reservesArea : workshopArea;
+            const squadDiv = document.createElement('div');
+            const memberList = document.createElement('div');
+            memberList.className = 'member-list space-y-1 min-h-[40px] p-2 rounded-lg';
+            if (!isReserves) {
+                squadDiv.className = 'bg-gray-700 p-4 rounded-lg';
+                squadDiv.innerHTML = `<h3 class="font-bold text-white border-b border-gray-600 pb-2 mb-2">${squad.name}</h3>`;
+            }
+            memberList.dataset.squadId = squad.squad_id;
+
+            (squad.members || []).forEach(member => {
+                const memberEl = document.createElement('div');
+                memberEl.className = 'p-2 bg-gray-800 rounded-md flex justify-between items-center member-item cursor-grab';
+                memberEl.dataset.memberId = member.squad_member_id;
+                const emojiHtml = createEmojiHtml(EMOJI_MAP[member.assigned_role_name]);
+                memberEl.innerHTML = `
+                    <span class="member-info flex items-center">
+                        <span class="member-emoji mr-2 flex-shrink-0 w-6 h-6 flex items-center justify-center">${emojiHtml}</span>
+                        <span class="member-name">${member.display_name}</span>
+                        <span class="assigned-role-text hidden">${member.assigned_role_name}</span>
+                    </span>
+                    <span class="edit-member-btn cursor-pointer text-xs text-gray-400 hover:text-white px-2">EDIT</span>`;
+                memberList.appendChild(memberEl);
+            });
+            squadDiv.appendChild(memberList);
+            targetContainer.appendChild(squadDiv);
+        });
+
+        document.querySelectorAll('.member-list').forEach(list => {
+            new Sortable(list, { group: 'squads', animation: 150, onEnd: async (evt) => {
+                const memberId = evt.item.dataset.memberId;
+                const newSquadId = evt.to.dataset.squadId;
+                try {
+                    const response = await fetch(`/api/squads/members/${memberId}/move`, {
+                        method: 'PUT', headers: { ...headers, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ new_squad_id: parseInt(newSquadId) })
+                    });
+                    if(handleApiError(response)) throw new Error('Move failed on server');
+                } catch (err) { alert("Error: Could not move member."); }
+            }});
+        });
+        
+        workshopSection.classList.remove('hidden');
+        loadChannels();
+    }
+
+    function displayRoster(roster) {
+        rosterList.innerHTML = '';
+        (roster || []).forEach(player => {
+            const div = document.createElement('div');
+            div.className = 'p-2 bg-gray-700 rounded-md text-sm flex items-center';
+            const emojiKey = player.subclass_name || player.role_name;
+            const emojiHtml = createEmojiHtml(EMOJI_MAP[emojiKey]);
+            div.innerHTML = `
+                <span class="flex-shrink-0 w-6 h-6 flex items-center justify-center">${emojiHtml}</span>
+                <span class="ml-2">${player.display_name}</span>
+            `;
+            rosterList.appendChild(div);
+        });
+    }
+
+    function populateBuildForm() {
+        const formFields = [
+            { label: 'Infantry Squad Size', id: 'infantry_squad_size', value: 6 },
+            { label: 'Commander Squads', id: 'commander_squads', value: 1 },
+            { label: 'Attack Squads', id: 'attack_squads', value: 2 },
+            { label: 'Defence Squads', id: 'defence_squads', value: 2 },
+            { label: 'Flex Squads', id: 'flex_squads', value: 1 },
+            { label: 'Pathfinder Squads', id: 'pathfinder_squads', value: 1 },
+            { label: 'Armour Squads', id: 'armour_squads', value: 1 },
+            { label: 'Recon Squads', id: 'recon_squads', value: 1 },
+            { label: 'Arty Squads', id: 'arty_squads', value: 0 },
+        ];
+        buildForm.innerHTML = formFields.map(field => `
+            <div>
+                <label for="${field.id}" class="block text-sm font-medium">${field.label}</label>
+                <input type="number" id="${field.id}" name="${field.id}" value="${field.value}" min="0" required class="mt-1 w-full bg-gray-700 border-gray-600 rounded-md p-2">
+            </div>
+        `).join('');
+    }
+
+    async function loadChannels() {
+        try {
+            const response = await fetch('/api/events/channels', { headers });
+            if (handleApiError(response)) return;
+            const channels = await response.json();
+            channelDropdown.innerHTML = '<option value="">-- Select a Channel --</option>';
+            (channels || []).forEach(channel => {
+                channelDropdown.add(new Option(channel.name, channel.id));
+            });
+        } catch(err) { console.error("Could not load channels", err)}
+    }
+});

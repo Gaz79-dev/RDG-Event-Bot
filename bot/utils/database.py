@@ -5,7 +5,7 @@ import json
 import httpx
 from typing import List, Optional, Dict
 
-# --- Static Definitions ---
+# Static Definitions
 ROLES = ["Commander", "Infantry", "Armour", "Recon", "Pathfinders"]
 SUBCLASSES = {
     "Infantry": ["Anti-Tank", "Assault", "Automatic Rifleman", "Engineer", "Machine Gunner", "Medic", "Officer", "Rifleman", "Support"],
@@ -57,6 +57,8 @@ class Database:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow("SELECT * FROM users WHERE username = $1", username)
             return dict(row) if row else None
+            
+    # ... Other user management functions ...
 
     # --- Event & Signup Functions ---
     async def get_upcoming_events(self) -> List[Dict]:
@@ -73,6 +75,8 @@ class Database:
             row = await connection.fetchrow("SELECT * FROM events WHERE event_id = $1;", event_id)
             return dict(row) if row else None
             
+    # ... Other event functions ...
+
     # --- Squad & Guild Config Functions ---
     async def get_all_roles_and_subclasses(self) -> Dict:
         return {"roles": ROLES, "subclasses": SUBCLASSES}
@@ -82,38 +86,19 @@ class Database:
             await connection.execute("DELETE FROM squads WHERE event_id = $1;", event_id)
 
     async def get_squads_with_members(self, event_id: int) -> List[Dict]:
-        """
-        Fetches all squads for an event and enriches them with member display names from the Discord API.
-        """
-        GUILD_ID = os.getenv("GUILD_ID")
-        BOT_TOKEN = os.getenv("DISCORD_TOKEN")
+        GUILD_ID, BOT_TOKEN = os.getenv("GUILD_ID"), os.getenv("DISCORD_TOKEN")
+        headers = {"Authorization": f"Bot {BOT_TOKEN}"}
+        query = "SELECT s.squad_id, s.name, s.squad_type, COALESCE(json_agg(sm.*) FILTER (WHERE sm.squad_member_id IS NOT NULL), '[]') as members FROM squads s LEFT JOIN squad_members sm ON s.squad_id = sm.squad_id WHERE s.event_id = $1 GROUP BY s.squad_id ORDER BY s.squad_id;"
+        async with self.pool.acquire() as connection: records = await connection.fetch(query, event_id)
         
-        query = """
-            SELECT 
-                s.squad_id, s.name, s.squad_type,
-                COALESCE(
-                    (SELECT json_agg(sm.*) FROM squad_members sm WHERE sm.squad_id = s.squad_id),
-                    '[]'
-                ) as members
-            FROM squads s
-            WHERE s.event_id = $1
-            GROUP BY s.squad_id
-            ORDER BY s.squad_id;
-        """
-        async with self.pool.acquire() as connection:
-            records = await connection.fetch(query, event_id)
-        
+        processed_squads = []
         if not GUILD_ID or not BOT_TOKEN:
             print("Warning: GUILD_ID or DISCORD_TOKEN not set. Display names will not be fetched.")
-            # Return basic data if env vars are missing
             return [dict(r) for r in records]
 
-        headers = {"Authorization": f"Bot {BOT_TOKEN}"}
-        processed_squads = []
         async with httpx.AsyncClient() as client:
             for record in records:
-                squad = dict(record)
-                processed_members = []
+                squad, processed_members = dict(record), []
                 for member_data in squad.get('members', []):
                     member = dict(member_data)
                     display_name = f"User ID: {member['user_id']}"
@@ -123,19 +108,31 @@ class Database:
                         if response.is_success:
                             api_member_data = response.json()
                             display_name = api_member_data.get('nick') or api_member_data['user'].get('global_name') or api_member_data['user']['username']
-                        else:
-                            print(f"Failed to fetch member {member['user_id']}: {response.status_code}")
-                    except Exception as e:
-                        print(f"Error fetching member {member['user_id']}: {e}")
-                    
+                    except Exception as e: print(f"Error fetching member {member['user_id']}: {e}")
                     member['display_name'] = display_name
                     processed_members.append(member)
-                
                 squad['members'] = processed_members
                 processed_squads.append(squad)
-                
         return processed_squads
 
+    # --- FIX: Added all missing squad management functions ---
+    async def create_squad(self, event_id: int, name: str, squad_type: str) -> int:
+        async with self.pool.acquire() as connection:
+            return await connection.fetchval("INSERT INTO squads (event_id, name, squad_type) VALUES ($1, $2, $3) RETURNING squad_id;", event_id, name, squad_type)
+
+    async def add_squad_member(self, squad_id: int, user_id: int, assigned_role: str):
+        async with self.pool.acquire() as connection:
+            await connection.execute("INSERT INTO squad_members (squad_id, user_id, assigned_role_name) VALUES ($1, $2, $3) ON CONFLICT (squad_id, user_id) DO UPDATE SET assigned_role_name = EXCLUDED.assigned_role_name;", squad_id, user_id, assigned_role)
+            
+    async def update_squad_member_role(self, squad_member_id: int, new_role: str):
+        async with self.pool.acquire() as conn:
+            await conn.execute("UPDATE squad_members SET assigned_role_name = $1 WHERE squad_member_id = $2", new_role, squad_member_id)
+
+    async def move_squad_member(self, squad_member_id: int, new_squad_id: int):
+        async with self.pool.acquire() as conn:
+            await conn.execute("UPDATE squad_members SET squad_id = $1 WHERE squad_member_id = $2", new_squad_id, squad_member_id)
+            
+    # --- Final close method ---
     async def close(self):
         if self.pool:
             await self.pool.close()

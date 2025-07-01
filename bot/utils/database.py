@@ -58,11 +58,6 @@ class Database:
             row = await conn.fetchrow("SELECT * FROM users WHERE username = $1", username)
             return dict(row) if row else None
 
-    async def get_user_by_id(self, user_id: int) -> Optional[Dict]:
-        async with self.pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT * FROM users WHERE id = $1", user_id)
-            return dict(row) if row else None
-
     # --- Event & Signup Functions ---
     async def get_upcoming_events(self) -> List[Dict]:
         query = "SELECT event_id, title, event_time FROM events WHERE COALESCE(end_time, event_time + INTERVAL '2 hours') > (NOW() AT TIME ZONE 'utc' - INTERVAL '12 hours') ORDER BY event_time DESC;"
@@ -70,52 +65,41 @@ class Database:
             return [dict(row) for row in await connection.fetch(query)]
 
     async def get_signups_for_event(self, event_id: int) -> List[Dict]:
-        query = "SELECT * FROM signups WHERE event_id = $1 ORDER BY role_name, subclass_name;"
-        async with self.pool.acquire() as conn:
-            return [dict(row) for row in await conn.fetch(query, event_id)]
+        async with self.pool.acquire() as connection:
+            return [dict(row) for row in await connection.fetch("SELECT * FROM signups WHERE event_id = $1;", event_id)]
 
-    async def get_signup(self, event_id: int, user_id: int) -> Optional[Dict]:
-        async with self.pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT * FROM signups WHERE event_id = $1 AND user_id = $2", event_id, user_id)
+    async def get_event_by_id(self, event_id: int) -> Optional[Dict]:
+        async with self.pool.acquire() as connection:
+            row = await connection.fetchrow("SELECT * FROM events WHERE event_id = $1;", event_id)
             return dict(row) if row else None
             
-    async def get_event_by_id(self, event_id: int) -> Optional[Dict]:
-        async with self.pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT * FROM events WHERE event_id = $1;", event_id)
-            return dict(row) if row else None
-
-    async def update_signup_role(self, event_id: int, user_id: int, role_name: Optional[str], subclass_name: Optional[str]):
-        async with self.pool.acquire() as connection:
-            await connection.execute("UPDATE signups SET role_name = $1, subclass_name = $2 WHERE event_id = $3 AND user_id = $4;", role_name, subclass_name, event_id, user_id)
-
     # --- Squad & Guild Config Functions ---
     async def get_all_roles_and_subclasses(self) -> Dict:
         return {"roles": ROLES, "subclasses": SUBCLASSES}
+        
+    async def delete_squads_for_event(self, event_id: int):
+        async with self.pool.acquire() as connection:
+            await connection.execute("DELETE FROM squads WHERE event_id = $1;", event_id)
 
-    async def update_squad_member_role(self, squad_member_id: int, new_role: str):
-        async with self.pool.acquire() as conn:
-            await conn.execute("UPDATE squad_members SET assigned_role_name = $1 WHERE squad_member_id = $2", new_role, squad_member_id)
+    async def create_squad(self, event_id: int, name: str, squad_type: str) -> int:
+        async with self.pool.acquire() as connection:
+            return await connection.fetchval("INSERT INTO squads (event_id, name, squad_type) VALUES ($1, $2, $3) RETURNING squad_id;", event_id, name, squad_type)
 
-    async def move_squad_member(self, squad_member_id: int, new_squad_id: int):
-        async with self.pool.acquire() as conn:
-            await conn.execute("UPDATE squad_members SET squad_id = $1 WHERE squad_member_id = $2", new_squad_id, squad_member_id)
-
-    async def get_squad_by_name(self, event_id: int, squad_name: str) -> Optional[Dict]:
-        async with self.pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT * FROM squads WHERE event_id = $1 AND name = $2", event_id, squad_name)
-            return dict(row) if row else None
-
-    async def remove_user_from_all_squads(self, event_id: int, user_id: int):
-        async with self.pool.acquire() as conn:
-            await conn.execute("DELETE FROM squad_members WHERE user_id = $1 AND squad_id IN (SELECT squad_id FROM squads WHERE event_id = $2)", user_id, event_id)
+    async def add_squad_member(self, squad_id: int, user_id: int, assigned_role: str):
+        async with self.pool.acquire() as connection:
+            await connection.execute("INSERT INTO squad_members (squad_id, user_id, assigned_role_name) VALUES ($1, $2, $3) ON CONFLICT (squad_id, user_id) DO UPDATE SET assigned_role_name = EXCLUDED.assigned_role_name;", squad_id, user_id, assigned_role)
 
     async def get_squads_with_members(self, event_id: int) -> List[Dict]:
         GUILD_ID, BOT_TOKEN = os.getenv("GUILD_ID"), os.getenv("DISCORD_TOKEN")
         headers = {"Authorization": f"Bot {BOT_TOKEN}"}
         query = "SELECT s.squad_id, s.name, s.squad_type, COALESCE(json_agg(sm.*) FILTER (WHERE sm.squad_member_id IS NOT NULL), '[]') as members FROM squads s LEFT JOIN squad_members sm ON s.squad_id = sm.squad_id WHERE s.event_id = $1 GROUP BY s.squad_id ORDER BY s.squad_id;"
-        async with self.pool.acquire() as connection: records = await connection.fetch(query, event_id)
-        if not GUILD_ID or not BOT_TOKEN: return [dict(r) for r in records]
         
+        async with self.pool.acquire() as connection:
+            records = await connection.fetch(query, event_id)
+        
+        if not GUILD_ID or not BOT_TOKEN:
+            return [dict(r) for r in records]
+
         processed_squads = []
         async with httpx.AsyncClient() as client:
             for record in records:
@@ -129,21 +113,15 @@ class Database:
                         if response.is_success:
                             api_member_data = response.json()
                             display_name = api_member_data.get('nick') or api_member_data['user'].get('global_name') or api_member_data['user']['username']
-                    except Exception as e: print(f"Error fetching member {member['user_id']}: {e}")
+                    except Exception as e:
+                        print(f"Error fetching member {member['user_id']}: {e}")
                     member['display_name'] = display_name
                     processed_members.append(member)
                 squad['members'] = processed_members
                 processed_squads.append(squad)
         return processed_squads
 
-    async def delete_squads_for_event(self, event_id: int):
-        async with self.pool.acquire() as connection:
-            await connection.execute("DELETE FROM squads WHERE event_id = $1;", event_id)
-
-    async def get_squad_member_details(self, squad_member_id: int) -> Optional[Dict]:
-        async with self.pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT sm.user_id, s.event_id FROM squad_members sm JOIN squads s ON sm.squad_id = s.squad_id WHERE sm.squad_member_id = $1", squad_member_id)
-            return dict(row) if row else None
-
     async def close(self):
-        if self.pool: await self.pool.close(); print("Database connection pool closed.")
+        if self.pool:
+            await self.pool.close()
+            print("Database connection pool closed.")

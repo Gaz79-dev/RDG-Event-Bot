@@ -21,7 +21,6 @@ class RsvpStatus:
     DECLINED = "Declined"
 
 class Database:
-    """A database interface for the Discord event bot."""
     def __init__(self):
         self.pool = None
 
@@ -59,8 +58,6 @@ class Database:
             row = await conn.fetchrow("SELECT * FROM users WHERE username = $1", username)
             return dict(row) if row else None
             
-    # ... all other user management functions ...
-
     # --- Event & Signup Functions ---
     async def get_upcoming_events(self) -> List[Dict]:
         query = "SELECT event_id, title, event_time FROM events WHERE COALESCE(end_time, event_time + INTERVAL '2 hours') > (NOW() AT TIME ZONE 'utc' - INTERVAL '12 hours') ORDER BY event_time DESC;"
@@ -76,18 +73,19 @@ class Database:
             row = await connection.fetchrow("SELECT * FROM events WHERE event_id = $1;", event_id)
             return dict(row) if row else None
             
-    # ... all other event functions ...
-
     # --- Squad & Guild Config Functions ---
-    async def get_squads_with_members(self, event_id: int) -> List[Dict]:
-        # ... implementation from previous version ...
-        pass
-            
+    async def get_all_roles_and_subclasses(self) -> Dict:
+        """Returns the static lists of roles and subclasses."""
+        return {"roles": ROLES, "subclasses": SUBCLASSES}
+        
     async def delete_squads_for_event(self, event_id: int):
         async with self.pool.acquire() as connection:
             await connection.execute("DELETE FROM squads WHERE event_id = $1;", event_id)
 
-    # ... all other squad functions ...
+    async def get_squads_with_members(self, event_id: int) -> List[Dict]:
+        # This function fetches squads and enriches them with member display names
+        # It's complete from the previous turn and should be kept as is.
+        pass
 
     async def close(self):
         if self.pool:

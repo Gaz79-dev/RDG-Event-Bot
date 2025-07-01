@@ -141,6 +141,12 @@ class Database:
             row = await conn.fetchrow("SELECT * FROM squads WHERE event_id = $1 AND name = $2", event_id, squad_name)
             return dict(row) if row else None
 
+    # Add this method to your Database class:
+    async def get_squad_by_id(self, squad_id: int) -> Optional[dict]:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT * FROM squads WHERE squad_id = $1", squad_id)
+            return dict(row) if row else None
+
     async def remove_user_from_all_squads(self, event_id: int, user_id: int):
         async with self.pool.acquire() as conn:
             await conn.execute("DELETE FROM squad_members WHERE user_id = $1 AND squad_id IN (SELECT squad_id FROM squads WHERE event_id = $2)", user_id, event_id)

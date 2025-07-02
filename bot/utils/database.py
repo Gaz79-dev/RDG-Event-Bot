@@ -90,8 +90,60 @@ class Database:
 
     async def delete_user(self, user_id: int):
         async with self.pool.acquire() as conn: await conn.execute("DELETE FROM users WHERE id = $1", user_id)
-        
+ 
     # --- Event & Signup Functions ---
+    # --- Event & Signup Functions ---
+    async def create_event(self, guild_id: int, channel_id: int, creator_id: int, data: Dict) -> int:
+        query = """
+            INSERT INTO events (guild_id, channel_id, creator_id, title, description, event_time, end_time, timezone, is_recurring, recurrence_rule, mention_role_ids, restrict_to_role_ids, recreation_hours)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING event_id;
+        """
+        async with self.pool.acquire() as connection:
+            return await connection.fetchval(
+                query, guild_id, channel_id, creator_id,
+                data.get('title'), data.get('description'),
+                data.get('start_time'), data.get('end_time'), data.get('timezone'),
+                data.get('is_recurring'), data.get('recurrence_rule'),
+                data.get('mention_role_ids', []), data.get('restrict_to_role_ids', []),
+                data.get('recreation_hours')
+            )
+
+    async def update_event(self, event_id: int, data: Dict):
+        query = """
+            UPDATE events SET
+                title = $1, description = $2, event_time = $3, end_time = $4, timezone = $5,
+                is_recurring = $6, recurrence_rule = $7, mention_role_ids = $8,
+                restrict_to_role_ids = $9, recreation_hours = $10
+            WHERE event_id = $11;
+        """
+        async with self.pool.acquire() as connection:
+            await connection.execute(
+                query, data.get('title'), data.get('description'),
+                data.get('start_time'), data.get('end_time'), data.get('timezone'),
+                data.get('is_recurring'), data.get('recurrence_rule'),
+                data.get('mention_role_ids', []), data.get('restrict_to_role_ids', []),
+                data.get('recreation_hours'), event_id
+            )
+
+    async def update_event_message_id(self, event_id: int, message_id: int):
+        async with self.pool.acquire() as connection:
+            await connection.execute("UPDATE events SET message_id = $1 WHERE event_id = $2;", message_id, event_id)
+
+    async def get_event_by_message_id(self, message_id: int) -> Optional[Dict]:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT * FROM events WHERE message_id = $1;", message_id)
+            return dict(row) if row else None
+
+    async def set_rsvp(self, event_id: int, user_id: int, status: str):
+        query = """
+            INSERT INTO signups (event_id, user_id, rsvp_status)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (event_id, user_id)
+            DO UPDATE SET rsvp_status = EXCLUDED.rsvp_status;
+        """
+        async with self.pool.acquire() as connection:
+            await connection.execute(query, event_id, user_id, status)
+    
     async def get_upcoming_events(self) -> List[Dict]:
         query = "SELECT event_id, title, event_time FROM events WHERE COALESCE(end_time, event_time + INTERVAL '2 hours') > (NOW() AT TIME ZONE 'utc' - INTERVAL '12 hours') ORDER BY event_time DESC;"
         async with self.pool.acquire() as connection:

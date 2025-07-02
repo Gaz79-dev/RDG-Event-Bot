@@ -23,7 +23,7 @@ router = APIRouter(
 GUILD_ID = os.getenv("GUILD_ID")
 BOT_TOKEN = os.getenv("DISCORD_TOKEN")
 
-@router.get("/", response_model=List[Event])
+@router.get("", response_model=List[Event])
 async def get_events(db: Database = Depends(get_db)):
     """Gets all upcoming and recently passed events."""
     return await db.get_upcoming_events()

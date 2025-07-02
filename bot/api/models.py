@@ -71,7 +71,6 @@ class Squad(BaseModel):
     
 class SquadBuildRequest(BaseModel):
     infantry_squad_size: int = 6
-    commander_squads: int = 1
     attack_squads: int = 0
     defence_squads: int = 0
     flex_squads: int = 0

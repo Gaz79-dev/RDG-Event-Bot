@@ -25,11 +25,18 @@ async def run_web_draft(db: Database, event_id: int, request_data) -> List[Dict]
 
     squad_counts, squads_to_fill = {}, []
     
-    # 1. Create all the empty squad shells first
-    squad_configs = [("Commander", request_data.commander_squads, "Command"), ("Attack", request_data.attack_squads, "Infantry"), 
-                     ("Defence", request_data.defence_squads, "Infantry"), ("Flex", request_data.flex_squads, "Infantry"),
-                     ("Pathfinders", request_data.pathfinder_squads, "Recon"), ("Recon", request_data.recon_squads, "Recon"),
-                     ("Armour", request_data.armour_squads, "Armour"), ("Arty", request_data.arty_squads, "Artillery")]
+    # 1. Always create one hardcoded Commander squad
+    commander_squad_id = await db.create_squad(event_id, "Commander", "Command")
+    squads_to_fill.append({'id': commander_squad_id, 'base_name': 'Commander', 'type': 'Command', 'class_counts': defaultdict(int)})
+    
+    # 2. Create all other empty squad shells based on the request
+    squad_configs = [("Attack", request_data.attack_squads, "Infantry"), 
+                     ("Defence", request_data.defence_squads, "Infantry"), 
+                     ("Flex", request_data.flex_squads, "Infantry"),
+                     ("Pathfinders", request_data.pathfinder_squads, "Recon"), 
+                     ("Recon", request_data.recon_squads, "Recon"),
+                     ("Armour", request_data.armour_squads, "Armour"), 
+                     ("Arty", request_data.arty_squads, "Artillery")]
                      
     for base_name, count, squad_type in squad_configs:
         for _ in range(count):
@@ -37,7 +44,7 @@ async def run_web_draft(db: Database, event_id: int, request_data) -> List[Dict]
             s_id = await db.create_squad(event_id, squad_name, squad_type)
             squads_to_fill.append({'id': s_id, 'base_name': base_name, 'type': squad_type, 'class_counts': defaultdict(int)})
     
-    # 2. Draft players into the created squads
+    # 3. Draft players into the created squads
     for squad in squads_to_fill:
         # Determine which player pool to draw from
         pool_key = squad['base_name'] if squad['base_name'] in player_pools else "Infantry"
@@ -49,13 +56,18 @@ async def run_web_draft(db: Database, event_id: int, request_data) -> List[Dict]
 
         temp_infantry_pool = []
         member_count = 0
-        squad_size = 3 if squad['type'] == "Armour" else 2 if squad['type'] in ["Recon", "Artillery"] else request_data.infantry_squad_size
+        squad_size = 3 if squad['type'] == "Armour" else 2 if squad['type'] in ["Recon", "Artillery"] else 1 if squad['type'] == "Command" else request_data.infantry_squad_size
         
         while member_count < squad_size and player_pool:
             player = player_pool.pop(0)
             player_class = player['subclass_name']
             
-            if squad['class_counts'][player_class] < CLASS_LIMITS.get(player_class, 99):
+            # Use a generic class limit for command, but specific for others
+            limit = CLASS_LIMITS.get(player_class, 99)
+            if squad['type'] == 'Command':
+                limit = 1
+
+            if squad['class_counts'][player_class] < limit:
                 await db.add_squad_member(squad['id'], player['user_id'], player_class)
                 squad['class_counts'][player_class] += 1
                 member_count += 1
@@ -64,7 +76,7 @@ async def run_web_draft(db: Database, event_id: int, request_data) -> List[Dict]
         
         player_pools[pool_key] = temp_infantry_pool + player_pools[pool_key]
 
-    # 3. All remaining players go to Reserves
+    # 4. All remaining players go to Reserves
     reserves_squad_id = await db.create_squad(event_id, "Reserves", "Reserves")
     for role in player_pools:
         for player in player_pools[role]:

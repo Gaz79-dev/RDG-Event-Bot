@@ -123,8 +123,6 @@ class RoleSelect(ui.Select):
         super().__init__(placeholder="1. Choose your primary role...", options=options)
     
     async def callback(self, i: discord.Interaction):
-        # --- START: New Subclass Restriction Logic ---
-        # First, handle the case where no roles were available from the start
         selected_role = self.values[0]
         if selected_role == "unassigned":
             await self.db.update_signup_role(self.event_id, i.user.id, "Unassigned", None)
@@ -136,10 +134,8 @@ class RoleSelect(ui.Select):
         self.view.role = selected_role
         subclass_select = self.view.subclass_select
         
-        # Get all possible subclasses for the chosen primary role
         all_subclasses = SUBCLASSES.get(self.view.role, [])
         if not all_subclasses:
-            # If there are no subclasses, confirm the primary role and finish
             await self.db.update_signup_role(self.event_id, i.user.id, self.view.role, None)
             for item in self.view.children: item.disabled = True
             await i.response.edit_message(content=f"Your role is confirmed as **{self.view.role}**!", view=self.view)
@@ -147,15 +143,29 @@ class RoleSelect(ui.Select):
             asyncio.create_task(self.view.update_original_embed())
             return
 
-        # Build the role configuration from environment variables
+        # --- START: FIX ---
+        # We are in a DM, so we must fetch the guild and member object to check roles.
+        event = await self.db.get_event_by_id(self.event_id)
+        if not event:
+            return await i.response.edit_message(content="Error: The event could not be found.", view=None)
+
+        guild = self.view.bot.get_guild(event['guild_id'])
+        if not guild:
+            return await i.response.edit_message(content="Error: Bot is not in the event's server.", view=None)
+        
+        member = guild.get_member(i.user.id) or await guild.fetch_member(i.user.id)
+        if not member:
+            return await i.response.edit_message(content="Error: Could not find you in the event's server.", view=None)
+        
+        user_role_ids = {r.id for r in member.roles}
+        # --- END: FIX ---
+
         restricted_roles_config = {
             "Officer": os.getenv("ROLE_ID_OFFICER"),
             "Tank Commander": os.getenv("ROLE_ID_TANK_COMMANDER"),
         }
         restricted_roles_config = {k: int(v) for k, v in restricted_roles_config.items() if v and v.isdigit()}
-        user_role_ids = {r.id for r in i.user.roles}
         
-        # Filter the subclasses to only show ones the user is allowed to select
         available_subclasses = []
         for subclass in all_subclasses:
             if subclass not in RESTRICTED_ROLES:
@@ -166,13 +176,13 @@ class RoleSelect(ui.Select):
             if not required_role_id or required_role_id in user_role_ids:
                 available_subclasses.append(subclass)
 
-        # Update the subclass dropdown with the filtered list
         subclass_select.disabled = False
         subclass_select.placeholder = "2. Choose your subclass..."
-        subclass_select.options = [discord.SelectOption(label=s, emoji=EMOJI_MAPPING.get(s, "❔")) for s in available_subclasses]
-        if not subclass_select.options:
+        if available_subclasses:
+            subclass_select.options = [discord.SelectOption(label=s, emoji=EMOJI_MAPPING.get(s, "❔")) for s in available_subclasses]
+        else:
+            subclass_select.options = [discord.SelectOption(label="No subclasses available", value="no_subclass_available")]
             subclass_select.placeholder = "No subclasses available for you"
-            subclass_select.disabled = True
 
         await i.response.edit_message(view=self.view)
 

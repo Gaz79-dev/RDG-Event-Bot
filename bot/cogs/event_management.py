@@ -15,15 +15,26 @@ from ..utils.database import Database, RsvpStatus, ROLES, SUBCLASSES, RESTRICTED
 
 # --- Constants & Helpers ---
 EMOJI_MAPPING = {
-    "Commander": os.getenv("EMOJI_COMMANDER", "⭐"), "Infantry": os.getenv("EMOJI_INFANTRY", "💂"),
-    "Armour": os.getenv("EMOJI_ARMOUR", "🛡️"), "Recon": os.getenv("EMOJI_RECON", "👁️"),
-    "Anti-Tank": os.getenv("EMOJI_ANTI_TANK", "🚀"), "Assault": os.getenv("EMOJI_ASSAULT", "💥"),
-    "Automatic Rifleman": os.getenv("EMOJI_AUTOMATIC_RIFLEMAN", "🔥"), "Engineer": os.getenv("EMOJI_ENGINEER", "🛠️"),
-    "Machine Gunner": os.getenv("EMOJI_MACHINE_GUNNER", "💣"), "Medic": os.getenv("EMOJI_MEDIC", "➕"),
-    "Officer": os.getenv("EMOJI_OFFICER", "🫡"), "Rifleman": os.getenv("EMOJI_RIFLEMAN", "👤"),
-    "Support": os.getenv("EMOJI_SUPPORT", "🔧"), "Tank Commander": os.getenv("EMOJI_TANK_COMMANDER", "🧑‍✈️"),
-    "Crewman": os.getenv("EMOJI_CREWMAN", "👨‍🔧"), "Spotter": os.getenv("EMOJI_SPOTTER", "👀"),
-    "Sniper": os.getenv("EMOJI_SNIPER", "🎯"), "Unassigned": "❔"
+    "Commander": os.getenv("EMOJI_COMMANDER", "⭐"),
+    "Infantry": os.getenv("EMOJI_INFANTRY", "💂"),
+    "Armour": os.getenv("EMOJI_ARMOUR", "🛡️"),
+    "Recon": os.getenv("EMOJI_RECON", "👁️"),
+    "Pathfinders": os.getenv("EMOJI_PATHFINDERS", "🧭"),
+    "Artillery": os.getenv("EMOJI_ARTILLERY", "💣"),
+    "Anti-Tank": os.getenv("EMOJI_ANTI_TANK", "🚀"),
+    "Assault": os.getenv("EMOJI_ASSAULT", "💥"),
+    "Automatic Rifleman": os.getenv("EMOJI_AUTOMATIC_RIFLEMAN", "🔥"),
+    "Engineer": os.getenv("EMOJI_ENGINEER", "🛠️"),
+    "Machine Gunner": os.getenv("EMOJI_MACHINE_GUNNER", "💥"),
+    "Medic": os.getenv("EMOJI_MEDIC", "➕"),
+    "Officer": os.getenv("EMOJI_OFFICER", "🫡"),
+    "Rifleman": os.getenv("EMOJI_RIFLEMAN", "👤"),
+    "Support": os.getenv("EMOJI_SUPPORT", "🔧"),
+    "Tank Commander": os.getenv("EMOJI_TANK_COMMANDER", "🧑‍✈️"),
+    "Crewman": os.getenv("EMOJI_CREWMAN", "👨‍🔧"),
+    "Spotter": os.getenv("EMOJI_SPOTTER", "👀"),
+    "Sniper": os.getenv("EMOJI_SNIPER", "🎯"),
+    "Unassigned": "❔"
 }
 
 async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> discord.Embed:

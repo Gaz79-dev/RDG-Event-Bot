@@ -40,28 +40,47 @@ EMOJI_MAPPING = {
 async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> discord.Embed:
     event = await db.get_event_by_id(event_id)
     if not event: return discord.Embed(title="Error", description="Event not found.", color=discord.Color.red())
+    
     guild = bot.get_guild(event['guild_id'])
     if not guild: return discord.Embed(title="Error", description="Could not find the server for this event.", color=discord.Color.red())
+    
     signups = await db.get_signups_for_event(event_id)
-    squad_roles = await db.get_squad_config_roles(guild.id)
+    
+    # --- START: New logic to get specialty roles from .env ---
+    specialty_roles = {
+        "arty": os.getenv("ROLE_ID_ARTY"),
+        "armour": os.getenv("ROLE_ID_ARMOUR"),
+        "attack": os.getenv("ROLE_ID_ATTACK"),
+        "defence": os.getenv("ROLE_ID_DEFENCE"),
+    }
+    specialty_roles = {k: int(v) for k, v in specialty_roles.items() if v and v.isdigit()}
+    # --- END: New logic ---
+
     embed = discord.Embed(title=f"📅 {event['title']}", description=event['description'], color=discord.Color.blue())
     time_str = f"**Starts:** {discord.utils.format_dt(event['event_time'], style='F')} ({discord.utils.format_dt(event['event_time'], style='R')})"
     if event['end_time']: time_str += f"\n**Ends:** {discord.utils.format_dt(event['end_time'], style='F')}"
     if event['timezone']: time_str += f"\nTimezone: {event['timezone']}"
     embed.add_field(name="Time", value=time_str, inline=False)
+    
     accepted_signups, tentative_users, declined_users = defaultdict(list), [], []
     for signup in signups:
         member = guild.get_member(signup['user_id'])
         if not member: continue
+        
         if signup['rsvp_status'] == RsvpStatus.ACCEPTED:
             user_role_ids = {r.id for r in member.roles}
             specialty = ""
-            if squad_roles:
-                if squad_roles.get('squad_arty_role_id') in user_role_ids: specialty = " (Arty)"
-                elif squad_roles.get('squad_armour_role_id') in user_role_ids: specialty = " (Armour)"
-                elif squad_roles.get('squad_attack_role_id') in user_role_ids and squad_roles.get('squad_defence_role_id') in user_role_ids: specialty = " (Flex)"
-                elif squad_roles.get('squad_attack_role_id') in user_role_ids: specialty = " (Attack)"
-                elif squad_roles.get('squad_defence_role_id') in user_role_ids: specialty = " (Defence)"
+            # --- START: Updated check using .env config ---
+            attack_role = specialty_roles.get('attack')
+            defence_role = specialty_roles.get('defence')
+
+            if specialty_roles.get('arty') in user_role_ids: specialty = " (Arty)"
+            elif specialty_roles.get('armour') in user_role_ids: specialty = " (Armour)"
+            elif attack_role and defence_role and attack_role in user_role_ids and defence_role in user_role_ids: specialty = " (Flex)"
+            elif attack_role in user_role_ids: specialty = " (Attack)"
+            elif defence_role in user_role_ids: specialty = " (Defence)"
+            # --- END: Updated check ---
+            
             role, subclass = signup['role_name'] or "Unassigned", signup['subclass_name']
             signup_text = f"**{member.display_name}**"
             if subclass: signup_text += f" ({EMOJI_MAPPING.get(subclass, '❔')})"
@@ -69,20 +88,25 @@ async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> 
             accepted_signups[role].append(signup_text)
         elif signup['rsvp_status'] == RsvpStatus.TENTATIVE: tentative_users.append(member.display_name)
         elif signup['rsvp_status'] == RsvpStatus.DECLINED: declined_users.append(member.display_name)
+        
     total_accepted = sum(len(v) for v in accepted_signups.values())
     embed.add_field(name=f"✅ Accepted ({total_accepted})", value="\u200b", inline=False)
+    
     for role in ROLES + ["Unassigned"]:
         if role == "Unassigned" and not accepted_signups.get("Unassigned"): continue
         users_in_role = accepted_signups.get(role, [])
         embed.add_field(name=f"{EMOJI_MAPPING.get(role, '')} **{role}** ({len(users_in_role)})", value="\n".join(users_in_role) or "No one yet", inline=False)
+        
     if tentative_users: embed.add_field(name=f"🤔 Tentative ({len(tentative_users)})", value=", ".join(tentative_users), inline=False)
     if declined_users: embed.add_field(name=f"❌ Declined ({len(declined_users)})", value=", ".join(declined_users), inline=False)
+    
     creator_name = "Unknown User"
     if creator_id := event.get('creator_id'):
         try:
             creator = guild.get_member(creator_id) or await guild.fetch_member(creator_id)
             creator_name = creator.display_name if creator else (await bot.fetch_user(creator_id)).name
         except discord.NotFound: pass
+        
     embed.set_footer(text=f"Event ID: {event_id} | Created by: {creator_name}")
     return embed
 
@@ -173,38 +197,30 @@ class PersistentEventView(ui.View):
         event = await self.db.get_event_by_message_id(i.message.id)
         if not event: return await i.followup.send("Event not found.", ephemeral=True)
         
-        # --- START: New logic to determine available roles ---
-        restricted_roles_config = await self.db.get_squad_config_roles(i.guild_id)
+        # --- START: New logic to determine available roles from .env ---
+        restricted_roles_config = {
+            "Commander": os.getenv("ROLE_ID_COMMANDER"), "Officer": os.getenv("ROLE_ID_OFFICER"),
+            "Recon": os.getenv("ROLE_ID_RECON"), "Tank Commander": os.getenv("ROLE_ID_TANK_COMMANDER"),
+            "Pathfinders": os.getenv("ROLE_ID_PATHFINDER"), "Artillery": os.getenv("ROLE_ID_ARTY"),
+        }
+        restricted_roles_config = {k: int(v) for k, v in restricted_roles_config.items() if v and v.isdigit()}
+
         user_role_ids = {r.id for r in i.user.roles}
         available_roles = []
-
-        # This maps the role names from the ROLES list to the database column names
-        role_to_db_col_map = {
-            "Commander": "commander_role_id", "Recon": "recon_role_id",
-            "Officer": "officer_role_id", "Tank Commander": "tank_commander_role_id",
-            "Pathfinders": "squad_pathfinder_role_id", "Artillery": "squad_arty_role_id"
-        }
 
         for role in ROLES:
             if role not in RESTRICTED_ROLES:
                 available_roles.append(role)
                 continue
             
-            # It's a restricted role, so check if the user has the required Discord role
-            required_role_id = None
-            if restricted_roles_config:
-                db_column_name = role_to_db_col_map.get(role)
-                if db_column_name:
-                    required_role_id = restricted_roles_config.get(db_column_name)
-
-            if required_role_id and required_role_id in user_role_ids:
+            required_role_id = restricted_roles_config.get(role)
+            if not required_role_id or required_role_id in user_role_ids:
                 available_roles.append(role)
         # --- END: New logic ---
 
         await self.db.set_rsvp(event['event_id'], i.user.id, RsvpStatus.ACCEPTED)
         
         try:
-            # Pass the dynamically generated list of available roles to the view
             view = RoleSelectionView(i.client, self.db, event['event_id'], i.message.id, i.user, available_roles)
             await i.user.send(f"You accepted **{event['title']}**. Select your role:", view=view)
             await i.followup.send("Check your DMs to select your role!", ephemeral=True)

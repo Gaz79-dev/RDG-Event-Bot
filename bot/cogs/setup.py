@@ -5,6 +5,7 @@ from discord import app_commands
 # --- FIX: Define the Group at the module level ---
 setup_group = app_commands.Group(name="setup", description="Commands for setting up the bot.", default_permissions=discord.Permissions(administrator=True))
 squad_config_group = app_commands.Group(name="squad_config", description="Commands for configuring squad roles.", parent=setup_group)
+restricted_role_group = app_commands.Group(name="restricted_role", description="Commands for configuring core restricted roles.", parent=setup_group)
 
 # --- FIX: Define the commands as standalone functions ---
 @squad_config_group.command(name="attack_role", description="Set the role for Attack specialty.")
@@ -36,6 +37,30 @@ async def set_pathfinder_role(interaction: discord.Interaction, role: discord.Ro
     db = interaction.client.db
     await db.set_squad_config_role(interaction.guild.id, "pathfinder", role.id)
     await interaction.response.send_message(f"Pathfinder specialty role set to {role.mention}.", ephemeral=True)
+
+@restricted_role_group.command(name="commander", description="Set the role required for the Commander role.")
+async def set_commander_role(interaction: discord.Interaction, role: discord.Role):
+    db = interaction.client.db
+    await db.set_squad_config_role(interaction.guild.id, "commander", role.id)
+    await interaction.response.send_message(f"Restricted Commander role set to {role.mention}.", ephemeral=True)
+
+@restricted_role_group.command(name="officer", description="Set the role required for the Officer subclass.")
+async def set_officer_role(interaction: discord.Interaction, role: discord.Role):
+    db = interaction.client.db
+    await db.set_squad_config_role(interaction.guild.id, "officer", role.id)
+    await interaction.response.send_message(f"Restricted Officer role set to {role.mention}.", ephemeral=True)
+
+@restricted_role_group.command(name="recon", description="Set the role required for the Recon role.")
+async def set_recon_role(interaction: discord.Interaction, role: discord.Role):
+    db = interaction.client.db
+    await db.set_squad_config_role(interaction.guild.id, "recon", role.id)
+    await interaction.response.send_message(f"Restricted Recon role set to {role.mention}.", ephemeral=True)
+
+@restricted_role_group.command(name="tank_commander", description="Set the role required for the Tank Commander subclass.")
+async def set_tank_commander_role(interaction: discord.Interaction, role: discord.Role):
+    db = interaction.client.db
+    await db.set_squad_config_role(interaction.guild.id, "tank_commander", role.id)
+    await interaction.response.send_message(f"Restricted Tank Commander role set to {role.mention}.", ephemeral=True)
 
 @setup_group.command(name="thread_hours", description="Set hours before an event to open its discussion thread.")
 @app_commands.describe(hours="e.g., 24 for one day")

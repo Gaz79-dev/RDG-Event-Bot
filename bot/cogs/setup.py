@@ -37,6 +37,16 @@ async def set_pathfinder_role(interaction: discord.Interaction, role: discord.Ro
     await db.set_squad_config_role(interaction.guild.id, "pathfinder", role.id)
     await interaction.response.send_message(f"Pathfinder specialty role set to {role.mention}.", ephemeral=True)
 
+@setup_group.command(name="thread_hours", description="Set hours before an event to open its discussion thread.")
+@app_commands.describe(hours="e.g., 24 for one day")
+async def set_thread_hours(interaction: discord.Interaction, hours: int):
+    if not 1 <= hours <= 336: # 2 weeks
+        return await interaction.response.send_message("Hours must be between 1 and 336.", ephemeral=True)
+    
+    db = interaction.client.db
+    await db.set_thread_creation_hours(interaction.guild.id, hours)
+    await interaction.response.send_message(f"Event discussion threads will now be created {hours} hours before an event starts.", ephemeral=True)
+
 # --- FIX: The Cog class is now only for state if needed, but here it's not, so we just need a setup function ---
 class SetupCog(commands.Cog):
     def __init__(self, bot: commands.Bot):

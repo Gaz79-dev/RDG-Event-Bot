@@ -318,19 +318,34 @@ class TimezoneSelectView(ui.View):
         self.selection: str = None
         self.add_item(TimezoneSelect())
 
-class RoleMultiSelect(ui.RoleSelect):
-    def __init__(self, placeholder: str):
-        super().__init__(placeholder=placeholder, min_values=1, max_values=25)
+class ManualRoleSelect(ui.Select):
+    def __init__(self, roles: List[discord.Role]):
+        # A dropdown can only have 25 options. We'll take the first 25.
+        options = [discord.SelectOption(label=role.name, value=str(role.id)) for role in roles[:25]]
+        if not options:
+            options.append(discord.SelectOption(label="No roles found in server", value="none"))
+        
+        super().__init__(
+            placeholder="Select roles to mention...",
+            min_values=0, # Allow selecting none
+            max_values=len(options),
+            options=options
+        )
+
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        self.view.selection = [role.id for role in self.values]
+        # We handle the 'none' case by just returning an empty list
+        if "none" in self.values:
+            self.view.selection = []
+        else:
+            self.view.selection = [int(role_id) for role_id in self.values]
         self.view.stop()
 
-class MultiRoleSelectView(ui.View):
-    def __init__(self, placeholder: str):
+class ManualRoleSelectView(ui.View):
+    def __init__(self, roles: List[discord.Role]):
         super().__init__(timeout=180)
         self.selection: List[int] = None
-        self.add_item(RoleMultiSelect(placeholder=placeholder))
+        self.add_item(ManualRoleSelect(roles))
 
 class Conversation:
     def __init__(self, cog: 'EventManagement', interaction: discord.Interaction, db: Database, event_id: int = None):
@@ -478,17 +493,29 @@ class Conversation:
         view = ConfirmationView()
         msg = await self.user.send(question, view=view)
         await view.wait()
-        if view.value is None:
+
+        if view.value is None: # Timed out
             await msg.delete()
             return False
+        
         await msg.delete()
-        if view.value:
-            select_view = MultiRoleSelectView(f"Select roles for: {data_key}")
-            m = await self.user.send("Please select roles below.", view=select_view)
+        if view.value: # User clicked "Yes"
+            # Get roles from the guild where the /event command was initiated
+            guild_roles = [r for r in self.interaction.guild.roles if r.name != "@everyone"]
+            guild_roles.sort(key=lambda r: r.name) # Sort roles alphabetically
+            
+            select_view = ManualRoleSelectView(guild_roles)
+            
+            prompt_text = "Please select roles below."
+            if len(guild_roles) > 25:
+                prompt_text += "\n*Note: Only the first 25 server roles are shown.*"
+            
+            selection_msg = await self.user.send(prompt_text, view=select_view)
             await select_view.wait()
-            await m.delete()
+            
+            if selection_msg: await selection_msg.delete()
             self.data[data_key] = select_view.selection or []
-        else:
+        else: # User clicked "No/Skip"
             self.data[data_key] = []
         return True
 

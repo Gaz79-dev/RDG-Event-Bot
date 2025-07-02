@@ -46,7 +46,7 @@ class Database:
         async with self.pool.acquire() as connection:
             async with connection.transaction():
                 await connection.execute("CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, username VARCHAR(50) UNIQUE NOT NULL, hashed_password VARCHAR(255) NOT NULL, is_active BOOLEAN DEFAULT TRUE, is_admin BOOLEAN DEFAULT FALSE);")
-                await connection.execute("CREATE TABLE IF NOT EXISTS guilds (guild_id BIGINT PRIMARY KEY, event_manager_role_ids BIGINT[], commander_role_id BIGINT, recon_role_id BIGINT, officer_role_id BIGINT, tank_commander_role_id BIGINT, thread_creation_hours INT DEFAULT 24, squad_attack_role_id BIGINT, squad_defence_role_id BIGINT, squad_arty_role_id BIGINT, squad_armour_role_id BIGINT, squad_pathfinder_role_id BIGINT);")
+                await connection.execute("CREATE TABLE IF NOT EXISTS guilds (guild_id BIGINT PRIMARY KEY, event_manager_role_ids BIGINT[], thread_creation_hours INT DEFAULT 24);")
                 await connection.execute("CREATE TABLE IF NOT EXISTS events (event_id SERIAL PRIMARY KEY, guild_id BIGINT NOT NULL, creator_id BIGINT NOT NULL, message_id BIGINT UNIQUE, channel_id BIGINT NOT NULL, thread_id BIGINT, title VARCHAR(255) NOT NULL, description TEXT, event_time TIMESTAMP WITH TIME ZONE NOT NULL, end_time TIMESTAMP WITH TIME ZONE, timezone VARCHAR(100), created_at TIMESTAMP WITH TIME ZONE DEFAULT (NOW() AT TIME ZONE 'utc'), thread_created BOOLEAN DEFAULT FALSE, is_recurring BOOLEAN DEFAULT FALSE, recurrence_rule VARCHAR(50), mention_role_ids BIGINT[], restrict_to_role_ids BIGINT[], recreation_hours INT, parent_event_id INT REFERENCES events(event_id) ON DELETE SET NULL, last_recreated_at TIMESTAMP WITH TIME ZONE);")
                 await connection.execute("CREATE TABLE IF NOT EXISTS signups (signup_id SERIAL PRIMARY KEY, event_id INT REFERENCES events(event_id) ON DELETE CASCADE, user_id BIGINT NOT NULL, role_name VARCHAR(100), subclass_name VARCHAR(100), rsvp_status VARCHAR(10) NOT NULL, UNIQUE(event_id, user_id));")
                 await connection.execute("CREATE TABLE IF NOT EXISTS squads (squad_id SERIAL PRIMARY KEY, event_id INT NOT NULL REFERENCES events(event_id) ON DELETE CASCADE, name VARCHAR(100) NOT NULL, squad_type VARCHAR(50) NOT NULL);")
@@ -294,34 +294,6 @@ class Database:
                 squad['members'] = processed_members
                 processed_squads.append(squad)
         return processed_squads
-
-    async def get_squad_config_roles(self, guild_id: int) -> Optional[Dict]:
-        """Retrieves the configured specialty squad roles for a guild."""
-        query = """
-            SELECT squad_attack_role_id, squad_defence_role_id, squad_arty_role_id, squad_armour_role_id
-            FROM guilds WHERE guild_id = $1;
-        """
-        async with self.pool.acquire() as connection:
-            row = await connection.fetchrow(query, guild_id)
-            return dict(row) if row else None
-
-    async def set_squad_config_role(self, guild_id: int, role_type: str, role_id: int):
-        """Sets a specific specialty squad role for a guild."""
-        # Mapping to prevent SQL injection and validate role_type
-        column_map = {
-            "attack": "squad_attack_role_id",
-            "defence": "squad_defence_role_id",
-            "arty": "squad_arty_role_id",
-            "armour": "squad_armour_role_id",
-            "pathfinder": "squad_pathfinder_role_id",
-            "commander": "commander_role_id",
-            "officer": "officer_role_id",
-            "recon": "recon_role_id",
-            "tank_commander": "tank_commander_role_id"
-        }
-        column_name = column_map.get(role_type)
-        if not column_name:
-            return
 
         query = f"""
             INSERT INTO guilds (guild_id, {column_name})

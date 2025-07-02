@@ -313,7 +313,11 @@ class Database:
             "defence": "squad_defence_role_id",
             "arty": "squad_arty_role_id",
             "armour": "squad_armour_role_id",
-            "pathfinder": "squad_pathfinder_role_id"
+            "pathfinder": "squad_pathfinder_role_id",
+            "commander": "commander_role_id",
+            "officer": "officer_role_id",
+            "recon": "recon_role_id",
+            "tank_commander": "tank_commander_role_id"
         }
         column_name = column_map.get(role_type)
         if not column_name:

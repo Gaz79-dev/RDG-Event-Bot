@@ -24,7 +24,6 @@ class EventBot(commands.Bot):
         cogs_to_load = [
             'bot.cogs.event_management',
             'bot.cogs.scheduler',
-            'bot.cogs.squad_builder',
             'bot.cogs.setup'
         ]
 

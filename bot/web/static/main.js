@@ -306,15 +306,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function populateBuildForm() {
         const formFields = [
-            { label: 'Infantry Squad Size', id: 'infantry_squad_size', value: 6 },
-            { label: 'Commander Squads', id: 'commander_squads', value: 1 },
-            { label: 'Attack Squads', id: 'attack_squads', value: 2 },
-            { label: 'Defence Squads', id: 'defence_squads', value: 2 },
+            { label: 'Infantry Squad Size', id: 'infantry_squad_size', value: 3 },
+            { label: 'Attack Squads', id: 'attack_squads', value: 3 },
+            { label: 'Defence Squads', id: 'defence_squads', value: 3 },
             { label: 'Flex Squads', id: 'flex_squads', value: 1 },
             { label: 'Pathfinder Squads', id: 'pathfinder_squads', value: 1 },
-            { label: 'Armour Squads', id: 'armour_squads', value: 1 },
+            { label: 'Armour Squads', id: 'armour_squads', value: 2 },
             { label: 'Recon Squads', id: 'recon_squads', value: 1 },
-            { label: 'Arty Squads', id: 'arty_squads', value: 0 },
+            { label: 'Arty Squads', id: 'arty_squads', value: 1 },
         ];
         buildForm.innerHTML = formFields.map(field => `
             <div>

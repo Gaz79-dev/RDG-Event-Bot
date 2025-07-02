@@ -235,6 +235,21 @@ class Database:
         """Deletes an event from the database."""
         async with self.pool.acquire() as conn:
             await conn.execute("DELETE FROM events WHERE event_id = $1", event_id)
+
+    async def get_events_for_recreation(self) -> List[dict]:
+        """Gets all recurring events that are due to be recreated."""
+        query = """
+            SELECT * FROM events WHERE is_recurring = TRUE
+            AND (last_recreated_at IS NULL OR last_recreated_at < (NOW() AT TIME ZONE 'utc' - INTERVAL '6 hour'));
+        """
+        async with self.pool.acquire() as connection:
+            return [dict(row) for row in await connection.fetch(query)]
+
+    async def update_last_recreated_at(self, event_id: int):
+        """Updates the last_recreated_at timestamp for a parent recurring event."""
+        query = "UPDATE events SET last_recreated_at = (NOW() AT TIME ZONE 'utc') WHERE event_id = $1;"
+        async with self.pool.acquire() as connection:
+            await connection.execute(query, event_id)
     
     # Add this method to your Database class:
     async def get_squad_by_id(self, squad_id: int) -> Optional[dict]:

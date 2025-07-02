@@ -47,4 +47,4 @@ async def setup(bot: commands.Bot):
     # We still add the cog in case we want to add state or listeners to it later
     await bot.add_cog(SetupCog(bot))
     # Explicitly add the command group to the bot's tree
-    # bot.tree.add_command(setup_group)
+    bot.tree.add_command(setup_group)

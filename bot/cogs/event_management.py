@@ -498,27 +498,42 @@ class Conversation:
     async def finish(self):
         if self.is_finished: return
         self.is_finished = True
-        if self.user.id in self.cog.active_conversations: del self.cog.active_conversations[self.user.id]
-        event_id = self.event_id
+        if self.user.id in self.cog.active_conversations:
+            del self.cog.active_conversations[self.user.id]
+
         try:
-            if self.event_id:
-                await self.db.update_event(self.event_id, self.data)
-                await self.user.send("Event updated successfully!")
-            else:
-                event_id = await self.db.create_event(self.interaction.guild.id, self.interaction.channel.id, self.user.id, self.data)
-                await self.user.send(f"Event created successfully! (ID: {event_id}). Posting it now...")
-            
-            target_channel = self.bot.get_channel(self.data.get('channel_id') or self.interaction.channel.id)
-            if not target_channel: return await self.user.send("Error: Could not find channel to post event.")
-            
             view = PersistentEventView(self.db)
-            embed = await create_event_embed(self.bot, event_id, self.db)
             content = " ".join([f"<@&{rid}>" for rid in self.data.get('mention_role_ids', [])])
-            msg = await target_channel.send(content=content, embed=embed, view=view)
-            await self.db.update_event_message_id(event_id, msg.id)
+
+            if self.event_id:  # This is the EDIT path
+                await self.db.update_event(self.event_id, self.data)
+                embed = await create_event_embed(self.bot, self.event_id, self.db)
+                
+                try:
+                    # Fetch the original message and edit it
+                    channel = self.bot.get_channel(self.data['channel_id']) or await self.bot.fetch_channel(self.data['channel_id'])
+                    message = await channel.fetch_message(self.data['message_id'])
+                    await message.edit(content=content, embed=embed, view=view)
+                    await self.user.send("Event updated successfully!")
+                except (discord.NotFound, discord.Forbidden):
+                    await self.user.send("Event details were updated, but I couldn't find or edit the original event message. It may have been deleted.")
+
+            else:  # This is the CREATE path
+                event_id = await self.db.create_event(self.interaction.guild.id, self.interaction.channel.id, self.user.id, self.data)
+                embed = await create_event_embed(self.bot, event_id, self.db)
+                target_channel = self.bot.get_channel(self.interaction.channel.id)
+
+                if target_channel:
+                    msg = await target_channel.send(content=content, embed=embed, view=view)
+                    await self.db.update_event_message_id(event_id, msg.id)
+                    await self.user.send(f"Event created successfully! (ID: {event_id}). Posting it now...")
+                else:
+                    await self.user.send("Event created, but I could not find the channel to post it in.")
+
         except Exception as e:
             print(f"Error finishing conversation: {e}")
             traceback.print_exc()
+            await self.user.send("An unexpected error occurred while saving the event.")
 
     async def cancel(self):
         if self.is_finished: return
@@ -548,7 +563,43 @@ class EventManagement(commands.Cog):
     @event_group.command(name="delete", description="Delete an existing event by its ID.")
     @app_commands.describe(event_id="The ID of the event to delete.")
     async def delete(self, interaction: discord.Interaction, event_id: int):
-        await interaction.response.send_message("Delete functionality placeholder.", ephemeral=True)
+        # Add a permission check
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message(
+                "You must be an administrator to delete events.", ephemeral=True
+            )
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        
+        event = await self.db.get_event_by_id(event_id)
+        if not event or event['guild_id'] != interaction.guild_id:
+            return await interaction.followup.send(
+                "Event not found or it does not belong to this server.", ephemeral=True
+            )
+
+        # Try to delete the original event embed message
+        if event.get('message_id') and event.get('channel_id'):
+            try:
+                channel = self.bot.get_channel(event['channel_id']) or await self.bot.fetch_channel(event['channel_id'])
+                message = await channel.fetch_message(event['message_id'])
+                await message.delete()
+            except (discord.NotFound, discord.Forbidden) as e:
+                print(f"Could not delete event message for event {event_id}: {e}")
+
+        # Try to delete the discussion thread
+        if event.get('thread_id'):
+            try:
+                thread = self.bot.get_channel(event['thread_id']) or await self.bot.fetch_channel(event['thread_id'])
+                await thread.delete()
+            except (discord.NotFound, discord.Forbidden) as e:
+                print(f"Could not delete event thread for event {event_id}: {e}")
+
+        # Delete the event from the database, which will cascade to signups and squads
+        await self.db.delete_event(event_id)
+        
+        await interaction.followup.send(
+            f"Successfully deleted event '{event['title']}' (ID: {event_id}).", ephemeral=True
+        )
 
     async def start_conversation(self, interaction: discord.Interaction, event_id: int = None):
         if interaction.user.id in self.active_conversations:

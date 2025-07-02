@@ -166,7 +166,7 @@ async def send_squad_embed(request: SendEmbedRequest, db: Database = Depends(get
         member_list = []
         for m in squad.members:
             emoji = EMOJI_MAPPING.get(m.assigned_role_name, "❔")
-            member_list.append(f"{emoji} **{m.assigned_role_name}:** {m.display_name}")
+            member_list.append(f"{emoji} {m.display_name}")
         value = "\n".join(member_list) or "Empty"
         fields.append({
             "name": f"__**{squad.name}**__",

@@ -46,17 +46,31 @@ async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> 
     
     signups = await db.get_signups_for_event(event_id)
     
-    # --- START: New logic to get specialty roles from .env ---
     specialty_roles = {
-        "arty": os.getenv("ROLE_ID_ARTY"),
-        "armour": os.getenv("ROLE_ID_ARMOUR"),
-        "attack": os.getenv("ROLE_ID_ATTACK"),
-        "defence": os.getenv("ROLE_ID_DEFENCE"),
+        "arty": os.getenv("ROLE_ID_ARTY"), "armour": os.getenv("ROLE_ID_ARMOUR"),
+        "attack": os.getenv("ROLE_ID_ATTACK"), "defence": os.getenv("ROLE_ID_DEFENCE"),
     }
     specialty_roles = {k: int(v) for k, v in specialty_roles.items() if v and v.isdigit()}
+
+    # --- START: New logic for restricted event notice ---
+    description = event.get('description', '')
+    if restricted_ids := event.get('restrict_to_role_ids'):
+        role_mentions = []
+        for role_id in restricted_ids:
+            role = guild.get_role(role_id)
+            if role:
+                role_mentions.append(role.mention)
+        
+        if role_mentions:
+            roles_text = ", ".join(role_mentions)
+            restriction_notice = (
+                f"**This is a restricted sign-up event.**\n"
+                f"Only members of the following role(s) are permitted to sign-up: {roles_text}\n\n---\n\n"
+            )
+            description = restriction_notice + description
     # --- END: New logic ---
 
-    embed = discord.Embed(title=f"📅 {event['title']}", description=event['description'], color=discord.Color.blue())
+    embed = discord.Embed(title=f"📅 {event['title']}", description=description, color=discord.Color.blue())
     time_str = f"**Starts:** {discord.utils.format_dt(event['event_time'], style='F')} ({discord.utils.format_dt(event['event_time'], style='R')})"
     if event['end_time']: time_str += f"\n**Ends:** {discord.utils.format_dt(event['end_time'], style='F')}"
     if event['timezone']: time_str += f"\nTimezone: {event['timezone']}"
@@ -70,7 +84,6 @@ async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> 
         if signup['rsvp_status'] == RsvpStatus.ACCEPTED:
             user_role_ids = {r.id for r in member.roles}
             specialty = ""
-            # --- START: Updated check using .env config ---
             attack_role = specialty_roles.get('attack')
             defence_role = specialty_roles.get('defence')
 
@@ -79,7 +92,6 @@ async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> 
             elif attack_role and defence_role and attack_role in user_role_ids and defence_role in user_role_ids: specialty = " (Flex)"
             elif attack_role in user_role_ids: specialty = " (Attack)"
             elif defence_role in user_role_ids: specialty = " (Defence)"
-            # --- END: Updated check ---
             
             role, subclass = signup['role_name'] or "Unassigned", signup['subclass_name']
             signup_text = f"**{member.display_name}**"

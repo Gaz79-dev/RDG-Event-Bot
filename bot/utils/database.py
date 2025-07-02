@@ -93,7 +93,6 @@ class Database:
         async with self.pool.acquire() as conn: await conn.execute("DELETE FROM users WHERE id = $1", user_id)
  
     # --- Event & Signup Functions ---
-    # --- Event & Signup Functions ---
     async def create_event(self, guild_id: int, channel_id: int, creator_id: int, data: Dict) -> int:
         query = """
             INSERT INTO events (guild_id, channel_id, creator_id, title, description, event_time, end_time, timezone, is_recurring, recurrence_rule, mention_role_ids, restrict_to_role_ids, recreation_hours)
@@ -193,7 +192,50 @@ class Database:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow("SELECT * FROM squads WHERE event_id = $1 AND name = $2", event_id, squad_name)
             return dict(row) if row else None
+    
+    # Scheduler for Discussion thread creation and historic event/squad cleanup
+    async def set_thread_creation_hours(self, guild_id: int, hours: int):
+        """Sets the number of hours before an event to create its thread."""
+        query = """
+            INSERT INTO guilds (guild_id, thread_creation_hours) VALUES ($1, $2)
+            ON CONFLICT (guild_id) DO UPDATE SET thread_creation_hours = EXCLUDED.thread_creation_hours;
+        """
+        async with self.pool.acquire() as connection:
+            await connection.execute(query, guild_id, hours)
 
+    async def get_events_for_thread_creation(self) -> List[dict]:
+        """Gets all events that are due to have a thread created."""
+        query = """
+            SELECT e.event_id, e.guild_id, e.channel_id, e.message_id, e.title, e.event_time
+            FROM events e
+            JOIN guilds g ON e.guild_id = g.guild_id
+            WHERE e.thread_created = FALSE
+            AND (NOW() AT TIME ZONE 'utc') >= (e.event_time - (g.thread_creation_hours * INTERVAL '1 hour'));
+        """
+        async with self.pool.acquire() as connection:
+            return [dict(row) for row in await connection.fetch(query)]
+
+    async def mark_thread_created(self, event_id: int, thread_id: int):
+        """Marks an event's thread as created in the database."""
+        query = "UPDATE events SET thread_created = TRUE, thread_id = $1 WHERE event_id = $2;"
+        async with self.pool.acquire() as connection:
+            await connection.execute(query, thread_id, event_id)
+
+    async def get_finished_events_for_cleanup(self) -> List[dict]:
+        """Gets old, non-recurring events whose end time has passed."""
+        # Clean up events that ended more than 6 hours ago to be safe
+        query = """
+            SELECT event_id, thread_id FROM events
+            WHERE is_recurring = FALSE AND end_time < (NOW() AT TIME ZONE 'utc' - INTERVAL '6 hours');
+        """
+        async with self.pool.acquire() as connection:
+            return [dict(row) for row in await connection.fetch(query)]
+
+    async def delete_event(self, event_id: int):
+        """Deletes an event from the database."""
+        async with self.pool.acquire() as conn:
+            await conn.execute("DELETE FROM events WHERE event_id = $1", event_id)
+    
     # Add this method to your Database class:
     async def get_squad_by_id(self, squad_id: int) -> Optional[dict]:
         async with self.pool.acquire() as conn:

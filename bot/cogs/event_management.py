@@ -123,6 +123,8 @@ class RoleSelect(ui.Select):
         super().__init__(placeholder="1. Choose your primary role...", options=options)
     
     async def callback(self, i: discord.Interaction):
+        # --- START: New Subclass Restriction Logic ---
+        # First, handle the case where no roles were available from the start
         selected_role = self.values[0]
         if selected_role == "unassigned":
             await self.db.update_signup_role(self.event_id, i.user.id, "Unassigned", None)
@@ -134,15 +136,44 @@ class RoleSelect(ui.Select):
         self.view.role = selected_role
         subclass_select = self.view.subclass_select
         
-        if subclass_options := SUBCLASSES.get(self.view.role, []):
-            subclass_select.disabled, subclass_select.placeholder, subclass_select.options = False, "2. Choose your subclass...", [discord.SelectOption(label=s, emoji=EMOJI_MAPPING.get(s, "❔")) for s in subclass_options]
-        else:
+        # Get all possible subclasses for the chosen primary role
+        all_subclasses = SUBCLASSES.get(self.view.role, [])
+        if not all_subclasses:
+            # If there are no subclasses, confirm the primary role and finish
             await self.db.update_signup_role(self.event_id, i.user.id, self.view.role, None)
             for item in self.view.children: item.disabled = True
             await i.response.edit_message(content=f"Your role is confirmed as **{self.view.role}**!", view=self.view)
             self.view.stop()
             asyncio.create_task(self.view.update_original_embed())
             return
+
+        # Build the role configuration from environment variables
+        restricted_roles_config = {
+            "Officer": os.getenv("ROLE_ID_OFFICER"),
+            "Tank Commander": os.getenv("ROLE_ID_TANK_COMMANDER"),
+        }
+        restricted_roles_config = {k: int(v) for k, v in restricted_roles_config.items() if v and v.isdigit()}
+        user_role_ids = {r.id for r in i.user.roles}
+        
+        # Filter the subclasses to only show ones the user is allowed to select
+        available_subclasses = []
+        for subclass in all_subclasses:
+            if subclass not in RESTRICTED_ROLES:
+                available_subclasses.append(subclass)
+                continue
+            
+            required_role_id = restricted_roles_config.get(subclass)
+            if not required_role_id or required_role_id in user_role_ids:
+                available_subclasses.append(subclass)
+
+        # Update the subclass dropdown with the filtered list
+        subclass_select.disabled = False
+        subclass_select.placeholder = "2. Choose your subclass..."
+        subclass_select.options = [discord.SelectOption(label=s, emoji=EMOJI_MAPPING.get(s, "❔")) for s in available_subclasses]
+        if not subclass_select.options:
+            subclass_select.placeholder = "No subclasses available for you"
+            subclass_select.disabled = True
+
         await i.response.edit_message(view=self.view)
 
 class SubclassSelect(ui.Select):

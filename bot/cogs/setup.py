@@ -1,9 +1,14 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
+import os
+
+# Set Guild ID
+GUILD_ID = os.getenv("GUILD_ID")
+if not GUILD_ID: raise ValueError("GUILD_ID not set in the environment, which is required for setup commands.")
 
 # --- FIX: Define the Group at the module level ---
-setup_group = app_commands.Group(name="setup", description="Commands for setting up the bot.", default_permissions=discord.Permissions(administrator=True))
+setup_group = app_commands.Group(name="setup", description="Commands for setting up the bot.")
 squad_config_group = app_commands.Group(name="squad_config", description="Commands for configuring squad roles.", parent=setup_group)
 restricted_role_group = app_commands.Group(name="restricted_role", description="Commands for configuring core restricted roles.", parent=setup_group)
 

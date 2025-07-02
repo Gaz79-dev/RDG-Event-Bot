@@ -250,11 +250,13 @@ class Database:
 
     async def set_squad_config_role(self, guild_id: int, role_type: str, role_id: int):
         """Sets a specific specialty squad role for a guild."""
+        # Mapping to prevent SQL injection and validate role_type
         column_map = {
             "attack": "squad_attack_role_id",
             "defence": "squad_defence_role_id",
             "arty": "squad_arty_role_id",
-            "armour": "squad_armour_role_id"
+            "armour": "squad_armour_role_id",
+            "pathfinder": "squad_pathfinder_role_id"
         }
         column_name = column_map.get(role_type)
         if not column_name:

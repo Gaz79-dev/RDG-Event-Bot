@@ -7,6 +7,7 @@ google-auth-oauthlib
 fastapi==0.111.0
 uvicorn[standard]==0.29.0
 passlib[bcrypt]
+bcrypt
 python-jose[cryptography]
 python-multipart
 httpx

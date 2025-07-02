@@ -9,27 +9,33 @@ squad_config_group = app_commands.Group(name="squad_config", description="Comman
 # --- FIX: Define the commands as standalone functions ---
 @squad_config_group.command(name="attack_role", description="Set the role for Attack specialty.")
 async def set_attack_role(interaction: discord.Interaction, role: discord.Role):
-    db = interaction.client.web_app.state.db
+    db = interaction.client.db
     await db.set_squad_config_role(interaction.guild.id, "attack", role.id)
     await interaction.response.send_message(f"Attack specialty role set to {role.mention}.", ephemeral=True)
 
 @squad_config_group.command(name="defence_role", description="Set the role for Defence specialty.")
 async def set_defence_role(interaction: discord.Interaction, role: discord.Role):
-    db = interaction.client.web_app.state.db
+    db = interaction.client.db
     await db.set_squad_config_role(interaction.guild.id, "defence", role.id)
     await interaction.response.send_message(f"Defence specialty role set to {role.mention}.", ephemeral=True)
 
 @squad_config_group.command(name="arty_role", description="Set the role for Arty Certified players.")
 async def set_arty_role(interaction: discord.Interaction, role: discord.Role):
-    db = interaction.client.web_app.state.db
+    db = interaction.client.db
     await db.set_squad_config_role(interaction.guild.id, "arty", role.id)
     await interaction.response.send_message(f"Arty specialty role set to {role.mention}.", ephemeral=True)
 
 @squad_config_group.command(name="armour_role", description="Set the role for Armour specialty players.")
 async def set_armour_role(interaction: discord.Interaction, role: discord.Role):
-    db = interaction.client.web_app.state.db
+    db = interaction.client.db
     await db.set_squad_config_role(interaction.guild.id, "armour", role.id)
     await interaction.response.send_message(f"Armour specialty role set to {role.mention}.", ephemeral=True)
+
+@squad_config_group.command(name="pathfinder_role", description="Set the role for Pathfinder specialty.")
+async def set_pathfinder_role(interaction: discord.Interaction, role: discord.Role):
+    db = interaction.client.db
+    await db.set_squad_config_role(interaction.guild.id, "pathfinder", role.id)
+    await interaction.response.send_message(f"Pathfinder specialty role set to {role.mention}.", ephemeral=True)
 
 # --- FIX: The Cog class is now only for state if needed, but here it's not, so we just need a setup function ---
 class SetupCog(commands.Cog):

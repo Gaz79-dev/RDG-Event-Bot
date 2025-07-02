@@ -237,6 +237,37 @@ class Database:
                 processed_squads.append(squad)
         return processed_squads
 
+    async def get_squad_config_roles(self, guild_id: int) -> Optional[Dict]:
+        """Retrieves the configured specialty squad roles for a guild."""
+        query = """
+            SELECT squad_attack_role_id, squad_defence_role_id, squad_arty_role_id, squad_armour_role_id
+            FROM guilds WHERE guild_id = $1;
+        """
+        async with self.pool.acquire() as connection:
+            row = await connection.fetchrow(query, guild_id)
+            return dict(row) if row else None
+
+    async def set_squad_config_role(self, guild_id: int, role_type: str, role_id: int):
+        """Sets a specific specialty squad role for a guild."""
+        column_map = {
+            "attack": "squad_attack_role_id",
+            "defence": "squad_defence_role_id",
+            "arty": "squad_arty_role_id",
+            "armour": "squad_armour_role_id"
+        }
+        column_name = column_map.get(role_type)
+        if not column_name:
+            return
+
+        query = f"""
+            INSERT INTO guilds (guild_id, {column_name})
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET {column_name} = EXCLUDED.{column_name};
+        """
+        async with self.pool.acquire() as connection:
+            await connection.execute(query, guild_id, role_id)
+    
     async def delete_squads_for_event(self, event_id: int):
         async with self.pool.acquire() as connection:
             await connection.execute("DELETE FROM squads WHERE event_id = $1;", event_id)

@@ -47,7 +47,6 @@ class EventBot(commands.Bot):
             synced = await self.tree.sync()
             print(f"Synced {len(synced)} command(s) globally.")
 
-
 async def main():
     """Main function to connect to the database and run the bot."""
     db = Database()
@@ -58,6 +57,43 @@ async def main():
     intents.message_content = True
     
     bot = EventBot(db=db, command_prefix="!", intents=intents)
+
+    # --- START: New Global Command Check ---
+    @bot.check
+    async def global_role_check(interaction: discord.Interaction):
+        # Load the configured role IDs from the .env file.
+        allowed_role_ids = set()
+        for i in range(1, 6): # Checks for ALLOWED_ROLE_ID_1 through 5
+            role_id_str = os.getenv(f"ALLOWED_ROLE_ID_{i}")
+            if role_id_str and role_id_str.isdigit():
+                allowed_role_ids.add(int(role_id_str))
+
+        # If no roles are configured in the .env file, allow everyone.
+        if not allowed_role_ids:
+            return True
+
+        # Ensure the command is being run by a member in a server, not a user in a DM.
+        if not isinstance(interaction.user, discord.Member):
+            return False
+            
+        # Check if the user has any of the allowed roles.
+        user_role_ids = {role.id for role in interaction.user.roles}
+        if user_role_ids.intersection(allowed_role_ids):
+            return True # User has at least one of the required roles.
+        
+        # If the check fails, send an ephemeral message and block the command.
+        try:
+            await interaction.response.send_message(
+                "You do not have the required role to use bot commands.", 
+                ephemeral=True,
+                delete_after=15
+            )
+        except discord.InteractionResponded:
+            # If the interaction was already responded to (e.g., a deferred modal), do nothing.
+            pass
+            
+        return False
+    # --- END: New Global Command Check ---
 
     token = os.getenv("DISCORD_TOKEN")
     if not token:

@@ -145,7 +145,7 @@ class Database:
             await connection.execute(query, event_id, user_id, status)
     
     async def get_upcoming_events(self) -> List[Dict]:
-        query = "SELECT event_id, title, event_time FROM events WHERE COALESCE(end_time, event_time + INTERVAL '2 hours') > (NOW() AT TIME ZONE 'utc' - INTERVAL '12 hours') ORDER BY event_time DESC;"
+        query = "SELECT * FROM events WHERE COALESCE(end_time, event_time + INTERVAL '2 hours') > (NOW() AT TIME ZONE 'utc' - INTERVAL '12 hours');"
         async with self.pool.acquire() as connection:
             return [dict(row) for row in await connection.fetch(query)]
 

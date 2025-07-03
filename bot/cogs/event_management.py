@@ -513,7 +513,7 @@ class Conversation:
         await conf_msg.delete()
 
         if view.value: # User clicked "Yes"
-            guild_roles = sorted([r for r in self.interaction.guild.roles if r.name != "@everyone" and not r.is_managed()], key=lambda r: r.position, reverse=True)
+            guild_roles = sorted([r for r in self.interaction.guild.roles if r.name != "@everyone" and not r.managed], key=lambda r: r.position, reverse=True)
             
             description_lines = [f"`{i+1}` {role.name}" for i, role in enumerate(guild_roles)]
             

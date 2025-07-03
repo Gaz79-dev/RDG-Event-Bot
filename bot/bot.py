@@ -24,7 +24,8 @@ class EventBot(commands.Bot):
         cogs_to_load = [
             'bot.cogs.event_management',
             'bot.cogs.scheduler',
-            'bot.cogs.setup'
+            'bot.cogs.setup',
+            'bot.cogs.sort'
         ]
 
         # Load each cog

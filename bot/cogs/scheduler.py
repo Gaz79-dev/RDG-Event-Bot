@@ -16,12 +16,14 @@ class Scheduler(commands.Cog):
         self.create_event_threads.start()
         self.recreate_recurring_events.start()
         self.cleanup_finished_events.start()
+        self.purge_deleted_events.start()
 
     def cog_unload(self):
         """Cleanly cancels all tasks when the cog is unloaded."""
         self.create_event_threads.cancel()
         self.recreate_recurring_events.cancel()
         self.cleanup_finished_events.cancel()
+        self.purge_deleted_events.cancel()
 
     @tasks.loop(minutes=1)
     async def create_event_threads(self):
@@ -126,6 +128,29 @@ class Scheduler(commands.Cog):
             print(f"Failed to process recreation for parent event {parent_event['event_id']}: {e}")
             traceback.print_exc()
 
+    @tasks.loop(time=datetime.time(hour=0, minute=5, tzinfo=pytz.utc)) # Run 5 mins past midnight
+    async def purge_deleted_events(self):
+        """Runs once daily to permanently delete events marked for deletion over 7 days ago."""
+        print("Running daily purge of old soft-deleted events...")
+        try:
+            events_to_purge = await self.db.get_events_for_purging()
+            for event in events_to_purge:
+                await self.db.delete_event(event['event_id'])
+                print(f"Permanently purged event {event['event_id']} from database.")
+            if len(events_to_purge) > 0:
+                 print(f"Daily purge finished. Permanently removed {len(events_to_purge)} events.")
+        except Exception as e:
+            print(f"Error in purge_deleted_events loop: {e}")
+            traceback.print_exc()
+
+    @create_event_threads.before_loop
+    @recreate_recurring_events.before_loop
+    @cleanup_finished_events.before_loop
+    @purge_deleted_events.before_loop # <-- Add this
+    async def before_tasks(self):
+        """Waits until the bot is fully logged in and ready before starting loops."""
+        await self.bot.wait_until_ready()
+    
     @tasks.loop(time=datetime.time(hour=0, minute=1, tzinfo=pytz.utc))
     async def cleanup_finished_events(self):
         """Runs once daily to delete old, non-recurring events and their threads."""

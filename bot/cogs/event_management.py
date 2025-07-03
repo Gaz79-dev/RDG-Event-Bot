@@ -591,6 +591,55 @@ class Conversation:
         if self.user.id in self.cog.active_conversations: del self.cog.active_conversations[self.user.id]
         await self.user.send("Event creation/editing cancelled")
 
+class DeleteConfirmationView(ui.View):
+    def __init__(self, event_management_cog, event_id: int):
+        super().__init__(timeout=120)
+        self.cog = event_management_cog
+        self.event_id = event_id
+
+    @ui.button(label="Yes, Delete Event", style=discord.ButtonStyle.danger)
+    async def confirm_delete(self, interaction: discord.Interaction, button: ui.Button):
+        event = await self.cog.db.get_event_by_id(self.event_id)
+        if not event:
+            return await interaction.response.edit_message(content="This event no longer exists.", view=None)
+
+        # Disable buttons
+        for item in self.children: item.disabled = True
+        await interaction.response.edit_message(content="Deleting event and notifying attendees...", view=self)
+
+        # Hide the event by deleting its message and thread
+        if event.get('message_id') and event.get('channel_id'):
+            try:
+                channel = self.cog.bot.get_channel(event['channel_id']) or await self.cog.bot.fetch_channel(event['channel_id'])
+                message = await channel.fetch_message(event['message_id'])
+                await message.delete()
+            except Exception as e: print(f"Could not delete event message: {e}")
+        
+        if event.get('thread_id'):
+            try:
+                thread = self.cog.bot.get_channel(event['thread_id']) or await self.cog.bot.fetch_channel(event['thread_id'])
+                await thread.delete()
+            except Exception as e: print(f"Could not delete event thread: {e}")
+
+        # Soft-delete in the database
+        await self.cog.db.soft_delete_event(self.event_id)
+
+        # Notify attendees
+        signups = await self.cog.db.get_signups_for_event(self.event_id)
+        accepted_users = [s['user_id'] for s in signups if s['rsvp_status'] == RsvpStatus.ACCEPTED]
+        for user_id in accepted_users:
+            try:
+                user = self.cog.bot.get_user(user_id) or await self.cog.bot.fetch_user(user_id)
+                await user.send(f"The event **{event['title']}** has been cancelled by an administrator.")
+            except Exception as e: print(f"Could not DM user {user_id} about cancellation: {e}")
+        
+        await interaction.edit_original_response(content=f"Event '{event['title']}' has been deleted and attendees notified.", view=None)
+
+    @ui.button(label="No, Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel_delete(self, interaction: discord.Interaction, button: ui.Button):
+        for item in self.children: item.disabled = True
+        await interaction.response.edit_message(content="Deletion cancelled.", view=self)
+
 class EventManagement(commands.Cog):
     def __init__(self, bot: commands.Bot, db: Database):
         self.bot = bot
@@ -610,46 +659,56 @@ class EventManagement(commands.Cog):
             return await interaction.response.send_message("Event not found.", ephemeral=True)
         await self.start_conversation(interaction, event_id)
 
-    @event_group.command(name="delete", description="Delete an existing event by its ID.")
+    @event_group.command(name="delete", description="Marks an event for deletion and notifies attendees.")
     @app_commands.describe(event_id="The ID of the event to delete.")
     async def delete(self, interaction: discord.Interaction, event_id: int):
-        # Add a permission check
         if not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message(
-                "You must be an administrator to delete events.", ephemeral=True
-            )
-
-        await interaction.response.defer(ephemeral=True, thinking=True)
+            return await interaction.response.send_message("You must be an administrator to delete events.", ephemeral=True)
         
         event = await self.db.get_event_by_id(event_id)
         if not event or event['guild_id'] != interaction.guild_id:
-            return await interaction.followup.send(
-                "Event not found or it does not belong to this server.", ephemeral=True
-            )
+            return await interaction.response.send_message("Event not found or it does not belong to this server.", ephemeral=True)
 
-        # Try to delete the original event embed message
-        if event.get('message_id') and event.get('channel_id'):
-            try:
-                channel = self.bot.get_channel(event['channel_id']) or await self.bot.fetch_channel(event['channel_id'])
-                message = await channel.fetch_message(event['message_id'])
-                await message.delete()
-            except (discord.NotFound, discord.Forbidden) as e:
-                print(f"Could not delete event message for event {event_id}: {e}")
+        if event.get('deleted_at'):
+            return await interaction.response.send_message("This event has already been deleted.", ephemeral=True)
 
-        # Try to delete the discussion thread
-        if event.get('thread_id'):
-            try:
-                thread = self.bot.get_channel(event['thread_id']) or await self.bot.fetch_channel(event['thread_id'])
-                await thread.delete()
-            except (discord.NotFound, discord.Forbidden) as e:
-                print(f"Could not delete event thread for event {event_id}: {e}")
-
-        # Delete the event from the database, which will cascade to signups and squads
-        await self.db.delete_event(event_id)
-        
-        await interaction.followup.send(
-            f"Successfully deleted event '{event['title']}' (ID: {event_id}).", ephemeral=True
+        view = DeleteConfirmationView(self, event_id)
+        await interaction.response.send_message(
+            f"Are you sure you want to delete the event **{event['title']}**? This will notify all accepted attendees.",
+            view=view,
+            ephemeral=True
         )
+
+    @event_group.command(name="restore", description="Restores a previously deleted event.")
+    @app_commands.describe(event_id="The ID of the event to restore.")
+    async def restore(self, interaction: discord.Interaction, event_id: int):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("You must be an administrator to restore events.", ephemeral=True)
+        
+        await interaction.response.defer(ephemeral=True)
+        
+        event = await self.db.get_event_by_id(event_id, include_deleted=True) # Assumes get_event_by_id is modified to find deleted events
+        if not event or event['guild_id'] != interaction.guild_id:
+            return await interaction.followup.send("Event not found.", ephemeral=True)
+        
+        if not event.get('deleted_at'):
+            return await interaction.followup.send("This event is already active.", ephemeral=True)
+
+        # Restore in DB
+        await self.db.restore_event(event_id)
+        
+        # Re-post the embed
+        try:
+            channel = self.bot.get_channel(event['channel_id']) or await self.bot.fetch_channel(event['channel_id'])
+            embed = await create_event_embed(self.bot, event_id, self.db)
+            view = PersistentEventView(self.db)
+            content = " ".join([f"<@&{rid}>" for rid in event.get('mention_role_ids', [])])
+            
+            new_message = await channel.send(content=content, embed=embed, view=view)
+            await self.db.update_event_message_id(event_id, new_message.id)
+            await interaction.followup.send(f"Event '{event['title']}' has been restored and re-posted.")
+        except Exception as e:
+            await interaction.followup.send(f"Event data was restored, but failed to re-post the embed: {e}")
 
     async def start_conversation(self, interaction: discord.Interaction, event_id: int = None):
         if interaction.user.id in self.active_conversations:

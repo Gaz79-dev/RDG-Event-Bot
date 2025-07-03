@@ -37,6 +37,19 @@ EMOJI_MAPPING = {
     "Unassigned": "❔"
 }
 
+# --- NEW: Curated list of common timezones for the bot to offer ---
+CURATED_TIMEZONES = {
+    "USA / Canada": [
+        "US/Pacific", "US/Mountain", "US/Central", "US/Eastern",
+        "Canada/Atlantic", "US/Alaska", "US/Hawaii"
+    ],
+    "UK / Europe": [
+        "Europe/London", "Europe/Paris", "Europe/Berlin", 
+        "Europe/Helsinki", "Europe/Moscow"
+    ],
+    "Other": ["UTC"]
+}
+
 async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> discord.Embed:
     event = await db.get_event_by_id(event_id)
     if not event: return discord.Embed(title="Error", description="Event not found.", color=discord.Color.red())
@@ -316,34 +329,6 @@ class ConfirmationView(ui.View):
         self.value = False
         self.stop()
 
-class TimezoneSelect(ui.Select):
-    def __init__(self):
-        super().__init__(placeholder="Choose a timezone...", options=[discord.SelectOption(label=tz, value=tz) for tz in ["Europe/London", "UTC", "GMT", "EST", "PST", "CET", "Australia/Sydney"]])
-    async def callback(self, i: discord.Interaction):
-        await i.response.defer()
-        self.view.selection = self.values[0]
-        self.view.stop()
-
-class TimezoneSelectView(ui.View):
-    def __init__(self):
-        super().__init__(timeout=180)
-        self.selection: str = None
-        self.add_item(TimezoneSelect())
-
-class ManualRoleSelect(ui.Select):
-    def __init__(self, roles: List[discord.Role]):
-        # A dropdown can only have 25 options. We'll take the first 25.
-        options = [discord.SelectOption(label=role.name, value=str(role.id)) for role in roles[:25]]
-        if not options:
-            options.append(discord.SelectOption(label="No roles found in server", value="none"))
-        
-        super().__init__(
-            placeholder="Select roles to mention...",
-            min_values=0, # Allow selecting none
-            max_values=len(options),
-            options=options
-        )
-
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
         # We handle the 'none' case by just returning an empty list
@@ -353,11 +338,6 @@ class ManualRoleSelect(ui.Select):
             self.view.selection = [int(role_id) for role_id in self.values]
         self.view.stop()
 
-class ManualRoleSelectView(ui.View):
-    def __init__(self, roles: List[discord.Role]):
-        super().__init__(timeout=180)
-        self.selection: List[int] = None
-        self.add_item(ManualRoleSelect(roles))
 
 class Conversation:
     def __init__(self, cog: 'EventManagement', interaction: discord.Interaction, db: Database, event_id: int = None):
@@ -366,7 +346,8 @@ class Conversation:
 
     async def start(self):
         try:
-            if self.event_id and (event_data := await self.db.get_event_by_id(self.event_id)): self.data = dict(event_data)
+            if self.event_id and (event_data := await self.db.get_event_by_id(self.event_id)):
+                self.data = dict(event_data)
             await self.user.send(f"Starting event {'editing' if self.event_id else 'creation'}. Type `cancel` at any time to stop.")
             await self.run_conversation()
         except Exception as e:
@@ -377,13 +358,13 @@ class Conversation:
     async def run_conversation(self):
         steps = [
             ("What is the title of the event?", self.process_text, 'title'),
-            (None, self.process_timezone, 'timezone'),
+            (None, self.process_timezone, 'timezone'), # <-- Will use the new method
             ("What is the start date and time? Please use `DD-MM-YYYY HH:MM` format.", self.process_start_time, 'start_time'),
             ("What is the end date and time? Format: `DD-MM-YYYY HH:MM`.", self.process_end_time, 'end_time'),
             ("Please provide a detailed description for the event.", self.process_text, 'description'),
             (None, self.ask_is_recurring, 'is_recurring'),
-            (None, self.ask_mention_roles, 'mention_role_ids'),
-            (None, self.ask_restrict_roles, 'restrict_to_role_ids'),
+            (None, self.ask_mention_roles, 'mention_role_ids'), # <-- Will use the new method
+            (None, self.ask_restrict_roles, 'restrict_to_role_ids'), # <-- Will use the new method
         ]
         for prompt, processor, data_key in steps:
             if self.is_finished: break
@@ -396,6 +377,7 @@ class Conversation:
         return await self.bot.wait_for('message', check=lambda m: m.author == self.user and isinstance(m.channel, discord.DMChannel), timeout=300.0)
 
     async def process_text(self, prompt, data_key):
+        # This method for simple text input remains the same
         if self.event_id and self.data.get(data_key): prompt += f"\n(Current: `{self.data.get(data_key)}`)"
         await self.user.send(prompt)
         try:
@@ -408,17 +390,38 @@ class Conversation:
             return False
 
     async def process_timezone(self, prompt, data_key):
-        view = TimezoneSelectView()
-        prompt_msg = "Please select a timezone for the event."
+        """NEW: Asks for timezone using a numbered list in an embed."""
+        flat_tz_list = [tz for region in CURATED_TIMEZONES.values() for tz in region]
+        
+        description_lines = []
+        count = 1
+        for region, timezones in CURATED_TIMEZONES.items():
+            description_lines.append(f"\n**__{region}__**")
+            for tz in timezones:
+                description_lines.append(f"`{count}` {tz}")
+                count += 1
+        
+        embed = discord.Embed(title="Please Select a Timezone", description="\n".join(description_lines), color=discord.Color.blue())
+        prompt_msg = "Please reply with the number for your desired timezone."
         if self.event_id and self.data.get(data_key): prompt_msg += f"\n(Current: `{self.data.get(data_key)}`)"
-        msg = await self.user.send(prompt_msg, view=view)
-        await view.wait()
-        if view.selection:
-            self.data[data_key] = view.selection
-            await msg.edit(content=f"Timezone set to **{view.selection}**.", view=None)
-            return True
-        await msg.edit(content="Timezone selection timed out.", view=None)
-        return False
+        
+        await self.user.send(prompt_msg, embed=embed)
+        
+        try:
+            msg = await self._wait_for_message()
+            if msg.content.lower() == 'cancel': return False
+            
+            choice = int(msg.content)
+            if 1 <= choice <= len(flat_tz_list):
+                self.data[data_key] = flat_tz_list[choice - 1]
+                await self.user.send(f"Timezone set to **{self.data[data_key]}**.")
+                return True
+            else:
+                await self.user.send("Invalid number. Please try again.")
+                return await self.process_timezone(prompt, data_key)
+        except (ValueError, asyncio.TimeoutError):
+            await self.user.send("Invalid input or conversation timed out.")
+            return False
 
     async def process_start_time(self, prompt, data_key):
         while True:
@@ -502,34 +505,42 @@ class Conversation:
             return False
 
     async def _ask_roles(self, prompt, data_key, question):
+        """NEW: Asks for roles using a numbered list, parsing a comma-separated response."""
         view = ConfirmationView()
-        msg = await self.user.send(question, view=view)
+        conf_msg = await self.user.send(question, view=view)
         await view.wait()
+        if view.value is None: await conf_msg.delete(); return False
+        await conf_msg.delete()
 
-        if view.value is None: # Timed out
-            await msg.delete()
-            return False
-        
-        await msg.delete()
         if view.value: # User clicked "Yes"
-            # Get roles from the guild where the /event command was initiated
-            guild_roles = [r for r in self.interaction.guild.roles if r.name != "@everyone"]
-            guild_roles.sort(key=lambda r: r.name) # Sort roles alphabetically
+            guild_roles = sorted([r for r in self.interaction.guild.roles if r.name != "@everyone" and not r.is_managed()], key=lambda r: r.position, reverse=True)
             
-            select_view = ManualRoleSelectView(guild_roles)
+            description_lines = [f"`{i+1}` {role.name}" for i, role in enumerate(guild_roles)]
             
-            prompt_text = "Please select roles below."
-            if len(guild_roles) > 25:
-                prompt_text += "\n*Note: Only the first 25 server roles are shown.*"
-            
-            selection_msg = await self.user.send(prompt_text, view=select_view)
-            await select_view.wait()
-            
-            if selection_msg: await selection_msg.delete()
-            self.data[data_key] = select_view.selection or []
+            embed = discord.Embed(title="Please Select Role(s)", description="\n".join(description_lines), color=discord.Color.blue())
+            prompt_msg = "Please reply with the number(s) for your desired roles, separated by commas (e.g., `1, 5, 12`)."
+            await self.user.send(prompt_msg, embed=embed)
+
+            try:
+                msg = await self._wait_for_message()
+                if msg.content.lower() == 'cancel': return False
+                
+                selected_indices = [int(i.strip()) - 1 for i in msg.content.split(',')]
+                selected_role_ids = [guild_roles[i].id for i in selected_indices if 0 <= i < len(guild_roles)]
+                
+                self.data[data_key] = selected_role_ids
+                if not selected_role_ids:
+                     await self.user.send("No valid roles selected.")
+                else:
+                    names = [guild_roles[i].name for i in selected_indices if 0 <= i < len(guild_roles)]
+                    await self.user.send(f"Roles set to: **{', '.join(names)}**")
+                return True
+            except (ValueError, asyncio.TimeoutError, IndexError):
+                await self.user.send("Invalid input or conversation timed out.")
+                return False
         else: # User clicked "No/Skip"
             self.data[data_key] = []
-        return True
+            return True
 
     async def ask_mention_roles(self, p, dk): return await self._ask_roles(p, dk, "Mention roles in the announcement?")
     async def ask_restrict_roles(self, p, dk): return await self._ask_roles(p, dk, "Restrict sign-ups to specific roles?")

@@ -145,7 +145,10 @@ class Database:
             await connection.execute(query, event_id, user_id, status)
     
     async def get_upcoming_events(self) -> List[Dict]:
-        query = "SELECT * FROM events WHERE COALESCE(end_time, event_time + INTERVAL '2 hours') > (NOW() AT TIME ZONE 'utc' - INTERVAL '12 hours') AND deleted_at IS NULL;"
+        """
+        Gets all upcoming and recently passed events that are NOT soft-deleted.
+        """
+        query = "SELECT * FROM events WHERE deleted_at IS NULL AND COALESCE(end_time, event_time + INTERVAL '2 hours') > (NOW() AT TIME ZONE 'utc' - INTERVAL '12 hours');"
         async with self.pool.acquire() as connection:
             return [dict(row) for row in await connection.fetch(query)]
 
@@ -159,9 +162,17 @@ class Database:
             row = await conn.fetchrow("SELECT * FROM signups WHERE event_id = $1 AND user_id = $2", event_id, user_id)
             return dict(row) if row else None
             
-    async def get_event_by_id(self, event_id: int) -> Optional[Dict]:
+    async def get_event_by_id(self, event_id: int, include_deleted: bool = False) -> Optional[Dict]:
+        """
+        Gets a single event by its ID. By default, it ignores soft-deleted events.
+        """
+        query = "SELECT * FROM events WHERE event_id = $1"
+        if not include_deleted:
+            query += " AND deleted_at IS NULL"
+        query += ";"
+
         async with self.pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT * FROM events WHERE event_id = $1;", event_id)
+            row = await conn.fetchrow(query, event_id)
             return dict(row) if row else None
 
     async def update_signup_role(self, event_id: int, user_id: int, role_name: Optional[str], subclass_name: Optional[str]):

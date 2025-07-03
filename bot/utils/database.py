@@ -145,7 +145,7 @@ class Database:
             await connection.execute(query, event_id, user_id, status)
     
     async def get_upcoming_events(self) -> List[Dict]:
-        query = "SELECT * FROM events WHERE COALESCE(end_time, event_time + INTERVAL '2 hours') > (NOW() AT TIME ZONE 'utc' - INTERVAL '12 hours');"
+        query = "SELECT * FROM events WHERE COALESCE(end_time, event_time + INTERVAL '2 hours') > (NOW() AT TIME ZONE 'utc' - INTERVAL '12 hours') AND deleted_at IS NULL;"
         async with self.pool.acquire() as connection:
             return [dict(row) for row in await connection.fetch(query)]
 
@@ -210,7 +210,7 @@ class Database:
             FROM events e
             JOIN guilds g ON e.guild_id = g.guild_id
             WHERE e.thread_created = FALSE
-            AND (NOW() AT TIME ZONE 'utc') >= (e.event_time - (g.thread_creation_hours * INTERVAL '1 hour'));
+            AND (NOW() AT TIME ZONE 'utc') >= (e.event_time - (g.thread_creation_hours * INTERVAL '1 hour')) AND deleted_at IS NULL;"
         """
         async with self.pool.acquire() as connection:
             return [dict(row) for row in await connection.fetch(query)]
@@ -231,6 +231,24 @@ class Database:
         async with self.pool.acquire() as connection:
             return [dict(row) for row in await connection.fetch(query)]
 
+    async def soft_delete_event(self, event_id: int):
+        """Marks an event as deleted by setting the deleted_at timestamp."""
+        query = "UPDATE events SET deleted_at = (NOW() AT TIME ZONE 'utc') WHERE event_id = $1;"
+        async with self.pool.acquire() as connection:
+            await connection.execute(query, event_id)
+
+    async def restore_event(self, event_id: int):
+        """Restores a soft-deleted event by setting deleted_at to NULL."""
+        query = "UPDATE events SET deleted_at = NULL WHERE event_id = $1;"
+        async with self.pool.acquire() as connection:
+            await connection.execute(query, event_id)
+
+    async def get_events_for_purging(self) -> List[Dict]:
+        """Gets events that were soft-deleted more than 7 days ago."""
+        query = "SELECT event_id FROM events WHERE deleted_at IS NOT NULL AND deleted_at <= (NOW() AT TIME ZONE 'utc' - INTERVAL '7 days');"
+        async with self.pool.acquire() as connection:
+            return [dict(row) for row in await connection.fetch(query)]
+    
     async def delete_event(self, event_id: int):
         """Deletes an event from the database."""
         async with self.pool.acquire() as conn:
@@ -240,7 +258,7 @@ class Database:
         """Gets all recurring events that are due to be recreated."""
         query = """
             SELECT * FROM events WHERE is_recurring = TRUE
-            AND (last_recreated_at IS NULL OR last_recreated_at < (NOW() AT TIME ZONE 'utc' - INTERVAL '6 hour'));
+            AND (last_recreated_at IS NULL OR last_recreated_at < (NOW() AT TIME ZONE 'utc' - INTERVAL '6 hour')) AND deleted_at IS NULL;"
         """
         async with self.pool.acquire() as connection:
             return [dict(row) for row in await connection.fetch(query)]

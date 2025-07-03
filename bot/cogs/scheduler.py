@@ -143,7 +143,7 @@ class Scheduler(commands.Cog):
             print(f"Error in purge_deleted_events loop: {e}")
             traceback.print_exc()
 
-       async def before_tasks(self):
+    async def before_tasks(self):
         """Waits until the bot is fully logged in and ready before starting loops."""
         await self.bot.wait_until_ready()
     

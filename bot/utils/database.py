@@ -216,13 +216,7 @@ class Database:
 
     async def get_events_for_thread_creation(self) -> List[dict]:
         """Gets all events that are due to have a thread created."""
-        query = """
-            SELECT e.event_id, e.guild_id, e.channel_id, e.message_id, e.title, e.event_time
-            FROM events e
-            JOIN guilds g ON e.guild_id = g.guild_id
-            WHERE e.thread_created = FALSE
-            AND (NOW() AT TIME ZONE 'utc') >= (e.event_time - (g.thread_creation_hours * INTERVAL '1 hour')) AND deleted_at IS NULL;"
-        """
+        query = "SELECT e.event_id, e.guild_id, e.channel_id, e.message_id, e.title, e.event_time FROM events e JOIN guilds g ON e.guild_id = g.guild_id WHERE e.thread_created = FALSE AND e.deleted_at IS NULL AND (NOW() AT TIME ZONE 'utc') >= (e.event_time - (g.thread_creation_hours * INTERVAL '1 hour'));"
         async with self.pool.acquire() as connection:
             return [dict(row) for row in await connection.fetch(query)]
 
@@ -267,10 +261,7 @@ class Database:
 
     async def get_events_for_recreation(self) -> List[dict]:
         """Gets all recurring events that are due to be recreated."""
-        query = """
-            SELECT * FROM events WHERE is_recurring = TRUE
-            AND (last_recreated_at IS NULL OR last_recreated_at < (NOW() AT TIME ZONE 'utc' - INTERVAL '6 hour')) AND deleted_at IS NULL;"
-        """
+        query = "SELECT * FROM events WHERE is_recurring = TRUE AND deleted_at IS NULL AND (last_recreated_at IS NULL OR last_recreated_at < (NOW() AT TIME ZONE 'utc' - INTERVAL '6 hour'));"
         async with self.pool.acquire() as connection:
             return [dict(row) for row in await connection.fetch(query)]
 

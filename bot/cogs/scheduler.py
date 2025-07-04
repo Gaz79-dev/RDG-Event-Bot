@@ -6,7 +6,7 @@ import traceback
 from dateutil.relativedelta import relativedelta
 
 # Use relative import to go up one level to the 'bot' package root
-from ..utils.database import Database
+from ..utils.database import Database, RsvpStatus
 
 class Scheduler(commands.Cog):
     """Cog for handling scheduled background tasks."""
@@ -37,7 +37,7 @@ class Scheduler(commands.Cog):
             traceback.print_exc()
 
     async def process_thread_creation(self, event: dict):
-        """Creates a single event discussion channel."""
+        """Creates a single event discussion channel and adds/notifies accepted members."""
         try:
             # Fetch the original channel the event was posted in
             parent_channel = self.bot.get_channel(event['channel_id']) or await self.bot.fetch_channel(event['channel_id'])
@@ -47,7 +47,6 @@ class Scheduler(commands.Cog):
             
             if not category:
                 print(f"Cannot create sub-channel for event {event['event_id']} because the parent channel is not in a category.")
-                # Mark as created to prevent retries, or handle differently
                 await self.db.mark_thread_created(event['event_id'], 0)
                 return
 
@@ -66,8 +65,22 @@ class Scheduler(commands.Cog):
             await self.db.mark_thread_created(event['event_id'], discussion_channel.id)
             print(f"Created discussion channel '{channel_name}' for event ID {event['event_id']}.")
 
-            # Optionally, send a message in the new channel linking back to the event
-            await discussion_channel.send(f"This is the discussion channel for the event **{event['title']}**! You can find the main event post in {parent_channel.mention}")
+            # --- Add and notify accepted members ---
+            signups = await self.db.get_signups_for_event(event['event_id'])
+            accepted_user_ids = [
+                signup['user_id'] for signup in signups 
+                if signup['rsvp_status'] == RsvpStatus.ACCEPTED
+            ]
+            
+            welcome_message = f"This is the discussion channel for the event **{event['title']}**! You can find the main event post in {parent_channel.mention}\n\n"
+            
+            if accepted_user_ids:
+                mentions = ' '.join([f'<@{user_id}>' for user_id in accepted_user_ids])
+                welcome_message += f"Welcome, attendees! {mentions}"
+            else:
+                welcome_message += "No one has accepted the RSVP yet."
+
+            await discussion_channel.send(welcome_message)
 
         except discord.NotFound:
             print(f"Could not find parent channel {event['channel_id']} for event {event['event_id']}. Cannot create discussion channel.")

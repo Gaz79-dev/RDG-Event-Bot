@@ -39,55 +39,50 @@ class Scheduler(commands.Cog):
     async def process_thread_creation(self, event: dict):
         """Creates a single event discussion channel and adds/notifies accepted members."""
         try:
-            # Fetch the original channel the event was posted in
             parent_channel = self.bot.get_channel(event['channel_id']) or await self.bot.fetch_channel(event['channel_id'])
-            
-            # Get the category of the parent channel
+            if not parent_channel:
+                print(f"Could not find parent channel {event['channel_id']} for event {event['event_id']}. Skipping.")
+                return # Stop processing if channel is gone
+
             category = parent_channel.category
-            
             if not category:
-                print(f"Cannot create sub-channel for event {event['event_id']} because the parent channel is not in a category.")
-                await self.db.mark_thread_created(event['event_id'], 0)
-                return
+                print(f"Cannot create sub-channel for event {event['event_id']} because parent channel is not in a category. Skipping.")
+                return # Stop processing if no category
 
             event_time_str = discord.utils.format_dt(event['event_time'], style='f')
-            # Create a unique channel name that is Discord-compliant (lowercase, no spaces)
             safe_title = "".join(c for c in event['title'] if c.isalnum() or c in "-_").lower()
             channel_name = f"{safe_title}-{event['event_id']}"
 
-            # Create a new text channel within the same category
+            # --- This is the line that is likely failing ---
             discussion_channel = await parent_channel.guild.create_text_channel(
                 name=channel_name,
                 category=category,
                 topic=f"Discussion for the event: {event['title']} starting at {event_time_str}"
             )
+            print(f"Successfully created channel '{channel_name}' in Discord for event ID {event['event_id']}.")
 
-            await self.db.mark_thread_created(event['event_id'], discussion_channel.id)
-            print(f"Created discussion channel '{channel_name}' for event ID {event['event_id']}.")
-
-            # --- Add and notify accepted members ---
+            # Add and notify accepted members
             signups = await self.db.get_signups_for_event(event['event_id'])
-            accepted_user_ids = [
-                signup['user_id'] for signup in signups 
-                if signup['rsvp_status'] == RsvpStatus.ACCEPTED
-            ]
+            accepted_user_ids = [s['user_id'] for s in signups if s['rsvp_status'] == RsvpStatus.ACCEPTED]
             
-            welcome_message = f"This is the discussion channel for the event **{event['title']}**! You can find the main event post in {parent_channel.mention}\n\n"
-            
+            welcome_message = f"This is the discussion channel for **{event['title']}**! Main event post is in {parent_channel.mention}\n\n"
             if accepted_user_ids:
                 mentions = ' '.join([f'<@{user_id}>' for user_id in accepted_user_ids])
                 welcome_message += f"Welcome, attendees! {mentions}"
-            else:
-                welcome_message += "No one has accepted the RSVP yet."
-
+            
             await discussion_channel.send(welcome_message)
 
-        except discord.NotFound:
-            print(f"Could not find parent channel {event['channel_id']} for event {event['event_id']}. Cannot create discussion channel.")
-            await self.db.mark_thread_created(event['event_id'], 0) # Mark as created to prevent retries
+            # --- Only mark as created AFTER all Discord actions succeed ---
+            await self.db.mark_thread_created(event['event_id'], discussion_channel.id)
+            print(f"Successfully marked event {event['event_id']} as thread_created in the database.")
+
+        except discord.Forbidden:
+            print(f"PERMISSION ERROR: Failed to create channel for event {event['event_id']}. The bot is likely missing the 'Manage Channels' permission. The event will be re-attempted later.")
+            # We DON'T mark as created, so the scheduler will try again
         except Exception as e:
-            print(f"Failed to process channel creation for event {event['event_id']}: {e}")
+            print(f"An unexpected error occurred during channel creation for event {event['event_id']}: {e}")
             traceback.print_exc()
+            # Also don't mark as created here
 
     @tasks.loop(minutes=5)
     async def recreate_recurring_events(self):

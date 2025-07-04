@@ -13,6 +13,7 @@ class Scheduler(commands.Cog):
     def __init__(self, bot: commands.Bot, db: Database):
         self.bot = bot
         self.db = db
+        print("[Scheduler Cog] Initialized. Starting tasks...")
         self.create_event_threads.start()
         self.recreate_recurring_events.start()
         self.cleanup_finished_events.start()
@@ -221,7 +222,9 @@ class Scheduler(commands.Cog):
     @purge_deleted_events.before_loop
     async def before_tasks(self):
         """Waits until the bot is fully logged in and ready before starting loops."""
+        print("[Scheduler Tasks] Waiting for bot to be ready...")
         await self.bot.wait_until_ready()
+        print("[Scheduler Tasks] Bot is ready. Loops will now start.")
 
 async def setup(bot: commands.Bot):
     """Sets up the scheduler cog."""

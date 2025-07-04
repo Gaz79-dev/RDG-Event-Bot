@@ -9,6 +9,7 @@ from urllib.parse import urlencode
 import asyncio
 from typing import List, Dict, Optional
 from collections import defaultdict
+from zoneinfo import ZoneInfo
 
 # Use relative import to go up one level to the 'bot' package root
 from ..utils.database import Database, RsvpStatus, ROLES, SUBCLASSES, RESTRICTED_ROLES
@@ -432,7 +433,10 @@ class Conversation:
                 msg = await self._wait_for_message()
                 if msg.content.lower() == 'cancel': return False
                 try:
-                    self.data[data_key] = pytz.timezone(self.data.get('timezone', 'UTC')).localize(datetime.datetime.strptime(msg.content, "%d-%m-%Y %H:%M"))
+                    # --- FIX: Use modern zoneinfo library for robust timezone handling ---
+                    naive_dt = datetime.datetime.strptime(msg.content, "%d-%m-%Y %H:%M")
+                    selected_tz = self.data.get('timezone', 'UTC')
+                    self.data[data_key] = naive_dt.replace(tzinfo=ZoneInfo(selected_tz))
                     return True
                 except ValueError:
                     await self.user.send("Invalid date format. Use `DD-MM-YYYY HH:MM`.")
@@ -449,10 +453,13 @@ class Conversation:
                 msg = await self._wait_for_message()
                 if msg.content.lower() == 'cancel': return False
                 try:
-                    self.data[data_key] = pytz.timezone(self.data.get('timezone', 'UTC')).localize(datetime.datetime.strptime(msg.content, "%d-%m-%Y %H:%M"))
+                    # --- FIX: Use modern zoneinfo library for robust timezone handling ---
+                    naive_dt = datetime.datetime.strptime(msg.content, "%d-%m-%Y %H:%M")
+                    selected_tz = self.data.get('timezone', 'UTC')
+                    self.data[data_key] = naive_dt.replace(tzinfo=ZoneInfo(selected_tz))
                     return True
                 except ValueError:
-                    await self.user.send("Invalid date format. Please use `DD-MM-YYYY HH:MM`.")
+                    await self.user.send("Invalid date format. Use `DD-MM-YYYY HH:MM`.")
             except asyncio.TimeoutError:
                 await self.user.send("Conversation timed out.")
                 return False

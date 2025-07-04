@@ -565,6 +565,18 @@ class Conversation:
                     message = await channel.fetch_message(self.data['message_id'])
                     await message.edit(content=content, embed=embed, view=view)
                     await self.user.send("Event updated successfully!")
+                    if old_thread_id:
+                        try:
+                            old_channel = self.bot.get_channel(old_thread_id) or await self.bot.fetch_channel(old_thread_id)
+                            if old_channel:
+                                await old_channel.delete(reason="Event was edited.")
+                                await self.user.send("The old discussion channel has been deleted.")
+                        except discord.NotFound:
+                            pass # Channel was already gone
+                        except Exception as e:
+                            print(f"Could not delete old discussion channel {old_thread_id}: {e}")
+                            await self.user.send("Note: I couldn't delete the old discussion channel.")
+                
                 except (discord.NotFound, discord.Forbidden):
                     await self.user.send("Event details were updated, but I couldn't find or edit the original event message. It may have been deleted.")
 

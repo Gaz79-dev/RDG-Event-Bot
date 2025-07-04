@@ -424,7 +424,28 @@ class Conversation:
             await self.user.send("Invalid input or conversation timed out.")
             return False
 
-    async def process_start_time(self, prompt, data_key):
+async def process_start_time(self, prompt, data_key):
+while True:
+    val = self.data.get(data_key).strftime('%d-%m-%Y %H:%M') if self.data.get(data_key) else ''
+    p = prompt + (f"\n(Current: `{val}`)" if self.event_id and val else "")
+    await self.user.send(p)
+    try:
+        msg = await self._wait_for_message()
+        if msg.content.lower() == 'cancel': return False
+        try:
+            # --- FIX: Revert to pytz.localize for correct timezone interpretation ---
+            naive_dt = datetime.datetime.strptime(msg.content, "%d-%m-%Y %H:%M")
+            selected_tz_str = self.data.get('timezone', 'UTC')
+            selected_tz = pytz.timezone(selected_tz_str)
+            self.data[data_key] = selected_tz.localize(naive_dt)
+            return True
+        except ValueError:
+            await self.user.send("Invalid date format. Use `DD-MM-YYYY HH:MM`.")
+    except asyncio.TimeoutError:
+        await self.user.send("Conversation timed out.")
+        return False
+
+async def process_end_time(self, prompt, data_key):
     while True:
         val = self.data.get(data_key).strftime('%d-%m-%Y %H:%M') if self.data.get(data_key) else ''
         p = prompt + (f"\n(Current: `{val}`)" if self.event_id and val else "")
@@ -444,27 +465,6 @@ class Conversation:
         except asyncio.TimeoutError:
             await self.user.send("Conversation timed out.")
             return False
-
-    async def process_end_time(self, prompt, data_key):
-        while True:
-            val = self.data.get(data_key).strftime('%d-%m-%Y %H:%M') if self.data.get(data_key) else ''
-            p = prompt + (f"\n(Current: `{val}`)" if self.event_id and val else "")
-            await self.user.send(p)
-            try:
-                msg = await self._wait_for_message()
-                if msg.content.lower() == 'cancel': return False
-                try:
-                    # --- FIX: Revert to pytz.localize for correct timezone interpretation ---
-                    naive_dt = datetime.datetime.strptime(msg.content, "%d-%m-%Y %H:%M")
-                    selected_tz_str = self.data.get('timezone', 'UTC')
-                    selected_tz = pytz.timezone(selected_tz_str)
-                    self.data[data_key] = selected_tz.localize(naive_dt)
-                    return True
-                except ValueError:
-                    await self.user.send("Invalid date format. Use `DD-MM-YYYY HH:MM`.")
-            except asyncio.TimeoutError:
-                await self.user.send("Conversation timed out.")
-                return False
 
     async def ask_is_recurring(self, prompt, data_key):
         view = ConfirmationView()

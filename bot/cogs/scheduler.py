@@ -36,24 +36,45 @@ class Scheduler(commands.Cog):
             print(f"Error in create_event_threads loop: {e}")
             traceback.print_exc()
 
-    async def process_thread_creation(self, event: dict):
-        """Creates a single event thread."""
-        try:
-            channel = self.bot.get_channel(event['channel_id']) or await self.bot.fetch_channel(event['channel_id'])
-            message = await channel.fetch_message(event['message_id'])
-            
-            event_time_str = discord.utils.format_dt(event['event_time'], style='f')
-            thread_name = f"{event['title']} ({event_time_str})"
-            
-            thread = await message.create_thread(name=thread_name, auto_archive_duration=1440) # 24 hours
-            await self.db.mark_thread_created(event['event_id'], thread.id)
-            print(f"Created thread '{thread_name}' for event ID {event['event_id']}.")
-        except discord.NotFound:
-            print(f"Could not find message {event['message_id']} for event {event['event_id']}. Cannot create thread.")
-            await self.db.mark_thread_created(event['event_id'], 0) # Mark as created to prevent retries
-        except Exception as e:
-            print(f"Failed to process thread creation for event {event['event_id']}: {e}")
-            traceback.print_exc()
+    # In scheduler.py
+
+async def process_thread_creation(self, event: dict):
+    """Creates a single event discussion channel."""
+    try:
+        # Fetch the original channel the event was posted in
+        parent_channel = self.bot.get_channel(event['channel_id']) or await self.bot.fetch_channel(event['channel_id'])
+        
+        # Get the category of the parent channel
+        category = parent_channel.category
+        
+        if not category:
+            print(f"Cannot create sub-channel for event {event['event_id']} because the parent channel is not in a category.")
+            # Mark as created to prevent retries, or handle differently
+            await self.db.mark_thread_created(event['event_id'], 0)
+            return
+
+        event_time_str = discord.utils.format_dt(event['event_time'], style='f')
+        channel_name = f"{event['title']}-{event['event_id']}" # Create a unique channel name
+
+        # Create a new text channel within the same category
+        discussion_channel = await parent_channel.guild.create_text_channel(
+            name=channel_name,
+            category=category,
+            topic=f"Discussion for the event: {event['title']} starting at {event_time_str}"
+        )
+
+        await self.db.mark_thread_created(event['event_id'], discussion_channel.id)
+        print(f"Created discussion channel '{channel_name}' for event ID {event['event_id']}.")
+
+        # Optionally, send a message in the new channel linking back to the event
+        await discussion_channel.send(f"This is the discussion channel for the event **{event['title']}**! You can find the main event post here: {parent_channel.mention}")
+
+    except discord.NotFound:
+        print(f"Could not find parent channel {event['channel_id']} for event {event['event_id']}. Cannot create discussion channel.")
+        await self.db.mark_thread_created(event['event_id'], 0) # Mark as created to prevent retries
+    except Exception as e:
+        print(f"Failed to process channel creation for event {event['event_id']}: {e}")
+        traceback.print_exc()
 
     @tasks.loop(minutes=5)
     async def recreate_recurring_events(self):

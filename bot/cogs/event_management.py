@@ -554,6 +554,8 @@ class Conversation:
     async def ask_mention_roles(self, p, dk): return await self._ask_roles(p, dk, "Mention roles in the announcement?")
     async def ask_restrict_roles(self, p, dk): return await self._ask_roles(p, dk, "Restrict sign-ups to specific roles?")
         
+    # In bot/cogs/event_management.py
+
     async def finish(self):
         if self.is_finished: return
         self.is_finished = True
@@ -565,6 +567,11 @@ class Conversation:
             content = " ".join([f"<@&{rid}>" for rid in self.data.get('mention_role_ids', [])])
 
             if self.event_id:  # This is the EDIT path
+                # Get the old channel ID *before* we update the database
+                old_event_data = await self.db.get_event_by_id(self.event_id)
+                old_thread_id = old_event_data.get('thread_id') if old_event_data else None
+                
+                # Now, update the event in the database
                 await self.db.update_event(self.event_id, self.data)
                 embed = await create_event_embed(self.bot, self.event_id, self.db)
                 
@@ -573,7 +580,9 @@ class Conversation:
                     channel = self.bot.get_channel(self.data['channel_id']) or await self.bot.fetch_channel(self.data['channel_id'])
                     message = await channel.fetch_message(self.data['message_id'])
                     await message.edit(content=content, embed=embed, view=view)
-                    await self.user.send("Event updated successfully!")
+                    await self.user.send("Event updated successfully! The scheduler will create a new discussion channel shortly.")
+
+                    # Now, delete the old channel using the variable we saved
                     if old_thread_id:
                         try:
                             old_channel = self.bot.get_channel(old_thread_id) or await self.bot.fetch_channel(old_thread_id)
@@ -585,7 +594,7 @@ class Conversation:
                         except Exception as e:
                             print(f"Could not delete old discussion channel {old_thread_id}: {e}")
                             await self.user.send("Note: I couldn't delete the old discussion channel.")
-                
+
                 except (discord.NotFound, discord.Forbidden):
                     await self.user.send("Event details were updated, but I couldn't find or edit the original event message. It may have been deleted.")
 

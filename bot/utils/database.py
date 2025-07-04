@@ -109,24 +109,24 @@ class Database:
             )
 
     async def update_event(self, event_id: int, data: Dict):
-    # This query is modified to reset the thread creation status on every edit
-    query = """
-        UPDATE events SET
-            title = $1, description = $2, event_time = $3, end_time = $4, timezone = $5,
-            is_recurring = $6, recurrence_rule = $7, mention_role_ids = $8,
-            restrict_to_role_ids = $9, recreation_hours = $10,
-            thread_created = FALSE, -- Reset the flag to allow recreation
-            thread_id = NULL -- Clear the old channel ID
-        WHERE event_id = $11;
-    """
-    async with self.pool.acquire() as connection:
-        await connection.execute(
-            query, data.get('title'), data.get('description'),
-            data.get('start_time'), data.get('end_time'), data.get('timezone'),
-            data.get('is_recurring'), data.get('recurrence_rule'),
-            data.get('mention_role_ids', []), data.get('restrict_to_role_ids', []),
-            data.get('recreation_hours'), event_id
-        )
+        # This query is modified to reset the thread creation status on every edit
+        query = """
+            UPDATE events SET
+                title = $1, description = $2, event_time = $3, end_time = $4, timezone = $5,
+                is_recurring = $6, recurrence_rule = $7, mention_role_ids = $8,
+                restrict_to_role_ids = $9, recreation_hours = $10,
+                thread_created = FALSE, -- Reset the flag to allow recreation
+                thread_id = NULL -- Clear the old channel ID
+            WHERE event_id = $11;
+        """
+        async with self.pool.acquire() as connection:
+            await connection.execute(
+                query, data.get('title'), data.get('description'),
+                data.get('start_time'), data.get('end_time'), data.get('timezone'),
+                data.get('is_recurring'), data.get('recurrence_rule'),
+                data.get('mention_role_ids', []), data.get('restrict_to_role_ids', []),
+                data.get('recreation_hours'), event_id
+            )
 
     async def update_event_message_id(self, event_id: int, message_id: int):
         async with self.pool.acquire() as connection:

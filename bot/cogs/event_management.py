@@ -9,7 +9,6 @@ from urllib.parse import urlencode
 import asyncio
 from typing import List, Dict, Optional
 from collections import defaultdict
-from zoneinfo import ZoneInfo
 
 # Use relative import to go up one level to the 'bot' package root
 from ..utils.database import Database, RsvpStatus, ROLES, SUBCLASSES, RESTRICTED_ROLES
@@ -38,7 +37,6 @@ EMOJI_MAPPING = {
     "Unassigned": "❔"
 }
 
-# --- NEW: Curated list of common timezones for the bot to offer ---
 CURATED_TIMEZONES = {
     "USA / Canada": [
         "US/Pacific", "US/Mountain", "US/Central", "US/Eastern",
@@ -66,7 +64,6 @@ async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> 
     }
     specialty_roles = {k: int(v) for k, v in specialty_roles.items() if v and v.isdigit()}
 
-    # --- START: New logic for restricted event notice ---
     description = event.get('description', '')
     if restricted_ids := event.get('restrict_to_role_ids'):
         role_mentions = []
@@ -82,7 +79,6 @@ async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> 
                 f"Only members of the following role(s) are permitted to sign-up: {roles_text}\n\n---\n\n"
             )
             description = restriction_notice + description
-    # --- END: New logic ---
 
     embed = discord.Embed(title=f"📅 {event['title']}", description=description, color=discord.Color.blue())
     time_str = f"**Starts:** {discord.utils.format_dt(event['event_time'], style='F')} ({discord.utils.format_dt(event['event_time'], style='R')})"
@@ -138,10 +134,8 @@ async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> 
 
 # --- UI Classes ---
 class RoleSelect(ui.Select):
-    # ADD available_roles to the constructor
     def __init__(self, db: Database, event_id: int, available_roles: List[str]):
         self.db, self.event_id = db, event_id
-        # Use the dynamic available_roles list instead of the static ROLES list
         options = [discord.SelectOption(label=r, emoji=EMOJI_MAPPING.get(r, "❔")) for r in available_roles]
         if not options:
             options.append(discord.SelectOption(label="No roles available for you", value="unassigned"))
@@ -169,8 +163,6 @@ class RoleSelect(ui.Select):
             asyncio.create_task(self.view.update_original_embed())
             return
 
-        # --- START: FIX ---
-        # We are in a DM, so we must fetch the guild and member object to check roles.
         event = await self.db.get_event_by_id(self.event_id)
         if not event:
             return await i.response.edit_message(content="Error: The event could not be found.", view=None)
@@ -184,7 +176,6 @@ class RoleSelect(ui.Select):
             return await i.response.edit_message(content="Error: Could not find you in the event's server.", view=None)
         
         user_role_ids = {r.id for r in member.roles}
-        # --- END: FIX ---
 
         restricted_roles_config = {
             "Officer": os.getenv("ROLE_ID_OFFICER"),
@@ -216,6 +207,7 @@ class SubclassSelect(ui.Select):
     def __init__(self, db: Database, event_id: int):
         self.db, self.event_id = db, event_id
         super().__init__(placeholder="Select a primary role first...", disabled=True, options=[discord.SelectOption(label="placeholder")])
+    
     async def callback(self, i: discord.Interaction):
         subclass = self.values[0]
         await self.db.update_signup_role(self.event_id, i.user.id, self.view.role, subclass)
@@ -225,12 +217,10 @@ class SubclassSelect(ui.Select):
         asyncio.create_task(self.view.update_original_embed())
 
 class RoleSelectionView(ui.View):
-    # ADD available_roles to the constructor
     def __init__(self, bot: commands.Bot, db: Database, event_id: int, message_id: int, user: discord.User, available_roles: List[str]):
         super().__init__(timeout=300)
         self.bot, self.db, self.event_id, self.message_id, self.user, self.role = bot, db, event_id, message_id, user, None
         self.subclass_select = SubclassSelect(db, event_id)
-        # Pass the available_roles list to the RoleSelect component
         self.add_item(RoleSelect(db, event_id, available_roles))
         self.add_item(self.subclass_select)
 
@@ -264,7 +254,6 @@ class PersistentEventView(ui.View):
         event = await self.db.get_event_by_message_id(i.message.id)
         if not event: return await i.followup.send("Event not found.", ephemeral=True)
         
-        # --- START: New logic to determine available roles from .env ---
         restricted_roles_config = {
             "Commander": os.getenv("ROLE_ID_COMMANDER"), "Officer": os.getenv("ROLE_ID_OFFICER"),
             "Recon": os.getenv("ROLE_ID_RECON"), "Tank Commander": os.getenv("ROLE_ID_TANK_COMMANDER"),
@@ -283,7 +272,6 @@ class PersistentEventView(ui.View):
             required_role_id = restricted_roles_config.get(role)
             if not required_role_id or required_role_id in user_role_ids:
                 available_roles.append(role)
-        # --- END: New logic ---
 
         await self.db.set_rsvp(event['event_id'], i.user.id, RsvpStatus.ACCEPTED)
         
@@ -317,28 +305,18 @@ class ConfirmationView(ui.View):
     def __init__(self):
         super().__init__(timeout=120)
         self.value = None
+        
     @ui.button(label="Yes", style=discord.ButtonStyle.green)
     async def confirm(self, i: discord.Interaction, button: ui.Button):
         await i.response.defer()
         self.value = True
         self.stop()
     
-    # --- FIX: Renamed the 'cancel' method to 'reject' to avoid conflicts ---
     @ui.button(label="No/Skip", style=discord.ButtonStyle.red)
     async def reject(self, i: discord.Interaction, button: ui.Button):
         await i.response.defer()
         self.value = False
         self.stop()
-
-    async def callback(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        # We handle the 'none' case by just returning an empty list
-        if "none" in self.values:
-            self.view.selection = []
-        else:
-            self.view.selection = [int(role_id) for role_id in self.values]
-        self.view.stop()
-
 
 class Conversation:
     def __init__(self, cog: 'EventManagement', interaction: discord.Interaction, db: Database, event_id: int = None):
@@ -359,13 +337,13 @@ class Conversation:
     async def run_conversation(self):
         steps = [
             ("What is the title of the event?", self.process_text, 'title'),
-            (None, self.process_timezone, 'timezone'), # <-- Will use the new method
+            (None, self.process_timezone, 'timezone'),
             ("What is the start date and time? Please use `DD-MM-YYYY HH:MM` format.", self.process_start_time, 'start_time'),
             ("What is the end date and time? Format: `DD-MM-YYYY HH:MM`.", self.process_end_time, 'end_time'),
             ("Please provide a detailed description for the event.", self.process_text, 'description'),
             (None, self.ask_is_recurring, 'is_recurring'),
-            (None, self.ask_mention_roles, 'mention_role_ids'), # <-- Will use the new method
-            (None, self.ask_restrict_roles, 'restrict_to_role_ids'), # <-- Will use the new method
+            (None, self.ask_mention_roles, 'mention_role_ids'),
+            (None, self.ask_restrict_roles, 'restrict_to_role_ids'),
         ]
         for prompt, processor, data_key in steps:
             if self.is_finished: break
@@ -378,7 +356,6 @@ class Conversation:
         return await self.bot.wait_for('message', check=lambda m: m.author == self.user and isinstance(m.channel, discord.DMChannel), timeout=300.0)
 
     async def process_text(self, prompt, data_key):
-        # This method for simple text input remains the same
         if self.event_id and self.data.get(data_key): prompt += f"\n(Current: `{self.data.get(data_key)}`)"
         await self.user.send(prompt)
         try:
@@ -391,7 +368,6 @@ class Conversation:
             return False
 
     async def process_timezone(self, prompt, data_key):
-        """NEW: Asks for timezone using a numbered list in an embed."""
         flat_tz_list = [tz for region in CURATED_TIMEZONES.values() for tz in region]
         
         description_lines = []
@@ -433,7 +409,6 @@ class Conversation:
                 msg = await self._wait_for_message()
                 if msg.content.lower() == 'cancel': return False
                 try:
-                    # --- FIX: Revert to pytz.localize for correct timezone interpretation ---
                     naive_dt = datetime.datetime.strptime(msg.content, "%d-%m-%Y %H:%M")
                     selected_tz_str = self.data.get('timezone', 'UTC')
                     selected_tz = pytz.timezone(selected_tz_str)
@@ -444,7 +419,7 @@ class Conversation:
             except asyncio.TimeoutError:
                 await self.user.send("Conversation timed out.")
                 return False
-    
+
     async def process_end_time(self, prompt, data_key):
         while True:
             val = self.data.get(data_key).strftime('%d-%m-%Y %H:%M') if self.data.get(data_key) else ''
@@ -454,7 +429,6 @@ class Conversation:
                 msg = await self._wait_for_message()
                 if msg.content.lower() == 'cancel': return False
                 try:
-                    # --- FIX: Revert to pytz.localize for correct timezone interpretation ---
                     naive_dt = datetime.datetime.strptime(msg.content, "%d-%m-%Y %H:%M")
                     selected_tz_str = self.data.get('timezone', 'UTC')
                     selected_tz = pytz.timezone(selected_tz_str)
@@ -514,14 +488,13 @@ class Conversation:
             return False
 
     async def _ask_roles(self, prompt, data_key, question):
-        """NEW: Asks for roles using a numbered list, parsing a comma-separated response."""
         view = ConfirmationView()
         conf_msg = await self.user.send(question, view=view)
         await view.wait()
         if view.value is None: await conf_msg.delete(); return False
         await conf_msg.delete()
 
-        if view.value: # User clicked "Yes"
+        if view.value:
             guild_roles = sorted([r for r in self.interaction.guild.roles if r.name != "@everyone" and not r.managed], key=lambda r: r.position, reverse=True)
             
             description_lines = [f"`{i+1}` {role.name}" for i, role in enumerate(guild_roles)]
@@ -547,15 +520,13 @@ class Conversation:
             except (ValueError, asyncio.TimeoutError, IndexError):
                 await self.user.send("Invalid input or conversation timed out.")
                 return False
-        else: # User clicked "No/Skip"
+        else:
             self.data[data_key] = []
             return True
 
     async def ask_mention_roles(self, p, dk): return await self._ask_roles(p, dk, "Mention roles in the announcement?")
     async def ask_restrict_roles(self, p, dk): return await self._ask_roles(p, dk, "Restrict sign-ups to specific roles?")
         
-    # In bot/cogs/event_management.py
-
     async def finish(self):
         if self.is_finished: return
         self.is_finished = True
@@ -566,23 +537,19 @@ class Conversation:
             view = PersistentEventView(self.db)
             content = " ".join([f"<@&{rid}>" for rid in self.data.get('mention_role_ids', [])])
 
-            if self.event_id:  # This is the EDIT path
-                # Get the old channel ID *before* we update the database
+            if self.event_id:
                 old_event_data = await self.db.get_event_by_id(self.event_id)
                 old_thread_id = old_event_data.get('thread_id') if old_event_data else None
                 
-                # Now, update the event in the database
                 await self.db.update_event(self.event_id, self.data)
                 embed = await create_event_embed(self.bot, self.event_id, self.db)
                 
                 try:
-                    # Fetch the original message and edit it
                     channel = self.bot.get_channel(self.data['channel_id']) or await self.bot.fetch_channel(self.data['channel_id'])
                     message = await channel.fetch_message(self.data['message_id'])
                     await message.edit(content=content, embed=embed, view=view)
                     await self.user.send("Event updated successfully! The scheduler will create a new discussion channel shortly.")
 
-                    # Now, delete the old channel using the variable we saved
                     if old_thread_id:
                         try:
                             old_channel = self.bot.get_channel(old_thread_id) or await self.bot.fetch_channel(old_thread_id)
@@ -590,7 +557,7 @@ class Conversation:
                                 await old_channel.delete(reason="Event was edited.")
                                 await self.user.send("The old discussion channel has been deleted.")
                         except discord.NotFound:
-                            pass # Channel was already gone
+                            pass
                         except Exception as e:
                             print(f"Could not delete old discussion channel {old_thread_id}: {e}")
                             await self.user.send("Note: I couldn't delete the old discussion channel.")
@@ -598,7 +565,7 @@ class Conversation:
                 except (discord.NotFound, discord.Forbidden):
                     await self.user.send("Event details were updated, but I couldn't find or edit the original event message. It may have been deleted.")
 
-            else:  # This is the CREATE path
+            else:
                 event_id = await self.db.create_event(self.interaction.guild.id, self.interaction.channel.id, self.user.id, self.data)
                 embed = await create_event_embed(self.bot, event_id, self.db)
                 target_channel = self.bot.get_channel(self.interaction.channel.id)
@@ -633,11 +600,9 @@ class DeleteConfirmationView(ui.View):
         if not event:
             return await interaction.response.edit_message(content="This event no longer exists.", view=None)
 
-        # Disable buttons
         for item in self.children: item.disabled = True
         await interaction.response.edit_message(content="Deleting event and notifying attendees...", view=self)
 
-        # Hide the event by deleting its message and thread
         if event.get('message_id') and event.get('channel_id'):
             try:
                 channel = self.cog.bot.get_channel(event['channel_id']) or await self.cog.bot.fetch_channel(event['channel_id'])
@@ -651,10 +616,8 @@ class DeleteConfirmationView(ui.View):
                 await thread.delete()
             except Exception as e: print(f"Could not delete event thread: {e}")
 
-        # Soft-delete in the database
         await self.cog.db.soft_delete_event(self.event_id)
 
-        # Notify attendees
         signups = await self.cog.db.get_signups_for_event(self.event_id)
         accepted_users = [s['user_id'] for s in signups if s['rsvp_status'] == RsvpStatus.ACCEPTED]
         for user_id in accepted_users:
@@ -717,17 +680,15 @@ class EventManagement(commands.Cog):
         
         await interaction.response.defer(ephemeral=True)
         
-        event = await self.db.get_event_by_id(event_id, include_deleted=True) # Assumes get_event_by_id is modified to find deleted events
+        event = await self.db.get_event_by_id(event_id, include_deleted=True)
         if not event or event['guild_id'] != interaction.guild_id:
             return await interaction.followup.send("Event not found.", ephemeral=True)
         
         if not event.get('deleted_at'):
             return await interaction.followup.send("This event is already active.", ephemeral=True)
 
-        # Restore in DB
         await self.db.restore_event(event_id)
         
-        # Re-post the embed
         try:
             channel = self.bot.get_channel(event['channel_id']) or await self.bot.fetch_channel(event['channel_id'])
             embed = await create_event_embed(self.bot, event_id, self.db)

@@ -65,29 +65,31 @@ class Scheduler(commands.Cog):
 
             print(f"  [Process:{event_id}] Found parent channel: '{parent_channel.name}' and message.")
             
-            # --- FIX: Format the thread name correctly ---
-            event_time_str = discord.utils.format_dt(event['event_time'], style='f')
+            # --- FIX 1: Format the thread name correctly with a human-readable date ---
+            event_time = event['event_time']
+            event_time_str = event_time.strftime('%d-%m-%Y %H:%M') + f" {event_time.tzname()}"
             thread_name = f"{event['title']} - {event_time_str}"
             
             print(f"  [Process:{event_id}] Attempting to create thread with name '{thread_name}'...")
-            # --- FIX: Create a thread from the message, not a new channel ---
             discussion_thread = await parent_message.create_thread(name=thread_name)
             print(f"  [Process:{event_id}] SUCCESS: Discord API returned a thread object. ID: {discussion_thread.id}")
 
-            # --- FIX: Create and send the event embed first ---
+            # --- FIX 2: Combine embed and mentions into a single message ---
             event_embed = await create_event_embed(self.bot, event_id, self.db)
-            await discussion_thread.send(embed=event_embed)
-
+            
             # Add and notify accepted members
             signups = await self.db.get_signups_for_event(event_id)
             accepted_user_ids = [s['user_id'] for s in signups if s['rsvp_status'] == RsvpStatus.ACCEPTED]
             
+            welcome_message = ""
             if accepted_user_ids:
                 mentions = ' '.join([f'<@{user_id}>' for user_id in accepted_user_ids])
                 welcome_message = f"Welcome, attendees! {mentions}"
-                print(f"  [Process:{event_id}] Sending welcome message to new thread...")
-                await discussion_thread.send(welcome_message)
-                print(f"  [Process:{event_id}] Welcome message sent.")
+            
+            print(f"  [Process:{event_id}] Sending combined welcome message and embed to new thread...")
+            # Send the embed and the welcome text in one go
+            await discussion_thread.send(content=welcome_message, embed=event_embed)
+            print(f"  [Process:{event_id}] Welcome message and embed sent.")
 
             print(f"  [Process:{event_id}] Attempting to mark event as created in DB...")
             await self.db.mark_thread_created(event_id, discussion_thread.id)

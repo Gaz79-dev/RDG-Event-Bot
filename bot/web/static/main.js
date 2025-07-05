@@ -48,18 +48,17 @@ document.addEventListener('DOMContentLoaded', () => {
         if (response.status === 401) {
             localStorage.removeItem('accessToken');
             window.location.href = '/login';
-            return true; // Fatal error, stop execution
+            return true;
         }
-        // Special handling for 423 Locked - not fatal, but needs handling
         if (response.status === 423) {
             return false;
         }
         if (!response.ok) {
             alert('An API error occurred. Please check the browser console for details.');
             console.error('API request failed:', response);
-            return true; // Fatal error
+            return true;
         }
-        return false; // No error
+        return false;
     };
 
     const createEmojiHtml = (emojiString) => {
@@ -152,6 +151,10 @@ document.addEventListener('DOMContentLoaded', () => {
         events.forEach(event => {
             eventDropdown.add(new Option(`${event.title} (${new Date(event.event_time).toLocaleString()})`, event.event_id));
         });
+
+        // --- FIX: Attach the event listener *after* the dropdown is populated ---
+        eventDropdown.addEventListener('change', handleEventSelection);
+
     }).catch(err => console.error("Failed to load initial page data:", err));
 
     // --- EVENT LISTENERS ---
@@ -169,7 +172,8 @@ document.addEventListener('DOMContentLoaded', () => {
         window.location.href = '/login';
     });
     
-    eventDropdown.addEventListener('change', async () => {
+    // --- FIX: Moved the logic into its own function to be attached later ---
+    async function handleEventSelection() {
         if (!currentUser) {
             console.warn("User data not loaded yet, ignoring event change.");
             return;
@@ -208,7 +212,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 buildBtn.textContent = 'Build Squads';
             }
         } catch (error) { console.error("Error loading event data:", error); }
-    });
+    }
 
     buildBtn.addEventListener('click', async () => {
         const eventId = eventDropdown.value;

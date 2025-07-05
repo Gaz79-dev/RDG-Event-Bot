@@ -6,6 +6,21 @@
     <title>Squad Builder</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
+    <style>
+        /* Simple overlay style */
+        #lock-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(0, 0, 0, 0.75);
+            z-index: 50;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+    </style>
 </head>
 <body class="bg-gray-900 text-gray-300 font-sans">
 
@@ -19,53 +34,64 @@
         </nav>
     </header>
 
-    <main class="container mx-auto px-6 py-8">
-        <section id="event-selection" class="bg-gray-800 p-6 rounded-lg shadow-md mb-8">
-            <h2 class="text-xl font-semibold mb-4 text-white">Step 1: Select an Event</h2>
-            <select id="event-dropdown" class="w-full p-2 bg-gray-700 border border-gray-600 rounded-md">
-                <option>Loading events...</option>
-            </select>
-        </section>
+    <!-- Lock Overlay -->
+    <div id="lock-overlay" class="hidden">
+        <div class="text-center p-8 bg-gray-800 rounded-lg shadow-xl">
+            <h2 class="text-2xl font-bold text-yellow-400 mb-4">Event Locked</h2>
+            <p id="lock-message" class="text-lg"></p>
+        </div>
+    </div>
 
-        <section id="roster-and-build" class="hidden grid grid-cols-1 md:grid-cols-3 gap-8 mb-8">
-            <div class="md:col-span-1 bg-gray-800 p-6 rounded-lg shadow-md">
-                <h2 class="text-xl font-semibold mb-4 text-white">Event Roster</h2>
-                <div id="roster-list" class="space-y-2 max-h-96 overflow-y-auto"></div>
-            </div>
-            <div id="build-form-container" class="md:col-span-2 bg-gray-800 p-6 rounded-lg shadow-md">
-                <h2 class="text-xl font-semibold mb-4 text-white">Step 2: Define Squads</h2>
-                <form id="build-form" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                    </form>
-                 <button id="build-btn" class="mt-6 w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md transition duration-300">
-                    Build Squads
-                </button>
-            </div>
-        </section>
+    <div id="main-content">
+        <main class="container mx-auto px-6 py-8">
+            <section id="event-selection" class="bg-gray-800 p-6 rounded-lg shadow-md mb-8">
+                <h2 class="text-xl font-semibold mb-4 text-white">Step 1: Select an Event</h2>
+                <select id="event-dropdown" class="w-full p-2 bg-gray-700 border border-gray-600 rounded-md">
+                    <option>Loading events...</option>
+                </select>
+            </section>
 
-        <section id="workshop-section" class="hidden bg-gray-800 p-6 rounded-lg shadow-md">
-            <div class="flex justify-between items-center mb-4">
-                <h2 class="text-xl font-semibold text-white">Step 3: Finalize and Send</h2>
-                <button id="refresh-roster-btn" class="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-md text-sm">
-                    Refresh Roster
-                </button>
-            </div>
-            <div id="workshop-area" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 mb-6">
+            <section id="roster-and-build" class="hidden grid grid-cols-1 md:grid-cols-3 gap-8 mb-8">
+                <div class="md:col-span-1 bg-gray-800 p-6 rounded-lg shadow-md">
+                    <h2 class="text-xl font-semibold mb-4 text-white">Event Roster</h2>
+                    <div id="roster-list" class="space-y-2 max-h-96 overflow-y-auto"></div>
                 </div>
+                <div id="build-form-container" class="md:col-span-2 bg-gray-800 p-6 rounded-lg shadow-md">
+                    <h2 class="text-xl font-semibold mb-4 text-white">Step 2: Define Squads</h2>
+                    <form id="build-form" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                        </form>
+                     <button id="build-btn" class="mt-6 w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md transition duration-300">
+                        Build Squads
+                    </button>
+                </div>
+            </section>
 
-            <div id="reserves-area" class="mt-8">
-                <h3 class="text-lg font-semibold text-white mb-2">Reserves</h3>
-                <div id="reserves-list" class="bg-gray-700 p-4 rounded-lg min-h-[50px] member-list" data-squad-id="reserves">
+            <section id="workshop-section" class="hidden bg-gray-800 p-6 rounded-lg shadow-md">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-xl font-semibold text-white">Step 3: Finalize and Send</h2>
+                    <button id="refresh-roster-btn" class="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-md text-sm">
+                        Refresh Roster
+                    </button>
+                </div>
+                <div id="workshop-area" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 mb-6">
                     </div>
-            </div>
-            
-            <div class="flex flex-col sm:flex-row gap-4 mt-6">
-                <select id="channel-dropdown" class="flex-grow p-2 bg-gray-700 border border-gray-600 rounded-md"></select>
-                <button id="send-btn" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-md transition duration-300">
-                    Send to Discord Channel
-                </button>
-            </div>
-        </section>
-    </main>
+
+                <div id="reserves-area" class="mt-8">
+                    <h3 class="text-lg font-semibold text-white mb-2">Reserves</h3>
+                    <div id="reserves-list" class="bg-gray-700 p-4 rounded-lg min-h-[50px] member-list" data-squad-id="reserves">
+                        </div>
+                </div>
+                
+                <div class="flex flex-col sm:flex-row gap-4 mt-6">
+                    <select id="channel-dropdown" class="flex-grow p-2 bg-gray-700 border border-gray-600 rounded-md"></select>
+                    <button id="send-btn" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-md transition duration-300">
+                        Send to Discord Channel
+                    </button>
+                </div>
+            </section>
+        </main>
+    </div>
+
 
     <div id="edit-member-modal" class="hidden fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50">
         <div class="bg-gray-800 p-8 rounded-lg shadow-xl w-full max-w-md">

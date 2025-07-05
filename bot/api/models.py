@@ -69,6 +69,11 @@ class Squad(BaseModel):
     squad_type: str
     members: List[SquadMember]
     
+class EventLockStatus(BaseModel):
+    is_locked: bool
+    locked_by_user_id: Optional[int] = None
+    locked_by_username: Optional[str] = None
+
 class SquadBuildRequest(BaseModel):
     infantry_squad_size: int = 6
     attack_squads: int = 0

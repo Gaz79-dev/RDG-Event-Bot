@@ -48,17 +48,18 @@ document.addEventListener('DOMContentLoaded', () => {
         if (response.status === 401) {
             localStorage.removeItem('accessToken');
             window.location.href = '/login';
-            return true;
+            return true; // Fatal error, stop execution
         }
+        // Special handling for 423 Locked - not fatal, but needs handling
         if (response.status === 423) {
             return false;
         }
         if (!response.ok) {
             alert('An API error occurred. Please check the browser console for details.');
             console.error('API request failed:', response);
-            return true;
+            return true; // Fatal error
         }
-        return false;
+        return false; // No error
     };
 
     const createEmojiHtml = (emojiString) => {

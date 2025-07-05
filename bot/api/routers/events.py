@@ -1,14 +1,16 @@
 import os
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
-from typing import List
+import datetime
+from fastapi import APIRouter, Depends, HTTPException, status
+from typing import List, Optional
+
 import discord
 
 # Use absolute imports from the 'bot' package root
 from bot.utils.database import Database, RsvpStatus
 from bot.api import auth, squad_logic
 from bot.api.dependencies import get_db
-from bot.api.models import Event, Signup, Squad, SquadBuildRequest, RosterUpdateRequest, SendEmbedRequest, Channel
+from bot.api.models import Event, Signup, Squad, SquadBuildRequest, RosterUpdateRequest, SendEmbedRequest, Channel, User, EventLockStatus
 
 # Import the emoji mapping for use in the embed
 from bot.cogs.event_management import EMOJI_MAPPING
@@ -22,11 +24,65 @@ router = APIRouter(
 # Load constants from environment variables
 GUILD_ID = os.getenv("GUILD_ID")
 BOT_TOKEN = os.getenv("DISCORD_TOKEN")
+LOCK_TIMEOUT_MINUTES = 15
+
+# --- Locking Dependency ---
+async def check_event_lock(event_id: int, current_user: User = Depends(auth.get_current_admin_user), db: Database = Depends(get_db)):
+    """
+    Dependency that checks if an event is locked.
+    If it's locked by another user, it raises an HTTP 423 exception.
+    If the lock is expired, it allows the operation to proceed.
+    """
+    lock_status = await db.get_event_lock_status(event_id)
+    if lock_status and lock_status.get('locked_by_user_id') is not None:
+        if lock_status['locked_by_user_id'] != current_user.id:
+            # Check if the lock has expired
+            if lock_status.get('locked_at'):
+                lock_age = datetime.datetime.now(datetime.timezone.utc) - lock_status['locked_at']
+                if lock_age.total_seconds() > LOCK_TIMEOUT_MINUTES * 60:
+                    # Expired lock, allow current user to take over
+                    return
+            
+            raise HTTPException(
+                status_code=status.HTTP_423_LOCKED,
+                detail=f"Event is locked for editing by {lock_status.get('locked_by_username', 'another user')}.",
+            )
+
+# --- API Routes ---
 
 @router.get("", response_model=List[Event])
 async def get_events(db: Database = Depends(get_db)):
     """Gets all upcoming and recently passed events."""
     return await db.get_upcoming_events()
+
+@router.get("/{event_id}/lock-status", response_model=EventLockStatus)
+async def get_lock_status(event_id: int, db: Database = Depends(get_db)):
+    """Checks who currently has the event locked."""
+    lock_info = await db.get_event_lock_status(event_id)
+    if not lock_info or not lock_info.get('locked_by_user_id') or not lock_info.get('locked_at'):
+        return EventLockStatus(is_locked=False)
+    
+    lock_age = datetime.datetime.now(datetime.timezone.utc) - lock_info['locked_at']
+    if lock_age.total_seconds() > LOCK_TIMEOUT_MINUTES * 60:
+        return EventLockStatus(is_locked=False) # Expired lock is treated as not locked
+
+    return EventLockStatus(
+        is_locked=True,
+        locked_by_user_id=lock_info['locked_by_user_id'],
+        locked_by_username=lock_info.get('locked_by_username')
+    )
+
+@router.post("/{event_id}/lock", status_code=204, dependencies=[Depends(check_event_lock)])
+async def lock_event(event_id: int, current_user: User = Depends(auth.get_current_admin_user), db: Database = Depends(get_db)):
+    """Acquires or refreshes a lock on an event for the current user."""
+    await db.lock_event(event_id, current_user.id)
+
+@router.post("/{event_id}/unlock", status_code=204)
+async def unlock_event(event_id: int, current_user: User = Depends(auth.get_current_admin_user), db: Database = Depends(get_db)):
+    """Releases the lock on an event if the current user holds it."""
+    lock_status = await db.get_event_lock_status(event_id)
+    if lock_status and lock_status.get('locked_by_user_id') == current_user.id:
+        await db.unlock_event(event_id)
 
 @router.get("/{event_id}/squads", response_model=List[Squad])
 async def get_event_squads(event_id: int, db: Database = Depends(get_db)):
@@ -64,7 +120,7 @@ async def get_event_signups(event_id: int, db: Database = Depends(get_db)):
             ))
     return roster
 
-@router.post("/{event_id}/build-squads", response_model=List[Squad])
+@router.post("/{event_id}/build-squads", response_model=List[Squad], dependencies=[Depends(check_event_lock)])
 async def build_squads_for_event(event_id: int, request: SquadBuildRequest, db: Database = Depends(get_db)):
     """Triggers the squad building logic and returns the generated squads."""
     try:
@@ -73,31 +129,22 @@ async def build_squads_for_event(event_id: int, request: SquadBuildRequest, db: 
         print(f"Error during squad build process: {e}")
         raise HTTPException(status_code=500, detail="An internal error occurred during squad drafting.")
 
-@router.post("/{event_id}/refresh-roster", response_model=List[Squad])
+@router.post("/{event_id}/refresh-roster", response_model=List[Squad], dependencies=[Depends(check_event_lock)])
 async def refresh_event_roster(event_id: int, request: RosterUpdateRequest, db: Database = Depends(get_db)):
     """
     Refreshes the roster, removing unavailable players and adding new ones to reserves.
-    Only users who accepted *after* squads were built, and who are NOT in any squad, should go to reserves.
     """
-    # IDs from the frontend's current squads
     current_member_ids = {member.user_id for squad in request.squads for member in squad.members}
-    # Get latest signups (RSVPs) from DB
     latest_signups = await db.get_signups_for_event(event_id)
     accepted_user_ids = {s['user_id'] for s in latest_signups if s['rsvp_status'] == RsvpStatus.ACCEPTED}
 
-    # 1. Remove users who are no longer accepted
     users_to_remove = current_member_ids - accepted_user_ids
     for user_id in users_to_remove:
         await db.remove_user_from_all_squads(event_id, user_id)
 
-    # 2. Fetch up-to-date squad membership from DB
     squads_with_members = await db.get_squads_with_members(event_id)
-    all_current_db_member_ids = set()
-    for squad in squads_with_members:
-        for member in squad.get('members', []):
-            all_current_db_member_ids.add(member['user_id'])
+    all_current_db_member_ids = {member['user_id'] for squad in squads_with_members for member in squad.get('members', [])}
 
-    # 3. Only add newly accepted users who are not in any squad
     new_users = accepted_user_ids - all_current_db_member_ids
     if new_users:
         reserves_squad = await db.get_squad_by_name(event_id, "Reserves")
@@ -130,7 +177,7 @@ async def get_guild_channels():
             print(f"Error fetching channels from Discord API: {e}")
             raise HTTPException(status_code=502, detail="Failed to fetch channels from Discord.")
 
-@router.post("/send-embed", status_code=204)
+@router.post("/send-embed", status_code=204, dependencies=[Depends(check_event_lock)])
 async def send_squad_embed(request: SendEmbedRequest, db: Database = Depends(get_db)):
     """Sends the finalized squad composition as an embed to a Discord channel."""
     BOT_TOKEN = os.getenv("DISCORD_TOKEN")
@@ -158,7 +205,6 @@ async def send_squad_embed(request: SendEmbedRequest, db: Database = Depends(get
             reserves_list = [m.display_name for m in squad.members]
             break
 
-    # --- UPDATED: Use emoji and remove squad type ---
     fields = []
     for squad in request.squads:
         if squad.squad_type == "Reserves":

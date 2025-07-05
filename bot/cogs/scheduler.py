@@ -7,6 +7,8 @@ from dateutil.relativedelta import relativedelta
 
 # Use relative import to go up one level to the 'bot' package root
 from ..utils.database import Database, RsvpStatus
+# --- FIX: Import the embed creator to post signups in the new thread ---
+from .event_management import create_event_embed
 
 class Scheduler(commands.Cog):
     """Cog for handling scheduled background tasks."""
@@ -47,56 +49,52 @@ class Scheduler(commands.Cog):
             traceback.print_exc()
 
     async def process_thread_creation(self, event: dict):
-        """Creates a single event discussion channel and adds/notifies accepted members."""
+        """Creates a single event discussion thread and adds/notifies accepted members."""
         event_id = event['event_id']
-        print(f"  [Process:{event_id}] Starting channel creation process.")
+        print(f"  [Process:{event_id}] Starting thread creation process.")
         try:
             parent_channel = self.bot.get_channel(event['channel_id']) or await self.bot.fetch_channel(event['channel_id'])
             if not parent_channel:
                 print(f"  [Process:{event_id}] FAILED: Could not find parent channel {event['channel_id']}. Will not mark as created.")
                 return
-
-            print(f"  [Process:{event_id}] Found parent channel: '{parent_channel.name}'")
             
-            # --- FIX: Handle channels that are not in a category ---
-            category = parent_channel.category
-            if category:
-                print(f"  [Process:{event_id}] Found category: '{category.name}'")
-            else:
-                print(f"  [Process:{event_id}] WARNING: Parent channel is not in a category. Creating channel at the top level.")
+            parent_message = await parent_channel.fetch_message(event['message_id'])
+            if not parent_message:
+                print(f"  [Process:{event_id}] FAILED: Could not find parent message {event['message_id']}. Will not mark as created.")
+                return
 
+            print(f"  [Process:{event_id}] Found parent channel: '{parent_channel.name}' and message.")
+            
+            # --- FIX: Format the thread name correctly ---
             event_time_str = discord.utils.format_dt(event['event_time'], style='f')
-            safe_title = "".join(c for c in event['title'] if c.isalnum() or c in "-_").lower()
-            channel_name = f"{safe_title}-{event_id}"
+            thread_name = f"{event['title']} - {event_time_str}"
             
-            print(f"  [Process:{event_id}] Attempting to create channel with name '{channel_name}'...")
-            # Pass the category object, which can be None
-            discussion_channel = await parent_channel.guild.create_text_channel(
-                name=channel_name,
-                category=category, # This is now safe even if category is None
-                topic=f"Discussion for the event: {event['title']} starting at {event_time_str}"
-            )
-            print(f"  [Process:{event_id}] SUCCESS: Discord API returned a channel object. ID: {discussion_channel.id}")
+            print(f"  [Process:{event_id}] Attempting to create thread with name '{thread_name}'...")
+            # --- FIX: Create a thread from the message, not a new channel ---
+            discussion_thread = await parent_message.create_thread(name=thread_name)
+            print(f"  [Process:{event_id}] SUCCESS: Discord API returned a thread object. ID: {discussion_thread.id}")
+
+            # --- FIX: Create and send the event embed first ---
+            event_embed = await create_event_embed(self.bot, event_id, self.db)
+            await discussion_thread.send(embed=event_embed)
 
             # Add and notify accepted members
             signups = await self.db.get_signups_for_event(event_id)
             accepted_user_ids = [s['user_id'] for s in signups if s['rsvp_status'] == RsvpStatus.ACCEPTED]
             
-            welcome_message = f"This is the discussion channel for **{event['title']}**! Main event post is in {parent_channel.mention}\n\n"
             if accepted_user_ids:
                 mentions = ' '.join([f'<@{user_id}>' for user_id in accepted_user_ids])
-                welcome_message += f"Welcome, attendees! {mentions}"
-            
-            print(f"  [Process:{event_id}] Sending welcome message to new channel...")
-            await discussion_channel.send(welcome_message)
-            print(f"  [Process:{event_id}] Welcome message sent.")
+                welcome_message = f"Welcome, attendees! {mentions}"
+                print(f"  [Process:{event_id}] Sending welcome message to new thread...")
+                await discussion_thread.send(welcome_message)
+                print(f"  [Process:{event_id}] Welcome message sent.")
 
             print(f"  [Process:{event_id}] Attempting to mark event as created in DB...")
-            await self.db.mark_thread_created(event_id, discussion_channel.id)
+            await self.db.mark_thread_created(event_id, discussion_thread.id)
             print(f"  [Process:{event_id}] SUCCESS: Event marked as created in DB.")
 
         except discord.Forbidden:
-            print(f"  [Process:{event_id}] FAILED: PERMISSION ERROR. The bot is likely missing the 'Manage Channels' permission. The event will be re-attempted later.")
+            print(f"  [Process:{event_id}] FAILED: PERMISSION ERROR. The bot is likely missing 'Create Public Threads' permission. The event will be re-attempted later.")
         except Exception as e:
             print(f"  [Process:{event_id}] FAILED: An unexpected error occurred. The event will be re-attempted later.")
             traceback.print_exc()

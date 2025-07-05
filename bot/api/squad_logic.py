@@ -21,6 +21,7 @@ async def run_web_draft(db: Database, event_id: int, request_data) -> List[Dict]
     player_pools = defaultdict(list)
     for signup in signups:
         if signup['rsvp_status'] == RsvpStatus.ACCEPTED:
+            # Use the primary role_name for pooling
             player_pools[signup['role_name']].append(dict(signup))
 
     squad_counts, squads_to_fill = {}, []
@@ -46,40 +47,58 @@ async def run_web_draft(db: Database, event_id: int, request_data) -> List[Dict]
     
     # 3. Draft players into the created squads
     for squad in squads_to_fill:
-        # Determine which player pool to draw from
-        pool_key = squad['base_name'] if squad['base_name'] in player_pools else "Infantry"
-        player_pool = player_pools.get(pool_key, [])
+        # --- FIX: Handle Commander squad specifically to prevent wrong assignments ---
+        if squad['type'] == 'Command':
+            # Only pull from the 'Commander' pool. If empty, the squad remains empty.
+            player_pool = player_pools.get('Commander', [])
+            squad_size = 1
+        else:
+            # For other squads, determine which player pool to draw from
+            pool_key = squad['base_name'] if squad['base_name'] in player_pools else "Infantry"
+            player_pool = player_pools.get(pool_key, [])
+            squad_size = 3 if squad['type'] == "Armour" else 2 if squad['type'] in ["Recon", "Artillery"] else request_data.infantry_squad_size
         
         # Sort players to prioritize key roles
         subclass_priority = ["Officer", "Medic", "Support", "Anti-Tank", "Machine Gunner", "Spotter", "Tank Commander", "Automatic Rifleman", "Engineer", "Assault", "Rifleman", "Crewman", "Sniper"]
-        player_pool.sort(key=lambda p: subclass_priority.index(p['subclass_name']) if p['subclass_name'] in subclass_priority else 99)
+        player_pool.sort(key=lambda p: subclass_priority.index(p['subclass_name']) if p.get('subclass_name') in subclass_priority else 99)
 
-        temp_infantry_pool = []
+        temp_unplaced_pool = []
         member_count = 0
-        squad_size = 3 if squad['type'] == "Armour" else 2 if squad['type'] in ["Recon", "Artillery"] else 1 if squad['type'] == "Command" else request_data.infantry_squad_size
         
         while member_count < squad_size and player_pool:
             player = player_pool.pop(0)
-            player_class = player['subclass_name']
+            # Use subclass_name for role assignment, as it's more specific
+            player_class = player.get('subclass_name')
             
-            # Use a generic class limit for command, but specific for others
+            # This check prevents players with no specific subclass from being drafted into limited slots
+            if not player_class:
+                temp_unplaced_pool.append(player)
+                continue
+
             limit = CLASS_LIMITS.get(player_class, 99)
-            if squad['type'] == 'Command':
-                limit = 1
 
             if squad['class_counts'][player_class] < limit:
                 await db.add_squad_member(squad['id'], player['user_id'], player_class)
                 squad['class_counts'][player_class] += 1
                 member_count += 1
             else:
-                temp_infantry_pool.append(player)
+                temp_unplaced_pool.append(player)
         
-        player_pools[pool_key] = temp_infantry_pool + player_pools[pool_key]
+        # Determine the correct pool key to return unplaced players to
+        if squad['type'] == 'Command':
+            pool_key_for_return = 'Commander'
+        else:
+            pool_key_for_return = squad['base_name'] if squad['base_name'] in player_pools else "Infantry"
 
-    # 4. All remaining players go to Reserves
+        # Add unplaced players back to their original pool
+        player_pools[pool_key_for_return] = temp_unplaced_pool + player_pool
+
+    # 4. All remaining players from all pools go to Reserves
     reserves_squad_id = await db.create_squad(event_id, "Reserves", "Reserves")
     for role in player_pools:
         for player in player_pools[role]:
-            await db.add_squad_member(reserves_squad_id, player['user_id'], player.get('subclass_name') or player.get('role_name', 'Unassigned'))
+            # Assign using the most specific role available
+            assigned_role = player.get('subclass_name') or player.get('role_name', 'Unassigned')
+            await db.add_squad_member(reserves_squad_id, player['user_id'], assigned_role)
         
     return await db.get_squads_with_members(event_id)

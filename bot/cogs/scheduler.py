@@ -58,36 +58,47 @@ class Scheduler(commands.Cog):
                 print(f"  [Process:{event_id}] FAILED: Could not find parent channel {event['channel_id']}. Will not mark as created.")
                 return
             
-            parent_message = await parent_channel.fetch_message(event['message_id'])
-            if not parent_message:
-                print(f"  [Process:{event_id}] FAILED: Could not find parent message {event['message_id']}. Will not mark as created.")
-                return
-
-            print(f"  [Process:{event_id}] Found parent channel: '{parent_channel.name}' and message.")
+            print(f"  [Process:{event_id}] Found parent channel: '{parent_channel.name}'.")
             
-            # --- FIX 1: Format the thread name correctly with a human-readable date ---
+            # Format the thread name correctly with a human-readable date
             event_time = event['event_time']
             event_time_str = event_time.strftime('%d-%m-%Y %H:%M') + f" {event_time.tzname()}"
             thread_name = f"{event['title']} - {event_time_str}"
             
-            print(f"  [Process:{event_id}] Attempting to create thread with name '{thread_name}'...")
-            discussion_thread = await parent_message.create_thread(name=thread_name)
+            print(f"  [Process:{event_id}] Attempting to create a private thread with name '{thread_name}'...")
+            # --- FIX: Create a private thread in the channel instead of from a message ---
+            discussion_thread = await parent_channel.create_thread(
+                name=thread_name,
+                type=discord.ChannelType.private_thread
+            )
             print(f"  [Process:{event_id}] SUCCESS: Discord API returned a thread object. ID: {discussion_thread.id}")
 
-            # --- FIX 2: Combine embed and mentions into a single message ---
-            event_embed = await create_event_embed(self.bot, event_id, self.db)
-            
-            # Add and notify accepted members
+            # Get accepted users
             signups = await self.db.get_signups_for_event(event_id)
             accepted_user_ids = [s['user_id'] for s in signups if s['rsvp_status'] == RsvpStatus.ACCEPTED]
             
+            # --- FIX: Add accepted members to the private thread ---
+            print(f"  [Process:{event_id}] Adding {len(accepted_user_ids)} members to the private thread...")
+            for user_id in accepted_user_ids:
+                try:
+                    # Fetch member object to add them
+                    member = await parent_channel.guild.fetch_member(user_id)
+                    if member:
+                        await discussion_thread.add_user(member)
+                except discord.NotFound:
+                    print(f"    - Could not find member with ID {user_id} to add to thread.")
+                except Exception as e:
+                    print(f"    - Error adding member {user_id} to thread: {e}")
+            print(f"  [Process:{event_id}] Finished adding members.")
+
+            # Create the embed and welcome message
+            event_embed = await create_event_embed(self.bot, event_id, self.db)
             welcome_message = ""
             if accepted_user_ids:
                 mentions = ' '.join([f'<@{user_id}>' for user_id in accepted_user_ids])
                 welcome_message = f"Welcome, attendees! {mentions}"
             
             print(f"  [Process:{event_id}] Sending combined welcome message and embed to new thread...")
-            # Send the embed and the welcome text in one go
             await discussion_thread.send(content=welcome_message, embed=event_embed)
             print(f"  [Process:{event_id}] Welcome message and embed sent.")
 
@@ -96,7 +107,8 @@ class Scheduler(commands.Cog):
             print(f"  [Process:{event_id}] SUCCESS: Event marked as created in DB.")
 
         except discord.Forbidden:
-            print(f"  [Process:{event_id}] FAILED: PERMISSION ERROR. The bot is likely missing 'Create Public Threads' permission. The event will be re-attempted later.")
+            # --- FIX: Update permission error message ---
+            print(f"  [Process:{event_id}] FAILED: PERMISSION ERROR. The bot is likely missing 'Create Private Threads' permission. The event will be re-attempted later.")
         except Exception as e:
             print(f"  [Process:{event_id}] FAILED: An unexpected error occurred. The event will be re-attempted later.")
             traceback.print_exc()

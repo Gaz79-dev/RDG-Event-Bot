@@ -58,21 +58,22 @@ class Scheduler(commands.Cog):
 
             print(f"  [Process:{event_id}] Found parent channel: '{parent_channel.name}'")
             
+            # --- FIX: Handle channels that are not in a category ---
             category = parent_channel.category
-            if not category:
-                print(f"  [Process:{event_id}] FAILED: Parent channel is not in a category. Will not mark as created.")
-                return
-            
-            print(f"  [Process:{event_id}] Found category: '{category.name}'")
+            if category:
+                print(f"  [Process:{event_id}] Found category: '{category.name}'")
+            else:
+                print(f"  [Process:{event_id}] WARNING: Parent channel is not in a category. Creating channel at the top level.")
 
             event_time_str = discord.utils.format_dt(event['event_time'], style='f')
             safe_title = "".join(c for c in event['title'] if c.isalnum() or c in "-_").lower()
             channel_name = f"{safe_title}-{event_id}"
             
             print(f"  [Process:{event_id}] Attempting to create channel with name '{channel_name}'...")
+            # Pass the category object, which can be None
             discussion_channel = await parent_channel.guild.create_text_channel(
                 name=channel_name,
-                category=category,
+                category=category, # This is now safe even if category is None
                 topic=f"Discussion for the event: {event['title']} starting at {event_time_str}"
             )
             print(f"  [Process:{event_id}] SUCCESS: Discord API returned a channel object. ID: {discussion_channel.id}")
@@ -103,7 +104,6 @@ class Scheduler(commands.Cog):
     @tasks.loop(minutes=5)
     async def recreate_recurring_events(self):
         """Periodically checks for recurring events that need to be recreated."""
-        # Import locally to prevent circular import errors at startup
         from .event_management import create_event_embed, PersistentEventView
         
         try:
@@ -119,7 +119,6 @@ class Scheduler(commands.Cog):
         now = datetime.datetime.now(last_event_time.tzinfo)
         next_occurrence = last_event_time
         
-        # Keep advancing the date until it's in the future
         while next_occurrence <= now:
             if rule == 'daily':
                 next_occurrence += relativedelta(days=1)
@@ -127,7 +126,7 @@ class Scheduler(commands.Cog):
                 next_occurrence += relativedelta(weeks=1)
             elif rule == 'monthly':
                 next_occurrence += relativedelta(months=1)
-            else: # Should not happen
+            else:
                 return None
         return next_occurrence
 
@@ -136,14 +135,12 @@ class Scheduler(commands.Cog):
         next_start_time = self.calculate_next_occurrence(parent_event['event_time'], parent_event['recurrence_rule'])
         if not next_start_time: return
 
-        # Only create the next event if it's within the creation window
         recreation_window = next_start_time - datetime.timedelta(hours=parent_event.get('recreation_hours', 24))
         if datetime.datetime.now(next_start_time.tzinfo) < recreation_window:
             return
 
         print(f"Recreating event for parent ID {parent_event['event_id']}. Next occurrence: {next_start_time}")
         
-        # Copy data and update times for the new child event
         child_data = dict(parent_event)
         duration = parent_event['end_time'] - parent_event['event_time']
         child_data['start_time'] = next_start_time
@@ -165,7 +162,6 @@ class Scheduler(commands.Cog):
             msg = await target_channel.send(content=content, embed=embed, view=view)
             await self.db.update_event_message_id(child_id, msg.id)
             
-            # Mark the parent as having been recreated
             await self.db.update_last_recreated_at(parent_event['event_id'])
             print(f"Successfully recreated event. New child event ID: {child_id}")
             
@@ -173,7 +169,7 @@ class Scheduler(commands.Cog):
             print(f"Failed to process recreation for parent event {parent_event['event_id']}: {e}")
             traceback.print_exc()
 
-    @tasks.loop(time=datetime.time(hour=0, minute=5, tzinfo=pytz.utc)) # Run 5 mins past midnight
+    @tasks.loop(time=datetime.time(hour=0, minute=5, tzinfo=pytz.utc))
     async def purge_deleted_events(self):
         """Runs once daily to permanently delete events marked for deletion over 7 days ago."""
         print("Running daily purge of old soft-deleted events...")
@@ -196,18 +192,15 @@ class Scheduler(commands.Cog):
         try:
             events_to_delete = await self.db.get_finished_events_for_cleanup()
             for event in events_to_delete:
-                # Delete the discussion thread if it exists
                 if event.get('thread_id'):
                     try:
                         thread = self.bot.get_channel(event['thread_id']) or await self.bot.fetch_channel(event['thread_id'])
                         await thread.delete()
                     except discord.NotFound:
-                        pass # Thread already gone
+                        pass
                     except Exception as e:
                         print(f"Could not delete thread for event {event['event_id']}: {e}")
 
-                # This deletes the event from the database, which cascades to squads and signups.
-                # This is correct for BOTH one-off events and finished child occurrences of recurring events.
                 await self.db.delete_event(event['event_id'])
             
             if len(events_to_delete) > 0:

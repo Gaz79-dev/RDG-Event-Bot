@@ -206,6 +206,22 @@ class Database:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow("SELECT * FROM squads WHERE event_id = $1 AND name = $2", event_id, squad_name)
             return dict(row) if row else None
+
+    async def get_event_lock_status(self, event_id: int) -> Optional[Dict]:
+        query = "SELECT e.locked_by_user_id, e.locked_at, u.username as locked_by_username FROM events e LEFT JOIN users u ON e.locked_by_user_id = u.id WHERE e.event_id = $1;"
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(query, event_id)
+            return dict(row) if row else None
+
+    async def lock_event(self, event_id: int, user_id: int):
+        query = "UPDATE events SET locked_by_user_id = $1, locked_at = (NOW() AT TIME ZONE 'utc') WHERE event_id = $2;"
+        async with self.pool.acquire() as conn:
+            await conn.execute(query, user_id, event_id)
+
+    async def unlock_event(self, event_id: int):
+        query = "UPDATE events SET locked_by_user_id = NULL, locked_at = NULL WHERE event_id = $1;"
+        async with self.pool.acquire() as conn:
+            await conn.execute(query, event_id)
     
     # Scheduler for Discussion thread creation and historic event/squad cleanup
     async def set_thread_creation_hours(self, guild_id: int, hours: int):

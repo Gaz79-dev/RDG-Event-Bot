@@ -40,6 +40,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const lockOverlay = document.getElementById('lock-overlay');
     const lockMessage = document.getElementById('lock-message');
     const mainContent = document.getElementById('main-content');
+    const clearLockBtn = document.getElementById('clear-lock-btn');
 
 
     // --- UTILITY FUNCTIONS ---
@@ -84,7 +85,6 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const acquireLock = async (eventId) => {
-        // --- FIX: Add a guard to prevent running before user data is loaded ---
         if (!currentUser) {
             console.warn("acquireLock called before currentUser is loaded. Aborting.");
             return false;
@@ -96,18 +96,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (lockStatus.is_locked && lockStatus.locked_by_user_id !== currentUser.id) {
                     setLockedState(true, `This event is currently locked for editing by: ${lockStatus.locked_by_username}. The page is in read-only mode.`);
                 } else {
-                     setLockedState(false); // We already have the lock or it's expired
+                     setLockedState(false);
                 }
                 return false;
             }
             if (handleApiError(response)) return false;
             
             setLockedState(false);
-            // Start a heartbeat to keep the lock alive
             if (lockInterval) clearInterval(lockInterval);
             lockInterval = setInterval(() => {
                 fetch(`/api/events/${eventId}/lock`, { method: 'POST', headers });
-            }, 60000); // Refresh lock every 60 seconds
+            }, 60000);
             return true;
 
         } catch (error) {
@@ -121,17 +120,13 @@ document.addEventListener('DOMContentLoaded', () => {
         lockInterval = null;
         if (!eventId) return;
         try {
-            // Use keepalive for unload event to ensure it sends
             await fetch(`/api/events/${eventId}/unlock`, { method: 'POST', headers, keepalive: true });
-        } catch(e) { /* ignore errors on unload */ }
+        } catch(e) { /* ignore */ }
     };
 
-    // --- FIX: Correctly handle releasing the lock on page close/navigate ---
     window.addEventListener('beforeunload', () => {
         const eventId = eventDropdown.value;
         if (eventId) {
-            // Unconditionally attempt to release lock. The backend will verify ownership.
-            // This prevents JS errors if the page is closed before currentUser is loaded.
             releaseLock(eventId);
         }
     });
@@ -160,6 +155,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }).catch(err => console.error("Failed to load initial page data:", err));
 
     // --- EVENT LISTENERS ---
+    clearLockBtn.addEventListener('click', () => {
+        setLockedState(false);
+        eventDropdown.value = '';
+        rosterAndBuildSection.classList.add('hidden');
+        workshopSection.classList.add('hidden');
+    });
 
     logoutBtn.addEventListener('click', () => {
         const eventId = eventDropdown.value;
@@ -169,7 +170,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     
     eventDropdown.addEventListener('change', async () => {
-        // --- FIX: Add a guard to prevent running before user data is loaded ---
         if (!currentUser) {
             console.warn("User data not loaded yet, ignoring event change.");
             return;
@@ -277,7 +277,7 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             if(handleApiError(response)) throw new Error("Failed to send");
             alert('Squad embed sent successfully!');
-            await releaseLock(eventId); // Release lock after sending
+            await releaseLock(eventId);
             setLockedState(true, 'Squads sent. This event is now read-only.');
         } catch (error) {
             alert('Failed to send embed.');

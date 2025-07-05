@@ -84,6 +84,11 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const acquireLock = async (eventId) => {
+        // --- FIX: Add a guard to prevent running before user data is loaded ---
+        if (!currentUser) {
+            console.warn("acquireLock called before currentUser is loaded. Aborting.");
+            return false;
+        }
         try {
             const response = await fetch(`/api/events/${eventId}/lock`, { method: 'POST', headers });
             if (response.status === 423) {
@@ -121,14 +126,13 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch(e) { /* ignore errors on unload */ }
     };
 
+    // --- FIX: Correctly handle releasing the lock on page close/navigate ---
     window.addEventListener('beforeunload', () => {
         const eventId = eventDropdown.value;
         if (eventId) {
-            // Check if we hold the lock before releasing
-            const isLockedByMe = !lockOverlay.classList.contains('hidden') && lockMessage.textContent.includes(currentUser.username);
-            if (!isLockedByMe) {
-                 releaseLock(eventId);
-            }
+            // Unconditionally attempt to release lock. The backend will verify ownership.
+            // This prevents JS errors if the page is closed before currentUser is loaded.
+            releaseLock(eventId);
         }
     });
 
@@ -165,6 +169,12 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     
     eventDropdown.addEventListener('change', async () => {
+        // --- FIX: Add a guard to prevent running before user data is loaded ---
+        if (!currentUser) {
+            console.warn("User data not loaded yet, ignoring event change.");
+            return;
+        }
+
         const previousEventId = eventDropdown.dataset.previousEventId;
         if (previousEventId) {
             await releaseLock(previousEventId);

@@ -14,6 +14,8 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentSquads = [];
     let ALL_ROLES = {};
     let EMOJI_MAP = {};
+    let lockInterval = null;
+    let currentUser = null;
 
     // --- ELEMENT SELECTORS ---
     const eventDropdown = document.getElementById('event-dropdown');
@@ -35,20 +37,28 @@ document.addEventListener('DOMContentLoaded', () => {
     const modalMemberIdInput = document.getElementById('modal-member-id');
     const modalRoleSelect = document.getElementById('modal-role-select');
     const modalCancelBtn = document.getElementById('modal-cancel-btn');
+    const lockOverlay = document.getElementById('lock-overlay');
+    const lockMessage = document.getElementById('lock-message');
+    const mainContent = document.getElementById('main-content');
+
 
     // --- UTILITY FUNCTIONS ---
     const handleApiError = (response) => {
         if (response.status === 401) {
             localStorage.removeItem('accessToken');
             window.location.href = '/login';
-            return true;
+            return true; // Fatal error, stop execution
+        }
+        // Special handling for 423 Locked - not fatal, but needs handling
+        if (response.status === 423) {
+            return false;
         }
         if (!response.ok) {
-            alert('An API error occurred. Please check the browser console (F12) for details.');
+            alert('An API error occurred. Please check the browser console for details.');
             console.error('API request failed:', response);
-            return true;
+            return true; // Fatal error
         }
-        return false;
+        return false; // No error
     };
 
     const createEmojiHtml = (emojiString) => {
@@ -61,6 +71,68 @@ document.addEventListener('DOMContentLoaded', () => {
         return `<span class="text-xl">${emojiString}</span>`;
     };
 
+    // --- LOCKING FUNCTIONS ---
+    const setLockedState = (isLocked, message = '') => {
+        if (isLocked) {
+            lockMessage.textContent = message;
+            lockOverlay.classList.remove('hidden');
+            mainContent.classList.add('pointer-events-none', 'opacity-50');
+        } else {
+            lockOverlay.classList.add('hidden');
+            mainContent.classList.remove('pointer-events-none', 'opacity-50');
+        }
+    };
+
+    const acquireLock = async (eventId) => {
+        try {
+            const response = await fetch(`/api/events/${eventId}/lock`, { method: 'POST', headers });
+            if (response.status === 423) {
+                const lockStatus = await (await fetch(`/api/events/${eventId}/lock-status`, { headers })).json();
+                if (lockStatus.is_locked && lockStatus.locked_by_user_id !== currentUser.id) {
+                    setLockedState(true, `This event is currently locked for editing by: ${lockStatus.locked_by_username}. The page is in read-only mode.`);
+                } else {
+                     setLockedState(false); // We already have the lock or it's expired
+                }
+                return false;
+            }
+            if (handleApiError(response)) return false;
+            
+            setLockedState(false);
+            // Start a heartbeat to keep the lock alive
+            if (lockInterval) clearInterval(lockInterval);
+            lockInterval = setInterval(() => {
+                fetch(`/api/events/${eventId}/lock`, { method: 'POST', headers });
+            }, 60000); // Refresh lock every 60 seconds
+            return true;
+
+        } catch (error) {
+            console.error("Error acquiring lock:", error);
+            return false;
+        }
+    };
+
+    const releaseLock = async (eventId) => {
+        if (lockInterval) clearInterval(lockInterval);
+        lockInterval = null;
+        if (!eventId) return;
+        try {
+            // Use keepalive for unload event to ensure it sends
+            await fetch(`/api/events/${eventId}/unlock`, { method: 'POST', headers, keepalive: true });
+        } catch(e) { /* ignore errors on unload */ }
+    };
+
+    window.addEventListener('beforeunload', () => {
+        const eventId = eventDropdown.value;
+        if (eventId) {
+            // Check if we hold the lock before releasing
+            const isLockedByMe = !lockOverlay.classList.contains('hidden') && lockMessage.textContent.includes(currentUser.username);
+            if (!isLockedByMe) {
+                 releaseLock(eventId);
+            }
+        }
+    });
+
+
     // --- INITIAL DATA FETCHES ---
     Promise.all([
         fetch('/api/users/me', { headers }),
@@ -70,8 +142,8 @@ document.addEventListener('DOMContentLoaded', () => {
     ]).then(async ([userRes, rolesRes, eventsRes, emojiRes]) => {
         if ([userRes, rolesRes, eventsRes, emojiRes].some(handleApiError)) return;
         
-        const user = await userRes.json();
-        if (user?.is_admin) adminLink.classList.remove('hidden');
+        currentUser = await userRes.json();
+        if (currentUser?.is_admin) adminLink.classList.remove('hidden');
 
         ALL_ROLES = await rolesRes.json();
         EMOJI_MAP = await emojiRes.json();
@@ -86,15 +158,26 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- EVENT LISTENERS ---
 
     logoutBtn.addEventListener('click', () => {
+        const eventId = eventDropdown.value;
+        if (eventId) releaseLock(eventId);
         localStorage.removeItem('accessToken');
         window.location.href = '/login';
     });
     
     eventDropdown.addEventListener('change', async () => {
+        const previousEventId = eventDropdown.dataset.previousEventId;
+        if (previousEventId) {
+            await releaseLock(previousEventId);
+        }
+        setLockedState(false);
         workshopSection.classList.add('hidden');
         rosterAndBuildSection.classList.add('hidden');
+
         const eventId = eventDropdown.value;
+        eventDropdown.dataset.previousEventId = eventId;
         if (!eventId) return;
+        
+        await acquireLock(eventId);
 
         try {
             const rosterResponse = await fetch(`/api/events/${eventId}/signups`, { headers });
@@ -121,7 +204,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const eventId = eventDropdown.value;
         const formData = new FormData(buildForm);
         const buildRequest = {};
-        ['infantry_squad_size', 'commander_squads', 'attack_squads', 'defence_squads', 'flex_squads', 'pathfinder_squads', 'armour_squads', 'recon_squads', 'arty_squads'].forEach(key => {
+        ['infantry_squad_size', 'attack_squads', 'defence_squads', 'flex_squads', 'pathfinder_squads', 'armour_squads', 'recon_squads', 'arty_squads'].forEach(key => {
             buildRequest[key] = parseInt(formData.get(key), 10) || 0;
         });
         buildBtn.textContent = 'Building...';
@@ -166,6 +249,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     sendBtn.addEventListener('click', async () => {
         const selectedChannelId = channelDropdown.value;
+        const eventId = eventDropdown.value;
         
         if (!selectedChannelId || currentSquads.length === 0) {
             alert('Please select a channel and build squads first.');
@@ -179,11 +263,12 @@ document.addEventListener('DOMContentLoaded', () => {
             const response = await fetch('/api/events/send-embed', {
                 method: 'POST',
                 headers: { ...headers, 'Content-Type': 'application/json' },
-                // --- FIX: Send the channel_id as a string, without parseInt ---
                 body: JSON.stringify({ channel_id: selectedChannelId, squads: currentSquads })
             });
             if(handleApiError(response)) throw new Error("Failed to send");
             alert('Squad embed sent successfully!');
+            await releaseLock(eventId); // Release lock after sending
+            setLockedState(true, 'Squads sent. This event is now read-only.');
         } catch (error) {
             alert('Failed to send embed.');
         } finally {
@@ -306,7 +391,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function populateBuildForm() {
         const formFields = [
-            { label: 'Infantry Squad Size', id: 'infantry_squad_size', value: 3 },
+            { label: 'Infantry Squad Size', id: 'infantry_squad_size', value: 6 },
             { label: 'Attack Squads', id: 'attack_squads', value: 3 },
             { label: 'Defence Squads', id: 'defence_squads', value: 3 },
             { label: 'Flex Squads', id: 'flex_squads', value: 1 },

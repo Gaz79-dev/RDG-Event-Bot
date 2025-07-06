@@ -371,9 +371,31 @@ document.addEventListener('DOMContentLoaded', () => {
             const response = await fetch('/api/events/channels', { headers });
             if (handleApiError(response)) return;
             const channels = await response.json();
-            channelDropdown.innerHTML = '<option value="">-- Select a Channel --</option>';
-            (channels || []).forEach(channel => {
-                channelDropdown.add(new Option(channel.name, channel.id));
+            
+            channelDropdown.innerHTML = '<option value="">-- Select a Channel or Thread --</option>';
+            let currentCategory = null;
+            let optgroup = null;
+
+            channels.forEach(channel => {
+                // If the channel's category is different from the current one, create a new group
+                if (channel.category !== currentCategory) {
+                    currentCategory = channel.category;
+                    // Only create a labeled group if the category exists
+                    if (currentCategory) {
+                        optgroup = document.createElement('optgroup');
+                        optgroup.label = currentCategory;
+                        channelDropdown.appendChild(optgroup);
+                    } else {
+                        // This handles top-level channels that don't belong to a group
+                        optgroup = null;
+                    }
+                }
+                
+                const option = new Option(channel.name, channel.id);
+                
+                // Append the channel to the current group if it exists, otherwise to the main dropdown
+                const parentElement = optgroup || channelDropdown;
+                parentElement.appendChild(option);
             });
         } catch(err) { console.error("Could not load channels", err)}
     }

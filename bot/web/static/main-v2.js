@@ -45,11 +45,8 @@ document.addEventListener('DOMContentLoaded', () => {
             window.location.href = '/login';
             return true;
         }
-        if (response.status === 423) {
-            return false;
-        }
+        if (response.status === 423) { return false; }
         if (!response.ok) {
-            alert('An API error occurred. Please check the browser console for details.');
             console.error('API request failed:', response);
             return true;
         }
@@ -79,9 +76,7 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const acquireLock = async (eventId) => {
-        if (!currentUser) {
-            return false;
-        }
+        if (!currentUser) return false;
         try {
             const response = await fetch(`/api/events/${eventId}/lock`, { method: 'POST', headers });
             if (response.status === 423) {
@@ -95,12 +90,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 return false;
             }
             if (handleApiError(response)) return false;
-
             setLockedState(false);
             if (lockInterval) clearInterval(lockInterval);
-            lockInterval = setInterval(() => {
-                fetch(`/api/events/${eventId}/lock`, { method: 'POST', headers });
-            }, 60000);
+            lockInterval = setInterval(() => { fetch(`/api/events/${eventId}/lock`, { method: 'POST', headers }); }, 60000);
             return true;
         } catch (error) {
             console.error("Error in acquireLock:", error);
@@ -114,30 +106,24 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!eventId) return;
         try {
             await fetch(`/api/events/${eventId}/unlock`, { method: 'POST', headers, keepalive: true });
-        } catch(e) { /* ignore */ }
+        } catch (e) { /* ignore */ }
     };
 
     window.addEventListener('beforeunload', () => {
-        const eventId = eventDropdown.value;
-        if (eventId) {
-            releaseLock(eventId);
-        }
+        if (eventDropdown.value) releaseLock(eventDropdown.value);
     });
 
     // --- EVENT LISTENERS ---
     buildBtn.addEventListener('click', async () => {
         const eventId = eventDropdown.value;
         if (!eventId) return;
-
         const formData = new FormData(buildForm);
         const buildRequest = {};
         ['infantry_squad_size', 'attack_squads', 'defence_squads', 'flex_squads', 'pathfinder_squads', 'armour_squads', 'recon_squads', 'arty_squads'].forEach(key => {
             buildRequest[key] = parseInt(formData.get(key), 10) || 0;
         });
-
         buildBtn.textContent = 'Building...';
         buildBtn.disabled = true;
-
         try {
             const response = await fetch(`/api/events/${eventId}/build-squads`, {
                 method: 'POST',
@@ -153,12 +139,31 @@ document.addEventListener('DOMContentLoaded', () => {
             buildBtn.disabled = false;
         }
     });
+    
+    refreshRosterBtn.addEventListener('click', async () => {
+        const eventId = eventDropdown.value;
+        if (!eventId || currentSquads.length === 0) return;
+        refreshRosterBtn.textContent = 'Refreshing...';
+        refreshRosterBtn.disabled = true;
+        try {
+            const response = await fetch(`/api/events/${eventId}/refresh-roster`, {
+                method: 'POST',
+                headers: { ...headers, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ squads: currentSquads })
+            });
+            if (handleApiError(response)) return;
+            renderWorkshop(await response.json());
+            alert('Roster has been updated!');
+        } catch (error) {
+            alert('Error refreshing roster.');
+        } finally {
+            refreshRosterBtn.textContent = 'Refresh Roster';
+            refreshRosterBtn.disabled = false;
+        }
+    });
 
     clearLockBtn.addEventListener('click', async () => {
-        const eventId = eventDropdown.value;
-        if (eventId) {
-            await releaseLock(eventId);
-        }
+        if (eventDropdown.value) await releaseLock(eventDropdown.value);
         setLockedState(false);
         eventDropdown.value = '';
         rosterAndBuildSection.classList.add('hidden');
@@ -166,12 +171,11 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     logoutBtn.addEventListener('click', () => {
-        const eventId = eventDropdown.value;
-        if (eventId) releaseLock(eventId);
+        if (eventDropdown.value) releaseLock(eventDropdown.value);
         localStorage.removeItem('accessToken');
         window.location.href = '/login';
     });
-
+    
     sendBtn.addEventListener('click', async () => {
         const selectedChannelId = channelDropdown.value;
         const eventId = eventDropdown.value;
@@ -185,23 +189,77 @@ document.addEventListener('DOMContentLoaded', () => {
         sendBtn.disabled = true;
         
         try {
-            // This sends the currentSquads data directly, just like in the working v1.1.6
             const response = await fetch('/api/events/send-embed', {
                 method: 'POST',
                 headers: { ...headers, 'Content-Type': 'application/json' },
                 body: JSON.stringify({ channel_id: selectedChannelId, squads: currentSquads })
             });
-            if(handleApiError(response)) throw new Error("Failed to send");
+            
+            if (!response.ok) {
+                if (response.status === 422) {
+                    const errorData = await response.json();
+                    console.error("--- 422 VALIDATION ERROR ---");
+                    console.error("The server rejected the data. Details:", errorData);
+                    alert("A data validation error occurred. See the F12 console for the exact details.");
+                } else {
+                     alert('An API error occurred. Please check the browser console for details.');
+                }
+                throw new Error(`Server responded with status: ${response.status}`);
+            }
             
             alert('Squad embed sent successfully!');
             await releaseLock(eventId);
             setLockedState(true, 'Squads sent. This event is now read-only.');
+
         } catch (error) {
-            alert('Failed to send embed.');
+            console.error("Error in sendBtn listener:", error.message);
         } finally {
             sendBtn.textContent = 'Send to Discord Channel';
             sendBtn.disabled = false;
         }
+    });
+
+    document.body.addEventListener('click', (e) => {
+        if (e.target.classList.contains('edit-member-btn')) {
+            const memberItem = e.target.closest('.member-item');
+            modalMemberName.textContent = memberItem.querySelector('.member-name').textContent;
+            modalMemberIdInput.value = memberItem.dataset.memberId;
+            const currentRole = memberItem.querySelector('.assigned-role-text').textContent;
+            
+            modalRoleSelect.innerHTML = '';
+            const allRoles = [...new Set([...ALL_ROLES.roles, ...Object.values(ALL_ROLES.subclasses).flat()])].sort();
+            allRoles.forEach(role => {
+                const option = new Option(role, role);
+                if (role === currentRole) option.selected = true;
+                modalRoleSelect.add(option);
+            });
+            
+            editModal.classList.remove('hidden');
+        }
+    });
+
+    modalCancelBtn.addEventListener('click', () => editModal.classList.add('hidden'));
+
+    editMemberForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const memberId = modalMemberIdInput.value;
+        const newRole = modalRoleSelect.value;
+        const eventId = eventDropdown.value;
+        try {
+            const response = await fetch(`/api/squads/members/${memberId}/role`, {
+                method: 'PUT',
+                headers: { ...headers, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ new_role_name: newRole, event_id: parseInt(eventId) })
+            });
+            if (handleApiError(response)) return;
+            
+            const memberEl = document.querySelector(`[data-member-id='${memberId}']`);
+            if (memberEl) {
+                memberEl.querySelector('.member-emoji').innerHTML = createEmojiHtml(EMOJI_MAP[newRole]);
+                memberEl.querySelector('.assigned-role-text').textContent = newRole;
+            }
+            editModal.classList.add('hidden');
+        } catch (err) { alert("Error: Could not update role."); }
     });
 
     // --- MAIN LOGIC ---
@@ -233,10 +291,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- HANDLER FUNCTION ---
     async function handleEventSelection() {
         if (!isPageInitialized) return;
-
-        if (!currentUser) {
-            return;
-        }
+        if (!currentUser) return;
 
         const previousEventId = eventDropdown.dataset.previousEventId;
         if (previousEventId) {

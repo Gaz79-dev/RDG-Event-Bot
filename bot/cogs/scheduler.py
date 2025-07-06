@@ -203,7 +203,7 @@ class Scheduler(commands.Cog):
             traceback.print_exc()
 
     
-    @tasks.loop(time=datetime.time(hour=0, minute=1, tzinfo=pytz.utc))
+    @tasks.loop(minutes=1)
     async def cleanup_finished_events(self):
         """Runs once daily to delete old, non-recurring events and their threads."""
         print("Running daily cleanup of old events...")

@@ -181,20 +181,48 @@ async def refresh_event_roster(event_id: int, request: RosterUpdateRequest, db: 
 
 @router.get("/channels", response_model=List[Channel])
 async def get_guild_channels():
-    """Gets a list of text channels from the Discord server."""
+    """Gets a list of text channels and active threads from the Discord server."""
     if not BOT_TOKEN or not GUILD_ID:
         raise HTTPException(status_code=500, detail="Bot token or Guild ID not configured on server.")
     
-    url = f"https://discord.com/api/v10/guilds/{GUILD_ID}/channels"
+    url_channels = f"https://discord.com/api/v10/guilds/{GUILD_ID}/channels"
+    url_threads = f"https://discord.com/api/v10/guilds/{GUILD_ID}/threads/active"
     headers = {"Authorization": f"Bot {BOT_TOKEN}"}
     
     async with httpx.AsyncClient() as client:
         try:
-            response = await client.get(url, headers=headers)
-            response.raise_for_status()
-            all_channels = response.json()
-            text_channels = [Channel(id=c['id'], name=c['name']) for c in all_channels if c['type'] == 0]
-            return sorted(text_channels, key=lambda c: c.name)
+            # Fetch both channels and active threads in parallel
+            res_channels_task = client.get(url_channels, headers=headers)
+            res_threads_task = client.get(url_threads, headers=headers)
+            res_channels, res_threads = await asyncio.gather(res_channels_task, res_threads_task)
+
+            res_channels.raise_for_status()
+            res_threads.raise_for_status()
+
+            all_channels = res_channels.json()
+            active_threads = res_threads.json().get('threads', [])
+
+            # Create a map of category IDs to names
+            categories = {c['id']: c['name'] for c in all_channels if c['type'] == 4}
+
+            processed_list = []
+            # Process standard text channels
+            for c in all_channels:
+                if c['type'] == 0: # GUILD_TEXT
+                    category_name = categories.get(c.get('parent_id'))
+                    processed_list.append(Channel(id=c['id'], name=c['name'], category=category_name))
+            
+            # Process active threads
+            for t in active_threads:
+                if t['type'] in [11, 12]: # PUBLIC_THREAD or PRIVATE_THREAD
+                    category_name = categories.get(t.get('parent_id'))
+                    # Add a prefix to distinguish threads in the list
+                    thread_name = f"└ Thread: {t['name']}"
+                    processed_list.append(Channel(id=t['id'], name=thread_name, category=category_name))
+
+            # Sort the list: top-level channels first, then by category, then by name
+            return sorted(processed_list, key=lambda c: (c.category or ' ', c.name))
+            
         except Exception as e:
             print(f"Error fetching channels from Discord API: {e}")
             raise HTTPException(status_code=502, detail="Failed to fetch channels from Discord.")

@@ -1,4 +1,4 @@
-alert("This is the new main-v2.js script!");
+alert("This is the newer main-v2.js script!");
 document.addEventListener('DOMContentLoaded', () => {
     // --- STATE AND HEADERS ---
     const token = getAuthToken();
@@ -200,7 +200,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (response.status === 422) {
                     const errorData = await response.json();
                     console.error("--- 422 VALIDATION ERROR ---");
-                    console.error("The server rejected the data. Details:", errorData);
+                    console.error("The server rejected the data. Details:", JSON.stringify(errorData, null, 2));
                     alert("A data validation error occurred. See the F12 console for the exact details.");
                 } else {
                      alert('An API error occurred. Please check the browser console for details.');

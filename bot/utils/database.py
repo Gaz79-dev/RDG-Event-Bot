@@ -207,6 +207,12 @@ class Database:
             await connection.execute("UPDATE signups SET role_name = $1, subclass_name = $2 WHERE event_id = $3 AND user_id = $4;", role_name, subclass_name, event_id, user_id)
 
     # --- Squad & Guild Config Functions ---
+    async def force_unlock_all_events(self):
+        """FOR DEBUGGING: Forcibly removes all locks from all events."""
+        query = "UPDATE events SET locked_by_user_id = NULL, locked_at = NULL WHERE locked_by_user_id IS NOT NULL;"
+        async with self.pool.acquire() as connection:
+            await connection.execute(query)
+    
     async def get_all_roles_and_subclasses(self) -> Dict:
         return {"roles": ROLES, "subclasses": SUBCLASSES}
 

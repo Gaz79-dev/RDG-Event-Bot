@@ -184,24 +184,15 @@ document.addEventListener('DOMContentLoaded', () => {
         sendBtn.textContent = 'Sending...';
         sendBtn.disabled = true;
         
-        // Data sanitization step to ensure payload is clean
-        const payloadSquads = currentSquads.map(squad => ({
-            ...squad,
-            members: squad.members.map(member => ({
-                squad_member_id: member.squad_member_id,
-                user_id: member.user_id,
-                assigned_role_name: member.assigned_role_name,
-                display_name: member.display_name,
-            }))
-        }));
-
         try {
+            // This sends the currentSquads data directly, just like in the working v1.1.6
             const response = await fetch('/api/events/send-embed', {
                 method: 'POST',
                 headers: { ...headers, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ channel_id: selectedChannelId, squads: payloadSquads })
+                body: JSON.stringify({ channel_id: selectedChannelId, squads: currentSquads })
             });
             if(handleApiError(response)) throw new Error("Failed to send");
+            
             alert('Squad embed sent successfully!');
             await releaseLock(eventId);
             setLockedState(true, 'Squads sent. This event is now read-only.');

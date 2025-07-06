@@ -1,9 +1,8 @@
-// Helper function to get the token, accessible globally
-function getAuthToken() {
-    return localStorage.getItem('accessToken');
-}
+// A heavily instrumented version of main.js for diagnostics.
 
 document.addEventListener('DOMContentLoaded', () => {
+    console.log('[DEBUG] DOMContentLoaded: Script starting.');
+
     // --- STATE AND HEADERS ---
     const token = getAuthToken();
     if (!token) {
@@ -43,7 +42,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const mainContent = document.getElementById('main-content');
     const clearLockBtn = document.getElementById('clear-lock-btn');
 
-
     // --- UTILITY FUNCTIONS ---
     const handleApiError = (response) => {
         if (response.status === 401) {
@@ -52,11 +50,12 @@ document.addEventListener('DOMContentLoaded', () => {
             return true;
         }
         if (response.status === 423) {
+            console.log('[DEBUG] API returned 423 (Locked).');
             return false;
         }
         if (!response.ok) {
             alert('An API error occurred. Please check the browser console for details.');
-            console.error('API request failed:', response);
+            console.error('[DEBUG] API request failed:', response);
             return true;
         }
         return false;
@@ -72,50 +71,61 @@ document.addEventListener('DOMContentLoaded', () => {
         return `<span class="text-xl">${emojiString}</span>`;
     };
 
-    // --- LOCKING FUNCTIONS ---
+    // --- LOCKING FUNCTIONS (with logging) ---
     const setLockedState = (isLocked, message = '') => {
+        console.log(`[DEBUG] setLockedState called with isLocked: ${isLocked}`);
         if (isLocked) {
             lockMessage.textContent = message;
             lockOverlay.classList.remove('hidden');
             mainContent.classList.add('pointer-events-none', 'opacity-50');
+            console.log('[DEBUG] Lock overlay is now VISIBLE.');
         } else {
             lockOverlay.classList.add('hidden');
             mainContent.classList.remove('pointer-events-none', 'opacity-50');
+            console.log('[DEBUG] Lock overlay is now HIDDEN.');
         }
     };
 
     const acquireLock = async (eventId) => {
+        console.log(`[DEBUG] acquireLock: Attempting to lock event ${eventId}.`);
         if (!currentUser) {
-            console.warn("acquireLock called before currentUser is loaded. Aborting.");
+            console.warn("[DEBUG] acquireLock called before currentUser is loaded. Aborting.");
             return false;
         }
         try {
             const response = await fetch(`/api/events/${eventId}/lock`, { method: 'POST', headers });
             if (response.status === 423) {
-                const lockStatus = await (await fetch(`/api/events/${eventId}/lock-status`, { headers })).json();
+                const lockStatusRes = await fetch(`/api/events/${eventId}/lock-status`, { headers });
+                const lockStatus = await lockStatusRes.json();
+                console.log('[DEBUG] acquireLock: Lock status from server:', lockStatus);
+                console.log('[DEBUG] acquireLock: Current user ID:', currentUser.id);
+
                 if (lockStatus.is_locked && lockStatus.locked_by_user_id !== currentUser.id) {
+                    console.log('[DEBUG] acquireLock: Lock is held by another user. Showing popup.');
                     setLockedState(true, `This event is currently locked for editing by: ${lockStatus.locked_by_username}. The page is in read-only mode.`);
                 } else {
-                     setLockedState(false);
+                    console.log('[DEBUG] acquireLock: Lock is held by me or is expired. Hiding popup.');
+                    setLockedState(false);
                 }
                 return false;
             }
             if (handleApiError(response)) return false;
             
+            console.log('[DEBUG] acquireLock: Lock successfully acquired/refreshed. Hiding popup.');
             setLockedState(false);
             if (lockInterval) clearInterval(lockInterval);
             lockInterval = setInterval(() => {
                 fetch(`/api/events/${eventId}/lock`, { method: 'POST', headers });
             }, 60000);
             return true;
-
         } catch (error) {
-            console.error("Error acquiring lock:", error);
+            console.error("[DEBUG] Error in acquireLock:", error);
             return false;
         }
     };
 
     const releaseLock = async (eventId) => {
+        console.log(`[DEBUG] releaseLock: Attempting to release lock for event ${eventId}.`);
         if (lockInterval) clearInterval(lockInterval);
         lockInterval = null;
         if (!eventId) return;
@@ -131,36 +141,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-
-    // --- INITIAL DATA FETCHES ---
-    Promise.all([
-        fetch('/api/users/me', { headers }),
-        fetch('/api/squads/roles', { headers }),
-        fetch('/api/events', { headers }),
-        fetch('/api/squads/emojis', { headers })
-    ]).then(async ([userRes, rolesRes, eventsRes, emojiRes]) => {
-        if ([userRes, rolesRes, eventsRes, emojiRes].some(handleApiError)) return;
-        
-        currentUser = await userRes.json();
-        if (currentUser?.is_admin) adminLink.classList.remove('hidden');
-
-        ALL_ROLES = await rolesRes.json();
-        EMOJI_MAP = await emojiRes.json();
-        const events = await eventsRes.json();
-
-        eventDropdown.innerHTML = '<option value="">-- Select an Event --</option>';
-        events.forEach(event => {
-            eventDropdown.add(new Option(`${event.title} (${new Date(event.event_time).toLocaleString()})`, event.event_id));
-        });
-
-        // --- FIX: Attach the event listener *after* the dropdown is populated ---
-        eventDropdown.addEventListener('change', handleEventSelection);
-        isPageInitialized = true;
-
-    }).catch(err => console.error("Failed to load initial page data:", err));
-
     // --- EVENT LISTENERS ---
     clearLockBtn.addEventListener('click', async () => {
+        console.log('[DEBUG] clearLockBtn clicked.');
         const eventId = eventDropdown.value;
         if (eventId) {
             await releaseLock(eventId);
@@ -178,16 +161,56 @@ document.addEventListener('DOMContentLoaded', () => {
         window.location.href = '/login';
     });
     
-    // --- FIX: Moved the logic into its own function to be attached later ---
-    async function handleEventSelection() {
-        if (!isPageInitialized) return; // Add this guard clause
+    // --- MAIN LOGIC ---
+    console.log('[DEBUG] Starting initial data fetch with Promise.all.');
+    Promise.all([
+        fetch('/api/users/me', { headers }),
+        fetch('/api/squads/roles', { headers }),
+        fetch('/api/events', { headers }),
+        fetch('/api/squads/emojis', { headers })
+    ]).then(async ([userRes, rolesRes, eventsRes, emojiRes]) => {
+        console.log('[DEBUG] Promise.all resolved. Processing results.');
         
+        if ([userRes, rolesRes, eventsRes, emojiRes].some(handleApiError)) return;
+        
+        currentUser = await userRes.json();
+        console.log('[DEBUG] Current user loaded:', currentUser);
+        if (currentUser?.is_admin) adminLink.classList.remove('hidden');
+
+        ALL_ROLES = await rolesRes.json();
+        EMOJI_MAP = await emojiRes.json();
+        const events = await eventsRes.json();
+        console.log(`[DEBUG] ${events.length} events loaded.`);
+
+        eventDropdown.innerHTML = '<option value="">-- Select an Event --</option>';
+        events.forEach(event => {
+            eventDropdown.add(new Option(`${event.title} (${new Date(event.event_time).toLocaleString()})`, event.event_id));
+        });
+        console.log('[DEBUG] Event dropdown populated.');
+
+        console.log('[DEBUG] Attaching event listener to dropdown.');
+        eventDropdown.addEventListener('change', handleEventSelection);
+
+        console.log('[DEBUG] Page initialization is complete.');
+        isPageInitialized = true;
+
+    }).catch(err => console.error("[DEBUG] FATAL: Initial page data failed to load:", err));
+
+    // --- HANDLER FUNCTION ---
+    async function handleEventSelection() {
+        console.log(`[DEBUG] handleEventSelection triggered. isPageInitialized: ${isPageInitialized}. Dropdown value: "${eventDropdown.value}"`);
+        if (!isPageInitialized) {
+            console.log('[DEBUG] handleEventSelection blocked by isPageInitialized flag.');
+            return;
+        }
+
         if (!currentUser) {
-            console.warn("User data not loaded yet, ignoring event change.");
+            console.warn("[DEBUG] User data not loaded yet, ignoring event change.");
             return;
         }
 
         const previousEventId = eventDropdown.dataset.previousEventId;
+        console.log(`[DEBUG] Previous event ID was: ${previousEventId}`);
         if (previousEventId) {
             await releaseLock(previousEventId);
         }
@@ -197,11 +220,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const eventId = eventDropdown.value;
         eventDropdown.dataset.previousEventId = eventId;
-        if (!eventId) return;
+        console.log(`[DEBUG] New event ID is: ${eventId}`);
+        if (!eventId) {
+            console.log('[DEBUG] No event ID selected. Stopping.');
+            return;
+        }
         
         await acquireLock(eventId);
 
+        // This part only runs after a lock is acquired or deemed not an issue.
         try {
+            console.log(`[DEBUG] Fetching data for event ${eventId}.`);
             const rosterResponse = await fetch(`/api/events/${eventId}/signups`, { headers });
             if(handleApiError(rosterResponse)) return;
             displayRoster(await rosterResponse.json());
@@ -219,130 +248,56 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 buildBtn.textContent = 'Build Squads';
             }
-        } catch (error) { console.error("Error loading event data:", error); }
+        } catch (error) { console.error(`[DEBUG] Error loading event data for ${eventId}:`, error); }
+    }
+    
+    // The rest of the functions (displayRoster, renderWorkshop, etc.) must be present below this point.
+    function displayRoster(roster) {
+        rosterList.innerHTML = '';
+        (roster || []).forEach(player => {
+            const div = document.createElement('div');
+            div.className = 'p-2 bg-gray-700 rounded-md text-sm flex items-center';
+            const emojiKey = player.subclass_name || player.role_name;
+            const emojiHtml = createEmojiHtml(EMOJI_MAP[emojiKey]);
+            div.innerHTML = `
+                <span class="flex-shrink-0 w-6 h-6 flex items-center justify-center">${emojiHtml}</span>
+                <span class="ml-2">${player.display_name}</span>
+            `;
+            rosterList.appendChild(div);
+        });
     }
 
-    buildBtn.addEventListener('click', async () => {
-        const eventId = eventDropdown.value;
-        const formData = new FormData(buildForm);
-        const buildRequest = {};
-        ['infantry_squad_size', 'attack_squads', 'defence_squads', 'flex_squads', 'pathfinder_squads', 'armour_squads', 'recon_squads', 'arty_squads'].forEach(key => {
-            buildRequest[key] = parseInt(formData.get(key), 10) || 0;
-        });
-        buildBtn.textContent = 'Building...';
-        buildBtn.disabled = true;
+    function populateBuildForm() {
+        const formFields = [
+            { label: 'Infantry Squad Size', id: 'infantry_squad_size', value: 6 },
+            { label: 'Attack Squads', id: 'attack_squads', value: 3 },
+            { label: 'Defence Squads', id: 'defence_squads', value: 3 },
+            { label: 'Flex Squads', id: 'flex_squads', value: 1 },
+            { label: 'Pathfinder Squads', id: 'pathfinder_squads', value: 1 },
+            { label: 'Armour Squads', id: 'armour_squads', value: 2 },
+            { label: 'Recon Squads', id: 'recon_squads', value: 1 },
+            { label: 'Arty Squads', id: 'arty_squads', value: 1 },
+        ];
+        buildForm.innerHTML = formFields.map(field => `
+            <div>
+                <label for="${field.id}" class="block text-sm font-medium">${field.label}</label>
+                <input type="number" id="${field.id}" name="${field.id}" value="${field.value}" min="0" required class="mt-1 w-full bg-gray-700 border-gray-600 rounded-md p-2">
+            </div>
+        `).join('');
+    }
+
+    async function loadChannels() {
         try {
-            const response = await fetch(`/api/events/${eventId}/build-squads`, {
-                method: 'POST',
-                headers: { ...headers, 'Content-Type': 'application/json' },
-                body: JSON.stringify(buildRequest)
-            });
+            const response = await fetch('/api/events/channels', { headers });
             if (handleApiError(response)) return;
-            renderWorkshop(await response.json());
-        } catch (error) {
-            alert('Error building squads.');
-        } finally {
-            buildBtn.textContent = 'Re-Build Squads';
-            buildBtn.disabled = false;
-        }
-    });
-
-    refreshRosterBtn.addEventListener('click', async () => {
-        const eventId = eventDropdown.value;
-        if (!eventId || currentSquads.length === 0) return;
-        refreshRosterBtn.textContent = 'Refreshing...';
-        refreshRosterBtn.disabled = true;
-        try {
-            const response = await fetch(`/api/events/${eventId}/refresh-roster`, {
-                method: 'POST',
-                headers: { ...headers, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ squads: currentSquads })
+            const channels = await response.json();
+            channelDropdown.innerHTML = '<option value="">-- Select a Channel --</option>';
+            (channels || []).forEach(channel => {
+                channelDropdown.add(new Option(channel.name, channel.id));
             });
-            if (handleApiError(response)) return;
-            renderWorkshop(await response.json());
-            alert('Roster has been updated!');
-        } catch (error) {
-            alert('Error refreshing roster.');
-        } finally {
-            refreshRosterBtn.textContent = 'Refresh Roster';
-            refreshRosterBtn.disabled = false;
-        }
-    });
+        } catch(err) { console.error("Could not load channels", err)}
+    }
 
-    sendBtn.addEventListener('click', async () => {
-        const selectedChannelId = channelDropdown.value;
-        const eventId = eventDropdown.value;
-        
-        if (!selectedChannelId || currentSquads.length === 0) {
-            alert('Please select a channel and build squads first.');
-            return;
-        }
-        
-        sendBtn.textContent = 'Sending...';
-        sendBtn.disabled = true;
-        
-        try {
-            const response = await fetch('/api/events/send-embed', {
-                method: 'POST',
-                headers: { ...headers, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ channel_id: selectedChannelId, squads: currentSquads })
-            });
-            if(handleApiError(response)) throw new Error("Failed to send");
-            alert('Squad embed sent successfully!');
-            await releaseLock(eventId);
-            setLockedState(true, 'Squads sent. This event is now read-only.');
-        } catch (error) {
-            alert('Failed to send embed.');
-        } finally {
-            sendBtn.textContent = 'Send to Discord Channel';
-            sendBtn.disabled = false;
-        }
-    });
-
-    document.body.addEventListener('click', (e) => {
-        if (e.target.classList.contains('edit-member-btn')) {
-            const memberItem = e.target.closest('.member-item');
-            modalMemberName.textContent = memberItem.querySelector('.member-name').textContent;
-            modalMemberIdInput.value = memberItem.dataset.memberId;
-            const currentRole = memberItem.querySelector('.assigned-role-text').textContent;
-            
-            modalRoleSelect.innerHTML = '';
-            const allRoles = [...new Set([...ALL_ROLES.roles, ...Object.values(ALL_ROLES.subclasses).flat()])].sort();
-            allRoles.forEach(role => {
-                const option = new Option(role, role);
-                if (role === currentRole) option.selected = true;
-                modalRoleSelect.add(option);
-            });
-            
-            editModal.classList.remove('hidden');
-        }
-    });
-
-    modalCancelBtn.addEventListener('click', () => editModal.classList.add('hidden'));
-
-    editMemberForm.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const memberId = modalMemberIdInput.value;
-        const newRole = modalRoleSelect.value;
-        const eventId = eventDropdown.value;
-        try {
-            const response = await fetch(`/api/squads/members/${memberId}/role`, {
-                method: 'PUT',
-                headers: { ...headers, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ new_role_name: newRole, event_id: parseInt(eventId) })
-            });
-            if (handleApiError(response)) return;
-            
-            const memberEl = document.querySelector(`[data-member-id='${memberId}']`);
-            if (memberEl) {
-                memberEl.querySelector('.member-emoji').innerHTML = createEmojiHtml(EMOJI_MAP[newRole]);
-                memberEl.querySelector('.assigned-role-text').textContent = newRole;
-            }
-            editModal.classList.add('hidden');
-        } catch (err) { alert("Error: Could not update role."); }
-    });
-
-    // --- RENDER & HELPER FUNCTIONS ---
     function renderWorkshop(squads) {
         currentSquads = squads;
         workshopArea.innerHTML = '';
@@ -394,51 +349,5 @@ document.addEventListener('DOMContentLoaded', () => {
         
         workshopSection.classList.remove('hidden');
         loadChannels();
-    }
-
-    function displayRoster(roster) {
-        rosterList.innerHTML = '';
-        (roster || []).forEach(player => {
-            const div = document.createElement('div');
-            div.className = 'p-2 bg-gray-700 rounded-md text-sm flex items-center';
-            const emojiKey = player.subclass_name || player.role_name;
-            const emojiHtml = createEmojiHtml(EMOJI_MAP[emojiKey]);
-            div.innerHTML = `
-                <span class="flex-shrink-0 w-6 h-6 flex items-center justify-center">${emojiHtml}</span>
-                <span class="ml-2">${player.display_name}</span>
-            `;
-            rosterList.appendChild(div);
-        });
-    }
-
-    function populateBuildForm() {
-        const formFields = [
-            { label: 'Infantry Squad Size', id: 'infantry_squad_size', value: 6 },
-            { label: 'Attack Squads', id: 'attack_squads', value: 3 },
-            { label: 'Defence Squads', id: 'defence_squads', value: 3 },
-            { label: 'Flex Squads', id: 'flex_squads', value: 1 },
-            { label: 'Pathfinder Squads', id: 'pathfinder_squads', value: 1 },
-            { label: 'Armour Squads', id: 'armour_squads', value: 2 },
-            { label: 'Recon Squads', id: 'recon_squads', value: 1 },
-            { label: 'Arty Squads', id: 'arty_squads', value: 1 },
-        ];
-        buildForm.innerHTML = formFields.map(field => `
-            <div>
-                <label for="${field.id}" class="block text-sm font-medium">${field.label}</label>
-                <input type="number" id="${field.id}" name="${field.id}" value="${field.value}" min="0" required class="mt-1 w-full bg-gray-700 border-gray-600 rounded-md p-2">
-            </div>
-        `).join('');
-    }
-
-    async function loadChannels() {
-        try {
-            const response = await fetch('/api/events/channels', { headers });
-            if (handleApiError(response)) return;
-            const channels = await response.json();
-            channelDropdown.innerHTML = '<option value="">-- Select a Channel --</option>';
-            (channels || []).forEach(channel => {
-                channelDropdown.add(new Option(channel.name, channel.id));
-            });
-        } catch(err) { console.error("Could not load channels", err)}
     }
 });

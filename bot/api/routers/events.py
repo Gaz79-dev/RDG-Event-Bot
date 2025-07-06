@@ -31,22 +31,35 @@ async def check_event_lock(event_id: int, current_user: User = Depends(auth.get_
     """
     Dependency that checks if an event is locked.
     If it's locked by another user, it raises an HTTP 423 exception.
-    If the lock is expired, it allows the operation to proceed.
+    If the lock is expired or orphaned, it allows the operation to proceed.
     """
     lock_status = await db.get_event_lock_status(event_id)
-    if lock_status and lock_status.get('locked_by_user_id') is not None:
-        if lock_status['locked_by_user_id'] != current_user.id:
-            # Check if the lock has expired
-            if lock_status.get('locked_at'):
-                lock_age = datetime.datetime.now(datetime.timezone.utc) - lock_status['locked_at']
-                if lock_age.total_seconds() > LOCK_TIMEOUT_MINUTES * 60:
-                    # Expired lock, allow current user to take over
-                    return
-            
-            raise HTTPException(
-                status_code=status.HTTP_423_LOCKED,
-                detail=f"Event is locked for editing by {lock_status.get('locked_by_username', 'another user')}.",
-            )
+    
+    # Proceed if the event is not locked
+    if not lock_status or lock_status.get('locked_by_user_id') is None:
+        return
+
+    # Proceed if the lock belongs to the current user
+    if lock_status.get('locked_by_user_id') == current_user.id:
+        return
+        
+    # Check for an orphaned lock (user ID exists, but user record does not)
+    # The LEFT JOIN in the DB query results in username being None if the user was deleted.
+    if lock_status.get('locked_by_username') is None:
+        await db.unlock_event(event_id) # Proactively clear the orphaned lock
+        return
+
+    # Check if the lock has expired
+    if lock_status.get('locked_at'):
+        lock_age = datetime.datetime.now(datetime.timezone.utc) - lock_status['locked_at']
+        if lock_age.total_seconds() > LOCK_TIMEOUT_MINUTES * 60:
+            return # Expired lock is treated as unlocked
+
+    # If all checks fail, the event is actively locked by another user.
+    raise HTTPException(
+        status_code=status.HTTP_423_LOCKED,
+        detail=f"Event is locked for editing by {lock_status.get('locked_by_username', 'another user')}.",
+    )
 
 # --- API Routes ---
 

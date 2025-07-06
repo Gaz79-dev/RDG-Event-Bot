@@ -162,42 +162,70 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     
     sendBtn.addEventListener('click', async () => {
-        const selectedChannelId = channelDropdown.value;
-        const eventId = eventDropdown.value;
-        
-        if (!selectedChannelId || currentSquads.length === 0) {
-            alert('Please select a channel and build squads first.');
-            return;
-        }
-        
-        // --- NEW DIAGNOSTIC LOGGING ---
-        console.log("--- DEBUG: Data being sent to /api/events/send-embed ---");
-        console.log("Channel ID:", selectedChannelId);
-        // We use JSON.parse(JSON.stringify(...)) to log a clean, deep copy of the object
-        console.log("Squads Payload:", JSON.parse(JSON.stringify(currentSquads))); 
-        // --- END DIAGNOSTIC LOGGING ---
+    const selectedChannelId = channelDropdown.value;
+    const eventId = eventDropdown.value;
 
-        sendBtn.textContent = 'Sending...';
-        sendBtn.disabled = true;
-        
-        try {
-            const payload = { channel_id: selectedChannelId, squads: currentSquads };
-            const response = await fetch('/api/events/send-embed', {
-                method: 'POST',
-                headers: { ...headers, 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-            if(handleApiError(response)) throw new Error("Failed to send");
-            alert('Squad embed sent successfully!');
-            await releaseLock(eventId);
-            setLockedState(true, 'Squads sent. This event is now read-only.');
-        } catch (error) {
-            alert('Failed to send embed.');
-        } finally {
-            sendBtn.textContent = 'Send to Discord Channel';
-            sendBtn.disabled = false;
-        }
+    if (!selectedChannelId || currentSquads.length === 0) {
+        alert('Please select a channel and build squads first.');
+        return;
+    }
+
+    sendBtn.textContent = 'Sending...';
+    sendBtn.disabled = true;
+
+    // --- FIX: Create a clean payload to ensure it matches the server's model ---
+    const cleanSquads = currentSquads.map(squad => {
+        return {
+            squad_id: squad.squad_id,
+            name: squad.name,
+            squad_type: squad.squad_type,
+            members: squad.members.map(member => {
+                // This explicitly removes any extra fields from each member object
+                return {
+                    squad_member_id: member.squad_member_id,
+                    user_id: member.user_id,
+                    assigned_role_name: member.assigned_role_name,
+                    display_name: member.display_name
+                };
+            })
+        };
     });
+
+    const payload = {
+        channel_id: selectedChannelId,
+        squads: cleanSquads // Use the newly sanitized data
+    };
+    // --- End of data sanitization ---
+
+    try {
+        const response = await fetch('/api/events/send-embed', {
+            method: 'POST',
+            headers: { ...headers, 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        // The handleApiError function will alert on non-422 errors.
+        // We throw a new error to be caught below if the response is not 'ok'.
+        if (!response.ok) {
+            handleApiError(response); // Will handle 401s
+            throw new Error(`Server responded with status: ${response.status}`);
+        }
+        
+        alert('Squad embed sent successfully!');
+        await releaseLock(eventId);
+        setLockedState(true, 'Squads sent. This event is now read-only.');
+
+    } catch (error) {
+        console.error("Error sending embed:", error);
+        // Only show a generic alert if one hasn't been shown by handleApiError
+        if (!error.message.includes("401")) {
+             alert('Failed to send embed. Please check the console for details.');
+        }
+    } finally {
+        sendBtn.textContent = 'Send to Discord Channel';
+        sendBtn.disabled = false;
+    }
+});
 
     // --- MAIN LOGIC ---
     console.log('[DEBUG] Starting initial data fetch with Promise.all.');

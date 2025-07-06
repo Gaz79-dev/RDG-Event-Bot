@@ -190,7 +190,9 @@ document.addEventListener('DOMContentLoaded', () => {
         sendBtn.disabled = true;
         
         try {
-            const response = await fetch('/api/events/send-embed', {
+            const url = `/api/events/send-embed?event_id=${eventId}`;
+
+            const response = await fetch(url, {
                 method: 'POST',
                 headers: { ...headers, 'Content-Type': 'application/json' },
                 body: JSON.stringify({ channel_id: selectedChannelId, squads: currentSquads })

@@ -310,7 +310,7 @@ class Database:
 
     async def get_events_for_recreation(self) -> List[dict]:
         """Gets all recurring events that are due to be recreated."""
-        query = "SELECT * FROM events WHERE is_recurring = TRUE AND deleted_at IS NULL AND (last_recreated_at IS NULL OR last_recreated_at < (NOW() AT TIME ZONE 'utc' - INTERVAL '6 hour'));"
+        query = "SELECT * FROM events WHERE is_recurring = TRUE AND deleted_at IS NULL;"
         async with self.pool.acquire() as connection:
             return [dict(row) for row in await connection.fetch(query)]
 

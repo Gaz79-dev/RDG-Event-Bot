@@ -1,4 +1,4 @@
-alert("This is the newer main-v2.js script!");
+alert("This is the newest main-v2.js script!");
 document.addEventListener('DOMContentLoaded', () => {
     // --- STATE AND HEADERS ---
     const token = getAuthToken();

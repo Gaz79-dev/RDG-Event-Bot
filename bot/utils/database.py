@@ -276,11 +276,11 @@ class Database:
             await connection.execute(query, thread_id, event_id)
 
     async def get_finished_events_for_cleanup(self) -> List[dict]:
-        """Gets old, non-recurring events whose end time has passed."""
-        # Clean up events that ended more than 6 hours ago to be safe
+        """Gets old, non-recurring events that ended more than 2 hours ago."""
+        # This query now implements the 2-hour cleanup delay after an event's end_time.
         query = """
             SELECT event_id, thread_id FROM events
-            WHERE is_recurring = FALSE AND end_time < (NOW() AT TIME ZONE 'utc' - INTERVAL '6 hours');
+            WHERE is_recurring = FALSE AND end_time < (NOW() AT TIME ZONE 'utc' - INTERVAL '2 hours');
         """
         async with self.pool.acquire() as connection:
             return [dict(row) for row in await connection.fetch(query)]

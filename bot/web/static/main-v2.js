@@ -1,8 +1,4 @@
-// A heavily instrumented version of main.js for diagnostics.
-
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('[DEBUG] DOMContentLoaded: Script starting.');
-
     // --- STATE AND HEADERS ---
     const token = getAuthToken();
     if (!token) {
@@ -50,12 +46,11 @@ document.addEventListener('DOMContentLoaded', () => {
             return true;
         }
         if (response.status === 423) {
-            console.log('[DEBUG] API returned 423 (Locked).');
             return false;
         }
         if (!response.ok) {
             alert('An API error occurred. Please check the browser console for details.');
-            console.error('[DEBUG] API request failed:', response);
+            console.error('API request failed:', response);
             return true;
         }
         return false;
@@ -71,25 +66,20 @@ document.addEventListener('DOMContentLoaded', () => {
         return `<span class="text-xl">${emojiString}</span>`;
     };
 
-    // --- LOCKING FUNCTIONS (with logging) ---
+    // --- LOCKING FUNCTIONS ---
     const setLockedState = (isLocked, message = '') => {
-        console.log(`[DEBUG] setLockedState called with isLocked: ${isLocked}`);
         if (isLocked) {
             lockMessage.textContent = message;
             lockOverlay.classList.remove('hidden');
             mainContent.classList.add('pointer-events-none', 'opacity-50');
-            console.log('[DEBUG] Lock overlay is now VISIBLE.');
         } else {
             lockOverlay.classList.add('hidden');
             mainContent.classList.remove('pointer-events-none', 'opacity-50');
-            console.log('[DEBUG] Lock overlay is now HIDDEN.');
         }
     };
 
     const acquireLock = async (eventId) => {
-        console.log(`[DEBUG] acquireLock: Attempting to lock event ${eventId}.`);
         if (!currentUser) {
-            console.warn("[DEBUG] acquireLock called before currentUser is loaded. Aborting.");
             return false;
         }
         try {
@@ -97,21 +87,15 @@ document.addEventListener('DOMContentLoaded', () => {
             if (response.status === 423) {
                 const lockStatusRes = await fetch(`/api/events/${eventId}/lock-status`, { headers });
                 const lockStatus = await lockStatusRes.json();
-                console.log('[DEBUG] acquireLock: Lock status from server:', lockStatus);
-                console.log('[DEBUG] acquireLock: Current user ID:', currentUser.id);
-
                 if (lockStatus.is_locked && lockStatus.locked_by_user_id !== currentUser.id) {
-                    console.log('[DEBUG] acquireLock: Lock is held by another user. Showing popup.');
                     setLockedState(true, `This event is currently locked for editing by: ${lockStatus.locked_by_username}. The page is in read-only mode.`);
                 } else {
-                    console.log('[DEBUG] acquireLock: Lock is held by me or is expired. Hiding popup.');
                     setLockedState(false);
                 }
                 return false;
             }
             if (handleApiError(response)) return false;
-            
-            console.log('[DEBUG] acquireLock: Lock successfully acquired/refreshed. Hiding popup.');
+
             setLockedState(false);
             if (lockInterval) clearInterval(lockInterval);
             lockInterval = setInterval(() => {
@@ -119,13 +103,12 @@ document.addEventListener('DOMContentLoaded', () => {
             }, 60000);
             return true;
         } catch (error) {
-            console.error("[DEBUG] Error in acquireLock:", error);
+            console.error("Error in acquireLock:", error);
             return false;
         }
     };
 
     const releaseLock = async (eventId) => {
-        console.log(`[DEBUG] releaseLock: Attempting to release lock for event ${eventId}.`);
         if (lockInterval) clearInterval(lockInterval);
         lockInterval = null;
         if (!eventId) return;
@@ -170,9 +153,8 @@ document.addEventListener('DOMContentLoaded', () => {
             buildBtn.disabled = false;
         }
     });
-    
+
     clearLockBtn.addEventListener('click', async () => {
-        console.log('[DEBUG] clearLockBtn clicked.');
         const eventId = eventDropdown.value;
         if (eventId) {
             await releaseLock(eventId);
@@ -189,7 +171,7 @@ document.addEventListener('DOMContentLoaded', () => {
         localStorage.removeItem('accessToken');
         window.location.href = '/login';
     });
-    
+
     sendBtn.addEventListener('click', async () => {
         const selectedChannelId = channelDropdown.value;
         const eventId = eventDropdown.value;
@@ -202,7 +184,7 @@ document.addEventListener('DOMContentLoaded', () => {
         sendBtn.textContent = 'Sending...';
         sendBtn.disabled = true;
         
-        // This is the critical data sanitization step from your working code
+        // Data sanitization step to ensure payload is clean
         const payloadSquads = currentSquads.map(squad => ({
             ...squad,
             members: squad.members.map(member => ({
@@ -231,92 +213,41 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    const payload = {
-        channel_id: selectedChannelId,
-        squads: cleanSquads // Use the newly sanitized data
-    };
-    // --- End of data sanitization ---
-
-    try {
-        const response = await fetch('/api/events/send-embed', {
-            method: 'POST',
-            headers: { ...headers, 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-
-        // The handleApiError function will alert on non-422 errors.
-        // We throw a new error to be caught below if the response is not 'ok'.
-        if (!response.ok) {
-            handleApiError(response); // Will handle 401s
-            throw new Error(`Server responded with status: ${response.status}`);
-        }
-        
-        alert('Squad embed sent successfully!');
-        await releaseLock(eventId);
-        setLockedState(true, 'Squads sent. This event is now read-only.');
-
-    } catch (error) {
-        console.error("Error sending embed:", error);
-        // Only show a generic alert if one hasn't been shown by handleApiError
-        if (!error.message.includes("401")) {
-             alert('Failed to send embed. Please check the console for details.');
-        }
-    } finally {
-        sendBtn.textContent = 'Send to Discord Channel';
-        sendBtn.disabled = false;
-    }
-});
-
     // --- MAIN LOGIC ---
-    console.log('[DEBUG] Starting initial data fetch with Promise.all.');
     Promise.all([
         fetch('/api/users/me', { headers }),
         fetch('/api/squads/roles', { headers }),
         fetch('/api/events', { headers }),
         fetch('/api/squads/emojis', { headers })
     ]).then(async ([userRes, rolesRes, eventsRes, emojiRes]) => {
-        console.log('[DEBUG] Promise.all resolved. Processing results.');
-        
         if ([userRes, rolesRes, eventsRes, emojiRes].some(handleApiError)) return;
         
         currentUser = await userRes.json();
-        console.log('[DEBUG] Current user loaded:', currentUser);
         if (currentUser?.is_admin) adminLink.classList.remove('hidden');
 
         ALL_ROLES = await rolesRes.json();
         EMOJI_MAP = await emojiRes.json();
         const events = await eventsRes.json();
-        console.log(`[DEBUG] ${events.length} events loaded.`);
 
         eventDropdown.innerHTML = '<option value="">-- Select an Event --</option>';
         events.forEach(event => {
             eventDropdown.add(new Option(`${event.title} (${new Date(event.event_time).toLocaleString()})`, event.event_id));
         });
-        console.log('[DEBUG] Event dropdown populated.');
 
-        console.log('[DEBUG] Attaching event listener to dropdown.');
         eventDropdown.addEventListener('change', handleEventSelection);
-
-        console.log('[DEBUG] Page initialization is complete.');
         isPageInitialized = true;
 
-    }).catch(err => console.error("[DEBUG] FATAL: Initial page data failed to load:", err));
+    }).catch(err => console.error("FATAL: Initial page data failed to load:", err));
 
     // --- HANDLER FUNCTION ---
     async function handleEventSelection() {
-        console.log(`[DEBUG] handleEventSelection triggered. isPageInitialized: ${isPageInitialized}. Dropdown value: "${eventDropdown.value}"`);
-        if (!isPageInitialized) {
-            console.log('[DEBUG] handleEventSelection blocked by isPageInitialized flag.');
-            return;
-        }
+        if (!isPageInitialized) return;
 
         if (!currentUser) {
-            console.warn("[DEBUG] User data not loaded yet, ignoring event change.");
             return;
         }
 
         const previousEventId = eventDropdown.dataset.previousEventId;
-        console.log(`[DEBUG] Previous event ID was: ${previousEventId}`);
         if (previousEventId) {
             await releaseLock(previousEventId);
         }
@@ -326,17 +257,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const eventId = eventDropdown.value;
         eventDropdown.dataset.previousEventId = eventId;
-        console.log(`[DEBUG] New event ID is: ${eventId}`);
-        if (!eventId) {
-            console.log('[DEBUG] No event ID selected. Stopping.');
-            return;
-        }
+        if (!eventId) return;
         
         await acquireLock(eventId);
 
-        // This part only runs after a lock is acquired or deemed not an issue.
         try {
-            console.log(`[DEBUG] Fetching data for event ${eventId}.`);
             const rosterResponse = await fetch(`/api/events/${eventId}/signups`, { headers });
             if(handleApiError(rosterResponse)) return;
             displayRoster(await rosterResponse.json());
@@ -354,10 +279,10 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 buildBtn.textContent = 'Build Squads';
             }
-        } catch (error) { console.error(`[DEBUG] Error loading event data for ${eventId}:`, error); }
+        } catch (error) { console.error(`Error loading event data for ${eventId}:`, error); }
     }
     
-    // The rest of the functions (displayRoster, renderWorkshop, etc.) must be present below this point.
+    // --- UI RENDER FUNCTIONS ---
     function displayRoster(roster) {
         rosterList.innerHTML = '';
         (roster || []).forEach(player => {

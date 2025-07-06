@@ -97,6 +97,15 @@ async def unlock_event(event_id: int, current_user: User = Depends(auth.get_curr
     if lock_status and lock_status.get('locked_by_user_id') == current_user.id:
         await db.unlock_event(event_id)
 
+@router.post("/force-unlock-all", status_code=204, dependencies=[Depends(auth.get_current_admin_user)])
+async def force_unlock_all_events_endpoint(db: Database = Depends(get_db)):
+    """
+    FOR DEBUGGING: A global override to forcibly unlock all locked events.
+    """
+    await db.force_unlock_all_events()
+    print("ADMIN ACTION: All events were force-unlocked.")
+    return
+
 @router.get("/{event_id}/squads", response_model=List[Squad])
 async def get_event_squads(event_id: int, db: Database = Depends(get_db)):
     """Gets any previously built squads for an event to persist the layout."""

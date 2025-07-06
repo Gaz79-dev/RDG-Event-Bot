@@ -56,7 +56,7 @@ class Channel(BaseModel):
     name: str
 
 class SquadMember(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, extra='ignore')
     squad_member_id: int
     user_id: int
     assigned_role_name: str

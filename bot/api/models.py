@@ -54,6 +54,7 @@ class Signup(BaseModel):
 class Channel(BaseModel):
     id: str
     name: str
+    category: Optional[str] = None
 
 class SquadMember(BaseModel):
     model_config = ConfigDict(from_attributes=True, extra='ignore')

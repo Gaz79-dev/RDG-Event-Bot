@@ -16,6 +16,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let EMOJI_MAP = {};
     let lockInterval = null;
     let currentUser = null;
+    let isPageInitialized = false;
 
     // --- ELEMENT SELECTORS ---
     const eventDropdown = document.getElementById('event-dropdown');
@@ -154,6 +155,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // --- FIX: Attach the event listener *after* the dropdown is populated ---
         eventDropdown.addEventListener('change', handleEventSelection);
+        isPageInitialized = true;
 
     }).catch(err => console.error("Failed to load initial page data:", err));
 
@@ -178,6 +180,8 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // --- FIX: Moved the logic into its own function to be attached later ---
     async function handleEventSelection() {
+        if (!isPageInitialized) return; // Add this guard clause
+        
         if (!currentUser) {
             console.warn("User data not loaded yet, ignoring event change.");
             return;

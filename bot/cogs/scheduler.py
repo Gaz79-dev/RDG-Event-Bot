@@ -144,12 +144,18 @@ class Scheduler(commands.Cog):
 
     async def process_event_recreation(self, parent_event: dict, create_embed_func, persistent_view_class):
         """Creates the next occurrence of a recurring event."""
+        # FIX: Add a cooldown to prevent rapid, duplicate recreations.
+        # If the event was already recreated in the last 6 hours, skip it.
+        if parent_event['last_recreated_at'] and parent_event['last_recreated_at'] > (datetime.datetime.now(pytz.utc) - datetime.timedelta(hours=6)):
+            return
+
         next_start_time = self.calculate_next_occurrence(parent_event['event_time'], parent_event['recurrence_rule'])
         if not next_start_time: return
 
+        # Check against the user-defined recreation window
         recreation_window = next_start_time - datetime.timedelta(hours=parent_event.get('recreation_hours', 24))
         if datetime.datetime.now(next_start_time.tzinfo) < recreation_window:
-            return
+            return # It's not time to recreate this event yet.
 
         print(f"Recreating event for parent ID {parent_event['event_id']}. Next occurrence: {next_start_time}")
         

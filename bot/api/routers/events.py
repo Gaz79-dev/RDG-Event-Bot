@@ -252,3 +252,23 @@ async def send_squad_embed(request: SendEmbedRequest, db: Database = Depends(get
         except Exception as e:
             print(f"Error sending embed to Discord API: {e}")
             raise HTTPException(status_code=502, detail="Failed to send embed to Discord.")
+
+@router.get("/{event_id}/debug-lock", response_model=dict, dependencies=[Depends(auth.get_current_admin_user)])
+async def debug_lock_status(event_id: int, db: Database = Depends(get_db)):
+    """FOR DEBUGGING: Gets the raw lock status from the database."""
+    lock_info = await db.get_event_lock_status(event_id)
+    current_time_utc = datetime.datetime.now(datetime.timezone.utc)
+    
+    if lock_info and lock_info.get("locked_at"):
+        lock_age_seconds = (current_time_utc - lock_info["locked_at"]).total_seconds()
+        lock_info["lock_age_seconds"] = lock_age_seconds
+        lock_info["is_expired"] = lock_age_seconds > (LOCK_TIMEOUT_MINUTES * 60)
+
+    return {"raw_lock_info": lock_info, "current_server_time_utc": current_time_utc}
+
+@router.post("/{event_id}/force-unlock", status_code=204, dependencies=[Depends(auth.get_current_admin_user)])
+async def force_unlock_event(event_id: int, db: Database = Depends(get_db)):
+    """FOR DEBUGGING: Forcibly removes a lock from an event, regardless of owner."""
+    await db.unlock_event(event_id)
+    print(f"ADMIN ACTION: Event {event_id} was force-unlocked.")
+    return

@@ -158,7 +158,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }).catch(err => console.error("Failed to load initial page data:", err));
 
     // --- EVENT LISTENERS ---
-    clearLockBtn.addEventListener('click', () => {
+    clearLockBtn.addEventListener('click', async () => {
+        const eventId = eventDropdown.value;
+        if (eventId) {
+            await releaseLock(eventId);
+        }
         setLockedState(false);
         eventDropdown.value = '';
         rosterAndBuildSection.classList.add('hidden');

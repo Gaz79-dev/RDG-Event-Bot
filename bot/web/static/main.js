@@ -142,6 +142,35 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    buildBtn.addEventListener('click', async () => {
+        const eventId = eventDropdown.value;
+        if (!eventId) return;
+
+        const formData = new FormData(buildForm);
+        const buildRequest = {};
+        ['infantry_squad_size', 'attack_squads', 'defence_squads', 'flex_squads', 'pathfinder_squads', 'armour_squads', 'recon_squads', 'arty_squads'].forEach(key => {
+            buildRequest[key] = parseInt(formData.get(key), 10) || 0;
+        });
+
+        buildBtn.textContent = 'Building...';
+        buildBtn.disabled = true;
+
+        try {
+            const response = await fetch(`/api/events/${eventId}/build-squads`, {
+                method: 'POST',
+                headers: { ...headers, 'Content-Type': 'application/json' },
+                body: JSON.stringify(buildRequest)
+            });
+            if (handleApiError(response)) return;
+            renderWorkshop(await response.json());
+        } catch (error) {
+            alert('Error building squads.');
+        } finally {
+            buildBtn.textContent = 'Re-Build Squads';
+            buildBtn.disabled = false;
+        }
+    });
+
     refreshRosterBtn.addEventListener('click', async () => {
         const eventId = eventDropdown.value;
         if (!eventId || currentSquads.length === 0) return;
@@ -166,6 +195,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     sendBtn.addEventListener('click', async () => {
         const selectedChannelId = channelDropdown.value;
+        const eventId = eventDropdown.value;
         
         if (!selectedChannelId || currentSquads.length === 0) {
             alert('Please select a channel and build squads first.');
@@ -175,15 +205,27 @@ document.addEventListener('DOMContentLoaded', () => {
         sendBtn.textContent = 'Sending...';
         sendBtn.disabled = true;
         
+        // This is the critical data sanitization step from your working code
+        const payloadSquads = currentSquads.map(squad => ({
+            ...squad,
+            members: squad.members.map(member => ({
+                squad_member_id: member.squad_member_id,
+                user_id: member.user_id,
+                assigned_role_name: member.assigned_role_name,
+                display_name: member.display_name,
+            }))
+        }));
+
         try {
             const response = await fetch('/api/events/send-embed', {
                 method: 'POST',
                 headers: { ...headers, 'Content-Type': 'application/json' },
-                // --- FIX: Send the channel_id as a string, without parseInt ---
-                body: JSON.stringify({ channel_id: selectedChannelId, squads: currentSquads })
+                body: JSON.stringify({ channel_id: selectedChannelId, squads: payloadSquads })
             });
             if(handleApiError(response)) throw new Error("Failed to send");
             alert('Squad embed sent successfully!');
+            await releaseLock(eventId);
+            setLockedState(true, 'Squads sent. This event is now read-only.');
         } catch (error) {
             alert('Failed to send embed.');
         } finally {

@@ -279,7 +279,7 @@ class Database:
         """Gets old, non-recurring events that ended more than 2 hours ago."""
         # This query now implements the 2-hour cleanup delay after an event's end_time.
         query = """
-            SELECT event_id, thread_id FROM events
+            SELECT event_id, thread_id, message_id, channel_id FROM events
             WHERE is_recurring = FALSE AND end_time < (NOW() AT TIME ZONE 'utc' - INTERVAL '2 hours');
         """
         async with self.pool.acquire() as connection:

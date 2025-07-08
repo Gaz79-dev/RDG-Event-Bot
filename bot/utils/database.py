@@ -117,6 +117,18 @@ class Database:
         async with self.pool.acquire() as conn: await conn.execute("DELETE FROM users WHERE id = $1", user_id)
  
     # --- Event & Signup Functions ---
+    async def get_active_events_with_threads(self) -> List[Dict]:
+        """Gets events that have an active thread but have not yet started."""
+        query = """
+            SELECT event_id, guild_id, thread_id FROM events
+            WHERE thread_created = TRUE
+              AND thread_id IS NOT NULL
+              AND deleted_at IS NULL
+              AND event_time > (NOW() AT TIME ZONE 'utc');
+        """
+        async with self.pool.acquire() as connection:
+            return [dict(row) for row in await connection.fetch(query)]
+    
     async def create_event(self, guild_id: int, channel_id: int, creator_id: int, data: Dict) -> int:
         query = """
             INSERT INTO events (guild_id, channel_id, creator_id, title, description, event_time, end_time, timezone, is_recurring, recurrence_rule, mention_role_ids, restrict_to_role_ids, recreation_hours)

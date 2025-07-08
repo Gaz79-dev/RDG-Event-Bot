@@ -41,7 +41,6 @@ class EventBot(commands.Bot):
         guild_id = os.getenv("GUILD_ID")
         if guild_id:
             guild = discord.Object(id=int(guild_id))
-            self.tree.clear_commands(guild=guild)
             self.tree.copy_global_to(guild=guild)
             synced = await self.tree.sync(guild=guild)
             print(f"Synced {len(synced)} command(s) to guild {guild_id}.")

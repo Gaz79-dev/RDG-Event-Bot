@@ -210,6 +210,16 @@ class Scheduler(commands.Cog):
         try:
             events_to_delete = await self.db.get_finished_events_for_cleanup()
             for event in events_to_delete:
+                if event.get('message_id') and event.get('channel_id'):
+                    try:
+                        channel = self.bot.get_channel(event['channel_id']) or await self.bot.fetch_channel(event['channel_id'])
+                        message = await channel.fetch_message(event['message_id'])
+                        await message.delete()
+                    except discord.NotFound:
+                        pass # It's okay if it's already gone
+                    except Exception as e:
+                        print(f"Could not delete event message for event {event['event_id']}: {e}")
+
                 if event.get('thread_id'):
                     try:
                         thread = self.bot.get_channel(event['thread_id']) or await self.bot.fetch_channel(event['thread_id'])
@@ -219,7 +229,7 @@ class Scheduler(commands.Cog):
                     except Exception as e:
                         print(f"Could not delete thread for event {event['event_id']}: {e}")
 
-                await self.db.delete_event(event['event_id'])
+                await self.db.soft_delete_event(event['event_id'])
             
             if len(events_to_delete) > 0:
                 print(f"Daily cleanup finished. Removed {len(events_to_delete)} old events.")

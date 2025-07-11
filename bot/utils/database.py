@@ -74,8 +74,16 @@ class Database:
                 """)
                 await connection.execute("CREATE TABLE IF NOT EXISTS signups (signup_id SERIAL PRIMARY KEY, event_id INT REFERENCES events(event_id) ON DELETE CASCADE, user_id BIGINT NOT NULL, role_name VARCHAR(100), subclass_name VARCHAR(100), rsvp_status VARCHAR(10) NOT NULL, UNIQUE(event_id, user_id));")
                 await connection.execute("CREATE TABLE IF NOT EXISTS squads (squad_id SERIAL PRIMARY KEY, event_id INT NOT NULL REFERENCES events(event_id) ON DELETE CASCADE, name VARCHAR(100) NOT NULL, squad_type VARCHAR(50) NOT NULL);")
-                await connection.execute("CREATE TABLE IF NOT EXISTS squad_members (squad_member_id SERIAL PRIMARY KEY, squad_id INT NOT NULL REFERENCES squads(squad_id) ON DELETE CASCADE, user_id BIGINT NOT NULL, assigned_role_name VARCHAR(100) NOT NULL, UNIQUE(squad_id, user_id));")
-                print("Database setup is complete.")
+                await connection.execute("""
+                    CREATE TABLE IF NOT EXISTS squad_members (
+                        squad_member_id SERIAL PRIMARY KEY,
+                        squad_id INT NOT NULL REFERENCES squads(squad_id) ON DELETE CASCADE,
+                        user_id BIGINT NOT NULL,
+                        assigned_role_name VARCHAR(100) NOT NULL,
+                        startup_task VARCHAR(100), -- ADD THIS LINE
+                        UNIQUE(squad_id, user_id)
+                    );
+                """)
 
     # --- User Management Functions ---
     async def get_user_by_username(self, username: str) -> Optional[Dict]:
@@ -248,6 +256,12 @@ class Database:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow("SELECT * FROM squads WHERE event_id = $1 AND name = $2", event_id, squad_name)
             return dict(row) if row else None
+
+    async def update_squad_member_task(self, squad_member_id: int, task: Optional[str]):
+        """Updates or clears the startup task for a squad member."""
+        query = "UPDATE squad_members SET startup_task = $1 WHERE squad_member_id = $2;"
+        async with self.pool.acquire() as connection:
+            await connection.execute(query, task, squad_member_id)
 
     async def get_event_lock_status(self, event_id: int) -> Optional[Dict]:
         query = "SELECT e.locked_by_user_id, e.locked_at, u.username as locked_by_username FROM events e LEFT JOIN users u ON e.locked_by_user_id = u.id WHERE e.event_id = $1;"

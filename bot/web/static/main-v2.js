@@ -37,8 +37,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const lockMessage = document.getElementById('lock-message');
     const mainContent = document.getElementById('main-content');
     const clearLockBtn = document.getElementById('clear-lock-btn');
-
-    // --- ADDITION: New element selectors for the task modal ---
     const assignTaskModal = document.getElementById('assign-task-modal');
     const assignTaskForm = document.getElementById('assign-task-form');
     const taskModalMemberName = document.getElementById('task-modal-member-name');
@@ -46,7 +44,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const modalTaskSelect = document.getElementById('modal-task-select');
     const taskModalCancelBtn = document.getElementById('task-modal-cancel-btn');
 
-    // --- ADDITION: Constant list of startup tasks ---
     const STARTUP_TASKS = [
         "HQ1 Supplies", "HQ1 Nodes Engineer",
         "HQ2 Supplies", "HQ2 Nodes Engineer",
@@ -241,7 +238,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // --- UPDATE: Added handler for the new task button ---
     document.body.addEventListener('click', (e) => {
         if (e.target.classList.contains('edit-member-btn')) {
             const memberItem = e.target.closest('.member-item');
@@ -258,7 +254,7 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             
             editModal.classList.remove('hidden');
-        } else if (e.target.closest('.assign-task-btn')) { // --- ADDITION ---
+        } else if (e.target.closest('.assign-task-btn')) {
             const memberItem = e.target.closest('.member-item');
             taskModalMemberName.textContent = memberItem.querySelector('.member-name').textContent;
             taskModalMemberIdInput.value = memberItem.dataset.memberId;
@@ -277,7 +273,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     modalCancelBtn.addEventListener('click', () => editModal.classList.add('hidden'));
 
-    // --- ADDITION: New event listeners for the task modal ---
     taskModalCancelBtn.addEventListener('click', () => assignTaskModal.classList.add('hidden'));
 
     assignTaskForm.addEventListener('submit', async (e) => {
@@ -301,7 +296,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     memberEl.querySelector('.member-info').appendChild(taskTextEl);
                 }
                 taskTextEl.textContent = task;
-                if (!task) taskTextEl.remove(); // Remove the element if task is cleared
+                if (!task) taskTextEl.remove();
             }
             assignTaskModal.classList.add('hidden');
         } catch (err) { alert("Error: Could not update task."); }
@@ -326,6 +321,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 memberEl.querySelector('.assigned-role-text').textContent = newRole;
             }
             editModal.classList.add('hidden');
+
+            // --- FIX: Re-fetch and display the main roster to reflect the role change ---
+            await fetchAndDisplayRoster(eventId);
+
         } catch (err) { alert("Error: Could not update role."); }
     });
 
@@ -375,9 +374,8 @@ document.addEventListener('DOMContentLoaded', () => {
         await acquireLock(eventId);
 
         try {
-            const rosterResponse = await fetch(`/api/events/${eventId}/signups`, { headers });
-            if(handleApiError(rosterResponse)) return;
-            displayRoster(await rosterResponse.json());
+            // --- FIX: Use the new helper function to load the roster ---
+            await fetchAndDisplayRoster(eventId);
             
             populateBuildForm();
             rosterAndBuildSection.classList.remove('hidden');
@@ -396,6 +394,20 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     // --- UI RENDER FUNCTIONS ---
+
+    // --- FIX: New helper function to fetch and display the roster ---
+    async function fetchAndDisplayRoster(eventId) {
+        try {
+            const rosterResponse = await fetch(`/api/events/${eventId}/signups`, { headers });
+            if(handleApiError(rosterResponse)) return;
+            const rosterData = await rosterResponse.json();
+            displayRoster(rosterData);
+        } catch (error) {
+            console.error(`Error fetching roster for event ${eventId}:`, error);
+            rosterList.innerHTML = '<p class="text-red-400">Could not load roster.</p>';
+        }
+    }
+
     function displayRoster(roster) {
         rosterList.innerHTML = '';
         (roster || []).forEach(player => {
@@ -483,7 +495,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 memberEl.dataset.memberId = member.squad_member_id;
                 const emojiHtml = createEmojiHtml(EMOJI_MAP[member.assigned_role_name]);
                 
-                // --- UPDATE: Modified member card to include task button and display ---
                 memberEl.innerHTML = `
                     <div class="member-info flex-grow">
                         <div class="flex items-center">

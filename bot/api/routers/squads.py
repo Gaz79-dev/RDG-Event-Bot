@@ -4,7 +4,7 @@ from typing import Dict, Optional
 from bot.api import auth
 from bot.api.dependencies import get_db
 from bot.utils.database import Database, ROLES, SUBCLASSES
-from bot.api.models import RoleUpdateRequest, SquadMoveRequest
+from bot.api.models import RoleUpdateRequest, SquadMoveRequest, StartupTaskUpdateRequest
 from bot.cogs.event_management import EMOJI_MAPPING
 
 router = APIRouter(prefix="/api/squads", tags=["squads"], dependencies=[Depends(auth.get_current_active_user)])
@@ -37,3 +37,14 @@ async def update_member_role(squad_member_id: int, request: RoleUpdateRequest, d
 @router.put("/members/{squad_member_id}/move", status_code=204)
 async def move_member_to_squad(squad_member_id: int, request: SquadMoveRequest, db: Database = Depends(get_db)):
     await db.move_squad_member(squad_member_id, request.new_squad_id)
+
+@router.put("/members/{squad_member_id}/task", status_code=204)
+async def update_member_startup_task(
+    squad_member_id: int,
+    request: StartupTaskUpdateRequest,
+    db: Database = Depends(get_db)
+):
+    """Assigns a startup task to a squad member."""
+    # If the task is an empty string, store it as NULL in the database
+    task_to_store = request.task if request.task else None
+    await db.update_squad_member_task(squad_member_id, task_to_store)

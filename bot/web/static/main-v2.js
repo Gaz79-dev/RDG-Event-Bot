@@ -38,6 +38,26 @@ document.addEventListener('DOMContentLoaded', () => {
     const mainContent = document.getElementById('main-content');
     const clearLockBtn = document.getElementById('clear-lock-btn');
 
+    // --- ADDITION: New element selectors for the task modal ---
+    const assignTaskModal = document.getElementById('assign-task-modal');
+    const assignTaskForm = document.getElementById('assign-task-form');
+    const taskModalMemberName = document.getElementById('task-modal-member-name');
+    const taskModalMemberIdInput = document.getElementById('task-modal-member-id');
+    const modalTaskSelect = document.getElementById('modal-task-select');
+    const taskModalCancelBtn = document.getElementById('task-modal-cancel-btn');
+
+    // --- ADDITION: Constant list of startup tasks ---
+    const STARTUP_TASKS = [
+        "HQ1 Supplies", "HQ1 Nodes Engineer",
+        "HQ2 Supplies", "HQ2 Nodes Engineer",
+        "HQ3 Supplies", "HQ3 Nodes Engineer",
+        "HQ1 Driver (Transport)", "HQ1 Driver (Supplies)",
+        "HQ2 Driver (Transport)", "HQ2 Driver (Supplies)",
+        "HQ3 Driver (Transport)", "HQ3 Driver (Supplies)",
+        "Top Left Garrison", "Top Middle Garrison", "Top Right Garrison",
+        "Bottom Left Garrison", "Bottom Middle Garrison", "Bottom Right Garrison"
+    ];
+
     // --- UTILITY FUNCTIONS ---
     const handleApiError = (response) => {
         if (response.status === 401) {
@@ -221,6 +241,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    // --- UPDATE: Added handler for the new task button ---
     document.body.addEventListener('click', (e) => {
         if (e.target.classList.contains('edit-member-btn')) {
             const memberItem = e.target.closest('.member-item');
@@ -237,10 +258,54 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             
             editModal.classList.remove('hidden');
+        } else if (e.target.closest('.assign-task-btn')) { // --- ADDITION ---
+            const memberItem = e.target.closest('.member-item');
+            taskModalMemberName.textContent = memberItem.querySelector('.member-name').textContent;
+            taskModalMemberIdInput.value = memberItem.dataset.memberId;
+            
+            modalTaskSelect.innerHTML = '<option value="">-- None --</option>';
+            STARTUP_TASKS.forEach(task => {
+                modalTaskSelect.add(new Option(task, task));
+            });
+
+            const currentTask = memberItem.querySelector('.startup-task-text')?.textContent || "";
+            modalTaskSelect.value = currentTask;
+            
+            assignTaskModal.classList.remove('hidden');
         }
     });
 
     modalCancelBtn.addEventListener('click', () => editModal.classList.add('hidden'));
+
+    // --- ADDITION: New event listeners for the task modal ---
+    taskModalCancelBtn.addEventListener('click', () => assignTaskModal.classList.add('hidden'));
+
+    assignTaskForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const memberId = taskModalMemberIdInput.value;
+        const task = modalTaskSelect.value;
+        try {
+            const response = await fetch(`/api/squads/members/${memberId}/task`, {
+                method: 'PUT',
+                headers: { ...headers, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ task: task })
+            });
+            if (handleApiError(response)) return;
+            
+            const memberEl = document.querySelector(`[data-member-id='${memberId}']`);
+            if (memberEl) {
+                let taskTextEl = memberEl.querySelector('.startup-task-text');
+                if (!taskTextEl) {
+                    taskTextEl = document.createElement('div');
+                    taskTextEl.className = 'text-xs text-yellow-400 font-semibold startup-task-text mt-1';
+                    memberEl.querySelector('.member-info').appendChild(taskTextEl);
+                }
+                taskTextEl.textContent = task;
+                if (!task) taskTextEl.remove(); // Remove the element if task is cleared
+            }
+            assignTaskModal.classList.add('hidden');
+        } catch (err) { alert("Error: Could not update task."); }
+    });
 
     editMemberForm.addEventListener('submit', async (e) => {
         e.preventDefault();
@@ -376,23 +441,19 @@ document.addEventListener('DOMContentLoaded', () => {
             let optgroup = null;
 
             channels.forEach(channel => {
-                // If the channel's category is different from the current one, create a new group
                 if (channel.category !== currentCategory) {
                     currentCategory = channel.category;
-                    // Only create a labeled group if the category exists
                     if (currentCategory) {
                         optgroup = document.createElement('optgroup');
                         optgroup.label = currentCategory;
                         channelDropdown.appendChild(optgroup);
                     } else {
-                        // This handles top-level channels that don't belong to a group
                         optgroup = null;
                     }
                 }
                 
                 const option = new Option(channel.name, channel.id);
                 
-                // Append the channel to the current group if it exists, otherwise to the main dropdown
                 const parentElement = optgroup || channelDropdown;
                 parentElement.appendChild(option);
             });
@@ -421,13 +482,22 @@ document.addEventListener('DOMContentLoaded', () => {
                 memberEl.className = 'p-2 bg-gray-800 rounded-md flex justify-between items-center member-item cursor-grab';
                 memberEl.dataset.memberId = member.squad_member_id;
                 const emojiHtml = createEmojiHtml(EMOJI_MAP[member.assigned_role_name]);
+                
+                // --- UPDATE: Modified member card to include task button and display ---
                 memberEl.innerHTML = `
-                    <span class="member-info flex items-center">
-                        <span class="member-emoji mr-2 flex-shrink-0 w-6 h-6 flex items-center justify-center">${emojiHtml}</span>
-                        <span class="member-name">${member.display_name}</span>
-                        <span class="assigned-role-text hidden">${member.assigned_role_name}</span>
-                    </span>
-                    <span class="edit-member-btn cursor-pointer text-xs text-gray-400 hover:text-white px-2">EDIT</span>`;
+                    <div class="member-info flex-grow">
+                        <div class="flex items-center">
+                            <span class="member-emoji mr-2 flex-shrink-0 w-6 h-6 flex items-center justify-center">${emojiHtml}</span>
+                            <span class="member-name">${member.display_name}</span>
+                            <span class="assigned-role-text hidden">${member.assigned_role_name}</span>
+                        </div>
+                        ${member.startup_task ? `<div class="text-xs text-yellow-400 font-semibold startup-task-text mt-1">${member.startup_task}</div>` : ''}
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <button class="assign-task-btn text-gray-400 hover:text-white" title="Assign Task">📋</button>
+                        <button class="edit-member-btn text-gray-400 hover:text-white" title="Edit Role">EDIT</button>
+                    </div>`;
+                
                 memberList.appendChild(memberEl);
             });
             squadDiv.appendChild(memberList);

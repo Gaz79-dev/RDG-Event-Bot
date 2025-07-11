@@ -62,6 +62,10 @@ class SquadMember(BaseModel):
     user_id: int
     assigned_role_name: str
     display_name: Optional[str] = None
+    startup_task: Optional[str] = None
+
+class StartupTaskUpdateRequest(BaseModel):
+    task: Optional[str] = None
 
 class Squad(BaseModel):
     model_config = ConfigDict(from_attributes=True)

@@ -360,12 +360,13 @@ class ReminderConfirmationView(ui.View):
 
     @ui.button(label="Compose & Send Reminder", style=discord.ButtonStyle.primary)
     async def send_reminder(self, interaction: discord.Interaction, button: ui.Button):
-        # This is the only response to the button click interaction.
+        # --- FIX: Send the modal as the only response to the button click ---
         await interaction.response.send_modal(ReminderModal(self.member_ids_to_dm))
         
-        # Disable the button in the original message to prevent multiple sends.
+        # Disable the button after the modal is sent to prevent re-clicks.
         button.disabled = True
-        await interaction.edit_original_response(view=self)
+        # Use a follow-up to edit the original message, as the primary interaction is now the modal.
+        await interaction.followup.edit_message(interaction.message.id, view=self)
         self.stop()
 
 class ConfirmationView(ui.View):

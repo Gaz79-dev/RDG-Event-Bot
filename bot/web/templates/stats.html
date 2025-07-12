@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gridiron - Engagement Stats</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* For table sorting arrows */
+        .sortable:hover { cursor: pointer; background-color: #374151; }
+        .sort-asc::after { content: ' ▲'; }
+        .sort-desc::after { content: ' ▼'; }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-300 font-sans">
+
+    <header class="bg-gray-800 shadow-lg">
+        <nav class="container mx-auto px-6 py-4 flex justify-between items-center">
+            <div class="flex items-center">
+                <img src="/static/logo.jpg" alt="Gridiron Logo" class="h-8 w-8 mr-3">
+                <h1 class="text-2xl font-bold text-white">Engagement Stats</h1>
+            </div>
+            <div>
+                <a href="/" class="text-gray-300 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Squad Builder</a>
+                <a href="/admin" id="admin-link" class="hidden text-gray-300 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Admin</a>
+                <button id="logout-btn" class="text-gray-300 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Logout</button>
+            </div>
+        </nav>
+    </header>
+
+    <main class="container mx-auto px-6 py-8">
+        <section class="bg-gray-800 p-6 rounded-lg shadow-md">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-xl font-semibold text-white">Player Activity</h2>
+                <input type="text" id="search-input" placeholder="Search for player..." class="bg-gray-700 border border-gray-600 rounded-md p-2">
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full">
+                    <thead>
+                        <tr class="border-b border-gray-700">
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider sortable" data-sort="display_name">Player</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider sortable" data-sort="accepted_count">Accepted</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider sortable" data-sort="tentative_count">Tentative</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider sortable" data-sort="declined_count">Declined</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider sortable" data-sort="days_since_last_signup">Days Since Last Signup</th>
+                        </tr>
+                    </thead>
+                    <tbody id="stats-table-body">
+                        <tr><td colspan="5" class="text-center p-8">Loading stats...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <script src="/static/auth.js"></script>
+    <script src="/static/stats.js"></script>
+</body>
+</html>

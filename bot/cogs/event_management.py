@@ -705,6 +705,14 @@ class EventManagement(commands.Cog):
 
     event_group = app_commands.Group(name="event", description="Commands for creating and managing events.")
 
+    # --- FIX: Add autocomplete function for roles ---
+    async def role_autocomplete(self, interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
+        roles = interaction.guild.roles
+        return [
+            app_commands.Choice(name=role.name, value=str(role.id))
+            for role in roles if current.lower() in role.name.lower() and not role.is_default()
+        ][:25]
+
     @event_group.command(name="create", description="Create a new event via DM.")
     async def create(self, interaction: discord.Interaction):
         await self.start_conversation(interaction)
@@ -765,16 +773,24 @@ class EventManagement(commands.Cog):
         except Exception as e:
             await interaction.followup.send(f"Event data was restored, but failed to re-post the embed: {e}")
 
-    # --- ADDITION: New command for sending reminders ---
     @event_group.command(name="remind", description="Send a DM reminder to members of a role who have not RSVP'd.")
     @app_commands.describe(
         event_id="The ID of the event to send reminders for.",
         role="The role to target for reminders."
     )
+    @app_commands.autocomplete(role=role_autocomplete) # --- FIX: Use the autocomplete function ---
     @app_commands.default_permissions(administrator=True)
-    async def remind(self, interaction: discord.Interaction, event_id: int, role: discord.Role):
-        await interaction.response.defer(ephemeral=True)
+    async def remind(self, interaction: discord.Interaction, event_id: int, role: str):
+        await interaction.response.defer(ephemeral=True, thinking=True) # --- FIX: Defer the response to prevent timeout ---
         
+        try:
+            role_id = int(role)
+            target_role = interaction.guild.get_role(role_id)
+            if not target_role:
+                return await interaction.followup.send("The selected role could not be found.", ephemeral=True)
+        except ValueError:
+            return await interaction.followup.send("Invalid role selected.", ephemeral=True)
+
         event = await self.db.get_event_by_id(event_id)
         if not event or event['guild_id'] != interaction.guild_id:
             return await interaction.followup.send("Event not found in this server.", ephemeral=True)
@@ -782,19 +798,20 @@ class EventManagement(commands.Cog):
         rsvpd_user_ids = await self.db.get_all_rsvpd_user_ids_for_event(event_id)
         
         members_to_remind = []
-        for member in role.members:
+        for member in target_role.members:
             if not member.bot and member.id not in rsvpd_user_ids:
                 members_to_remind.append(member)
 
         if not members_to_remind:
             return await interaction.followup.send(
-                f"No members of the '{role.name}' role need a reminder for this event. They have all RSVP'd.",
+                f"No members of the '{target_role.name}' role need a reminder for this event. They have all RSVP'd.",
                 ephemeral=True
             )
         
+        # --- FIX: Use a confirmation view with a button to open the modal ---
         view = ReminderConfirmationView(members_to_remind)
         await interaction.followup.send(
-            f"Found {len(members_to_remind)} members of '{role.name}' who have not responded. "
+            f"Found {len(members_to_remind)} members of '{target_role.name}' who have not responded. "
             f"Click the button below to compose and send them a DM reminder.",
             view=view,
             ephemeral=True

@@ -31,7 +31,11 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             const tr = document.createElement('tr');
-            tr.className = `border-b border-gray-700 ${rowClass}`;
+            // --- FIX: Added classes and data attribute to make rows clickable ---
+            tr.className = `border-b border-gray-700 hover:bg-gray-700 cursor-pointer ${rowClass}`;
+            tr.dataset.userId = player.user_id;
+            // --- END FIX ---
+            
             tr.innerHTML = `
                 <td class="px-6 py-4 whitespace-nowrap">${player.display_name}</td>
                 <td class="px-6 py-4 whitespace-nowrap text-center text-green-400 font-semibold">${player.accepted_count}</td>
@@ -49,7 +53,6 @@ document.addEventListener('DOMContentLoaded', () => {
             let valA = a[column];
             let valB = b[column];
 
-            // Handle nulls for days_since_last_signup
             if (column === 'days_since_last_signup') {
                 valA = valA === null ? Infinity : valA;
                 valB = valB === null ? Infinity : valB;
@@ -77,7 +80,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 currentSort.order = currentSort.order === 'asc' ? 'desc' : 'asc';
             } else {
                 currentSort.column = column;
-                currentSort.order = 'desc'; // Default to descending for new column
+                currentSort.order = 'desc';
             }
             renderTable(sortData(allStats.filter(p => p.display_name.toLowerCase().includes(searchInput.value.toLowerCase()))));
             updateSortHeaders();
@@ -90,12 +93,14 @@ document.addEventListener('DOMContentLoaded', () => {
         renderTable(sortData(filteredStats));
     });
 
+    // --- ADDITION: Event listener for clicking on a table row ---
     tableBody.addEventListener('click', (e) => {
         const row = e.target.closest('tr');
         if (row && row.dataset.userId) {
             window.location.href = `/stats/player/${row.dataset.userId}`;
         }
     });
+    // --- END ADDITION ---
 
     fetch('/api/stats/engagement', { headers })
         .then(response => {

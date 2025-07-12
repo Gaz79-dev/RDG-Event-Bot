@@ -84,6 +84,7 @@ class Database:
                         UNIQUE(squad_id, user_id)
                     );
                 """)
+                # --- ADDITION: Create the new permanent tables for stats ---
                 await connection.execute("""
                     CREATE TABLE IF NOT EXISTS player_stats (
                         user_id BIGINT PRIMARY KEY,
@@ -103,6 +104,7 @@ class Database:
                         UNIQUE(user_id, event_id)
                     );
                 """)
+                # --- END ADDITION ---
                 print("Database setup is complete.")
 
     # --- User Management Functions ---
@@ -146,7 +148,6 @@ class Database:
  
     # --- Event & Signup Functions ---
     async def get_active_events_with_threads(self) -> List[Dict]:
-        """Gets events that have an active thread but have not yet started."""
         query = """
             SELECT event_id, guild_id, thread_id FROM events
             WHERE thread_created = TRUE
@@ -206,13 +207,13 @@ class Database:
                 current_record = await connection.fetchrow(
                     """
                     SELECT s.rsvp_status, e.title, e.event_time FROM signups s
-                    JOIN events e ON s.event_id = e.event_id
-                    WHERE s.event_id = $1 AND s.user_id = $2
+                    RIGHT JOIN events e ON s.event_id = e.event_id AND s.user_id = $2
+                    WHERE e.event_id = $1
                     """,
                     event_id, user_id
                 )
                 
-                old_status = current_record['rsvp_status'] if current_record else None
+                old_status = current_record['rsvp_status'] if current_record and current_record['rsvp_status'] else None
 
                 if old_status == new_status:
                     return
@@ -228,14 +229,13 @@ class Database:
                 await self.update_player_stats(user_id, old_status, new_status)
 
                 if new_status == RsvpStatus.ACCEPTED:
-                    event_details = current_record or await self.get_event_by_id(event_id)
-                    if event_details:
+                    if current_record:
                         await connection.execute(
                             """
                             INSERT INTO player_event_history (user_id, event_id, event_title, event_time)
                             VALUES ($1, $2, $3, $4) ON CONFLICT (user_id, event_id) DO NOTHING;
                             """,
-                            user_id, event_id, event_details['title'], event_details['event_time']
+                            user_id, event_id, current_record['title'], current_record['event_time']
                         )
                 elif old_status == RsvpStatus.ACCEPTED:
                     await connection.execute(
@@ -274,12 +274,9 @@ class Database:
 
     # --- Player Statistics Functions ---
     async def update_player_stats(self, user_id: int, old_status: Optional[str], new_status: str):
-        """Atomically updates the player_stats table based on an RSVP change."""
-        
         decrement_col = f"{old_status.lower()}_count" if old_status else None
         increment_col = f"{new_status.lower()}_count"
 
-        # --- FIX: Qualify column names with the table name to resolve ambiguity ---
         update_parts = [f"{increment_col} = player_stats.{increment_col} + 1"]
         if decrement_col:
             update_parts.append(f"{decrement_col} = GREATEST(0, player_stats.{decrement_col} - 1)")
@@ -296,7 +293,6 @@ class Database:
             await connection.execute(query, user_id)
 
     async def get_past_events_with_tentatives(self) -> List[Dict]:
-        """Gets events that have finished and still have tentative signups."""
         query = """
             SELECT s.event_id, s.user_id FROM signups s
             JOIN events e ON s.event_id = e.event_id
@@ -306,12 +302,10 @@ class Database:
             return [dict(row) for row in await connection.fetch(query)]
 
     async def get_all_player_stats(self) -> List[Dict]:
-        """Gets all records from the player_stats table."""
         async with self.pool.acquire() as connection:
             return [dict(row) for row in await connection.fetch("SELECT * FROM player_stats;")]
             
     async def get_accepted_events_for_user(self, user_id: int) -> List[Dict]:
-        """Gets a user's accepted event history from the permanent log."""
         query = """
             SELECT event_title, event_time FROM player_event_history
             WHERE user_id = $1 ORDER BY event_time DESC;
@@ -321,7 +315,6 @@ class Database:
     
     # --- Squad & Guild Config Functions ---
     async def force_unlock_all_events(self):
-        """FOR DEBUGGING: Forcibly removes all locks from all events."""
         query = "UPDATE events SET locked_by_user_id = NULL, locked_at = NULL WHERE locked_by_user_id IS NOT NULL;"
         async with self.pool.acquire() as connection:
             await connection.execute(query)
@@ -351,7 +344,6 @@ class Database:
             return dict(row) if row else None
 
     async def update_squad_member_task(self, squad_member_id: int, task: Optional[str]):
-        """Updates or clears the startup task for a squad member."""
         query = "UPDATE squad_members SET startup_task = $1 WHERE squad_member_id = $2;"
         async with self.pool.acquire() as connection:
             await connection.execute(query, task, squad_member_id)
@@ -374,7 +366,6 @@ class Database:
     
     # Scheduler for Discussion thread creation and historic event/squad cleanup
     async def set_thread_creation_hours(self, guild_id: int, hours: int):
-        """Sets the number of hours before an event to create its thread."""
         query = """
             INSERT INTO guilds (guild_id, thread_creation_hours) VALUES ($1, $2)
             ON CONFLICT (guild_id) DO UPDATE SET thread_creation_hours = EXCLUDED.thread_creation_hours;
@@ -383,19 +374,16 @@ class Database:
             await connection.execute(query, guild_id, hours)
 
     async def get_events_for_thread_creation(self) -> List[dict]:
-        """Gets all events that are due to have a thread created."""
         query = "SELECT e.event_id, e.guild_id, e.channel_id, e.message_id, e.title, e.event_time FROM events e JOIN guilds g ON e.guild_id = g.guild_id WHERE e.thread_created = FALSE AND e.deleted_at IS NULL AND (NOW() AT TIME ZONE 'utc') >= (e.event_time - (g.thread_creation_hours * INTERVAL '1 hour'));"
         async with self.pool.acquire() as connection:
             return [dict(row) for row in await connection.fetch(query)]
 
     async def mark_thread_created(self, event_id: int, thread_id: int):
-        """Marks an event's thread as created in the database."""
         query = "UPDATE events SET thread_created = TRUE, thread_id = $1 WHERE event_id = $2;"
         async with self.pool.acquire() as connection:
             await connection.execute(query, thread_id, event_id)
 
     async def get_finished_events_for_cleanup(self) -> List[dict]:
-        """Gets old, non-recurring events that ended more than 2 hours ago."""
         query = """
             SELECT event_id, thread_id, message_id, channel_id FROM events
             WHERE is_recurring = FALSE AND end_time < (NOW() AT TIME ZONE 'utc' - INTERVAL '2 hours');
@@ -404,36 +392,30 @@ class Database:
             return [dict(row) for row in await connection.fetch(query)]
 
     async def soft_delete_event(self, event_id: int):
-        """Marks an event as deleted by setting the deleted_at timestamp."""
         query = "UPDATE events SET deleted_at = (NOW() AT TIME ZONE 'utc') WHERE event_id = $1;"
         async with self.pool.acquire() as connection:
             await connection.execute(query, event_id)
 
     async def restore_event(self, event_id: int):
-        """Restores a soft-deleted event by setting deleted_at to NULL."""
         query = "UPDATE events SET deleted_at = NULL WHERE event_id = $1;"
         async with self.pool.acquire() as connection:
             await connection.execute(query, event_id)
 
     async def get_events_for_purging(self) -> List[Dict]:
-        """Gets events that were soft-deleted more than 7 days ago."""
         query = "SELECT event_id FROM events WHERE deleted_at IS NOT NULL AND deleted_at <= (NOW() AT TIME ZONE 'utc' - INTERVAL '7 days');"
         async with self.pool.acquire() as connection:
             return [dict(row) for row in await connection.fetch(query)]
     
     async def delete_event(self, event_id: int):
-        """Deletes an event from the database."""
         async with self.pool.acquire() as conn:
             await conn.execute("DELETE FROM events WHERE event_id = $1", event_id)
 
     async def get_events_for_recreation(self) -> List[dict]:
-        """Gets all recurring events that are due to be recreated."""
         query = "SELECT * FROM events WHERE is_recurring = TRUE AND deleted_at IS NULL;"
         async with self.pool.acquire() as connection:
             return [dict(row) for row in await connection.fetch(query)]
 
     async def update_last_recreated_at(self, event_id: int):
-        """Updates the last_recreated_at timestamp for a parent recurring event."""
         query = "UPDATE events SET last_recreated_at = (NOW() AT TIME ZONE 'utc') WHERE event_id = $1;"
         async with self.pool.acquire() as connection:
             await connection.execute(query, event_id)

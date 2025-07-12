@@ -114,6 +114,8 @@ class PlayerStats(BaseModel):
     days_since_last_signup: Optional[int] = None
 
 class AcceptedEvent(BaseModel):
-    # FIX: Changed 'title' to 'event_title' to match the database query result.
     event_title: str
     event_time: datetime
+    # --- ADDITION: Add role and subclass fields ---
+    role_name: Optional[str] = None
+    subclass_name: Optional[str] = None

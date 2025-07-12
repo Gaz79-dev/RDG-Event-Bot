@@ -329,10 +329,12 @@ class ReminderModal(ui.Modal, title="Event Reminder"):
         max_length=1000,
     )
 
-    def __init__(self, db: Database, job_id: uuid.UUID):
+    # --- CHANGE: Accept guild in __init__ ---
+    def __init__(self, db: Database, job_id: uuid.UUID, guild: discord.Guild):
         super().__init__()
         self.db = db
         self.job_id = job_id
+        self.guild = guild # Store the guild object
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -347,7 +349,8 @@ class ReminderModal(ui.Modal, title="Event Reminder"):
 
         for member_id in member_ids_to_dm:
             try:
-                member = await interaction.guild.fetch_member(member_id)
+                # --- CHANGE: Use self.guild, not interaction.guild ---
+                member = await self.guild.fetch_member(member_id)
                 await member.send(self.message.value)
                 success_count += 1
             except (discord.Forbidden, discord.HTTPException, discord.NotFound):
@@ -363,15 +366,17 @@ class ReminderModal(ui.Modal, title="Event Reminder"):
         await self.db.delete_reminder_job(self.job_id)
 
 class ReminderConfirmationView(ui.View):
-    def __init__(self, db: Database, job_id: uuid.UUID):
+    # --- CHANGE: Accept guild in __init__ ---
+    def __init__(self, db: Database, job_id: uuid.UUID, guild: discord.Guild):
         super().__init__(timeout=300)
         self.db = db
         self.job_id = job_id
+        self.guild = guild # Store the guild object
 
     @ui.button(label="Compose & Send Reminder", style=discord.ButtonStyle.primary)
     async def send_reminder(self, interaction: discord.Interaction, button: ui.Button):
-        # The button's only responsibility is to create and send the modal.
-        modal = ReminderModal(self.db, self.job_id)
+        # --- CHANGE: Pass self.guild to the modal ---
+        modal = ReminderModal(self.db, self.job_id, self.guild)
         await interaction.response.send_modal(modal)
 
 class ConfirmationView(ui.View):
@@ -721,26 +726,6 @@ class EventManagement(commands.Cog):
             for role in roles if current.lower() in role.name.lower() and not role.is_default()
         ][:25]
 
-    async def dm_reminder_confirmation(self, interaction: discord.Interaction, target_role: discord.Role, member_ids_to_remind: list[int]):
-        """Creates the DB job and sends the confirmation view to the user via DM."""
-        job_id = uuid.uuid4()
-        await self.db.create_reminder_job(job_id, member_ids_to_remind)
-        
-        view = ReminderConfirmationView(self.db, job_id)
-        
-        try:
-            await interaction.user.send(
-                f"Found **{len(member_ids_to_remind)}** members of the '{target_role.name}' role who have not responded to the event. "
-                f"Click the button below to compose and send them a DM reminder.",
-                view=view
-            )
-        except discord.Forbidden:
-            # This handles the case where the bot can't DM the admin
-            await interaction.followup.send(
-                "I couldn't send you a DM to confirm the reminder. Please check your privacy settings.",
-                ephemeral=True
-            )
-
     @event_group.command(name="create", description="Create a new event via DM.")
     async def create(self, interaction: discord.Interaction):
         await self.start_conversation(interaction)
@@ -839,18 +824,6 @@ class EventManagement(commands.Cog):
         
         # 2. Run the logic to send the DM in a separate, non-blocking task.
         asyncio.create_task(self.dm_reminder_confirmation(interaction, target_role, member_ids_to_remind))
-        
-        # --- FIX: Use the new temporary database job architecture ---
-        job_id = uuid.uuid4()
-        await self.db.create_reminder_job(job_id, member_ids_to_remind)
-        
-        view = ReminderConfirmationView(self.db, job_id)
-        await interaction.followup.send(
-            f"Found {len(member_ids_to_remind)} members of '{target_role.name}' who have not responded. "
-            f"Click the button below to compose and send them a DM reminder.",
-            view=view,
-            ephemeral=True
-        )
 
     async def start_conversation(self, interaction: discord.Interaction, event_id: int = None):
         if interaction.user.id in self.active_conversations:

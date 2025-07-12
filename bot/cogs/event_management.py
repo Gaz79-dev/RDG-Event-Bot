@@ -370,12 +370,9 @@ class ReminderConfirmationView(ui.View):
 
     @ui.button(label="Compose & Send Reminder", style=discord.ButtonStyle.primary)
     async def send_reminder(self, interaction: discord.Interaction, button: ui.Button):
+        # The button's only responsibility is to create and send the modal.
         modal = ReminderModal(self.db, self.job_id)
         await interaction.response.send_modal(modal)
-        
-        button.disabled = True
-        await interaction.edit_original_response(view=self)
-        self.stop()
 
 class ConfirmationView(ui.View):
     def __init__(self):

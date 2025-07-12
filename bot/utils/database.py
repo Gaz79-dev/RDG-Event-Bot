@@ -226,6 +226,32 @@ class Database:
         async with self.pool.acquire() as connection:
             await connection.execute("UPDATE signups SET role_name = $1, subclass_name = $2 WHERE event_id = $3 AND user_id = $4;", role_name, subclass_name, event_id, user_id)
 
+    #Member statistics data
+    async def get_all_unique_signup_users(self) -> List[Dict]:
+        """Gets all unique user IDs from the signups table."""
+        query = "SELECT DISTINCT user_id FROM signups;"
+        async with self.pool.acquire() as connection:
+            return [dict(row) for row in await connection.fetch(query)]
+
+    async def get_stats_for_user(self, user_id: int) -> Dict:
+        """
+        Calculates the total accepted, tentative, and declined counts,
+        and the last signup date for a specific user.
+        """
+        query = """
+            SELECT
+                COUNT(*) FILTER (WHERE rsvp_status = 'Accepted') AS accepted_count,
+                COUNT(*) FILTER (WHERE rsvp_status = 'Tentative') AS tentative_count,
+                COUNT(*) FILTER (WHERE rsvp_status = 'Declined') AS declined_count,
+                MAX(e.event_time) FILTER (WHERE s.rsvp_status = 'Accepted') AS last_signup_date
+            FROM signups s
+            JOIN events e ON s.event_id = e.event_id
+            WHERE s.user_id = $1;
+        """
+        async with self.pool.acquire() as connection:
+            row = await connection.fetchrow(query, user_id)
+            return dict(row) if row else {}
+    
     # --- Squad & Guild Config Functions ---
     async def force_unlock_all_events(self):
         """FOR DEBUGGING: Forcibly removes all locks from all events."""

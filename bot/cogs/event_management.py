@@ -319,6 +319,40 @@ class PersistentEventView(ui.View):
             except:
                 pass
 
+# --- ADDITION: New Modal for the Reminder Command ---
+class ReminderModal(ui.Modal, title="Event Reminder"):
+    message = ui.TextInput(
+        label="Reminder Message",
+        style=discord.TextStyle.paragraph,
+        placeholder="e.g., Friendly reminder that our match is tonight! Please sign up in the event channel if you can make it.",
+        required=True,
+        max_length=1000,
+    )
+
+    def __init__(self, members_to_dm: List[discord.Member]):
+        super().__init__()
+        self.members_to_dm = members_to_dm
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        
+        success_count = 0
+        fail_count = 0
+
+        for member in self.members_to_dm:
+            try:
+                await member.send(self.message.value)
+                success_count += 1
+            except (discord.Forbidden, discord.HTTPException):
+                fail_count += 1
+        
+        await interaction.followup.send(
+            f"Reminders sent!\n"
+            f"✅ Successfully sent to {success_count} member(s).\n"
+            f"❌ Failed to send to {fail_count} member(s) (they may have DMs disabled).",
+            ephemeral=True
+        )
+
 class ConfirmationView(ui.View):
     def __init__(self):
         super().__init__(timeout=120)
@@ -718,6 +752,34 @@ class EventManagement(commands.Cog):
             await interaction.followup.send(f"Event '{event['title']}' has been restored and re-posted.")
         except Exception as e:
             await interaction.followup.send(f"Event data was restored, but failed to re-post the embed: {e}")
+
+    # --- ADDITION: New command for sending reminders ---
+    @event_group.command(name="remind", description="Send a DM reminder to members of a role who have not RSVP'd.")
+    @app_commands.describe(
+        event_id="The ID of the event to send reminders for.",
+        role="The role to target for reminders."
+    )
+    @app_commands.default_permissions(administrator=True)
+    async def remind(self, interaction: discord.Interaction, event_id: int, role: discord.Role):
+        event = await self.db.get_event_by_id(event_id)
+        if not event or event['guild_id'] != interaction.guild_id:
+            return await interaction.response.send_message("Event not found in this server.", ephemeral=True)
+
+        rsvpd_user_ids = await self.db.get_all_rsvpd_user_ids_for_event(event_id)
+        
+        members_to_remind = []
+        for member in role.members:
+            if not member.bot and member.id not in rsvpd_user_ids:
+                members_to_remind.append(member)
+
+        if not members_to_remind:
+            return await interaction.response.send_message(
+                f"No members of the '{role.name}' role need a reminder for this event. They have all RSVP'd.",
+                ephemeral=True
+            )
+
+        modal = ReminderModal(members_to_remind)
+        await interaction.response.send_modal(modal)
 
     async def start_conversation(self, interaction: discord.Interaction, event_id: int = None):
         if interaction.user.id in self.active_conversations:

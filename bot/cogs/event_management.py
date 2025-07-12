@@ -287,19 +287,37 @@ class PersistentEventView(ui.View):
 
     @ui.button(label="Tentative", style=discord.ButtonStyle.secondary, custom_id="persistent_view:tentative")
     async def tentative(self, i: discord.Interaction, button: ui.Button):
-        await i.response.defer()
-        if event := await self.db.get_event_by_message_id(i.message.id):
-            await self.db.set_rsvp(event['event_id'], i.user.id, RsvpStatus.TENTATIVE)
-            await self.db.update_signup_role(event['event_id'], i.user.id, None, None)
-            await self.update_embed(i, event['event_id'])
+        await i.response.defer(ephemeral=True)
+        try:
+            if event := await self.db.get_event_by_message_id(i.message.id):
+                await self.db.set_rsvp(event['event_id'], i.user.id, RsvpStatus.TENTATIVE)
+                await self.db.update_signup_role(event['event_id'], i.user.id, None, None)
+                await self.update_embed(i, event['event_id'])
+                await i.followup.send("Your RSVP has been set to Tentative.", ephemeral=True)
+        except Exception as e:
+            print(f"Error in 'tentative' button: {e}")
+            traceback.print_exc()
+            try:
+                await i.followup.send("An error occurred while processing your RSVP. Please try again.", ephemeral=True)
+            except:
+                pass
             
     @ui.button(label="Decline", style=discord.ButtonStyle.danger, custom_id="persistent_view:decline")
     async def decline(self, i: discord.Interaction, button: ui.Button):
-        await i.response.defer()
-        if event := await self.db.get_event_by_message_id(i.message.id):
-            await self.db.set_rsvp(event['event_id'], i.user.id, RsvpStatus.DECLINED)
-            await self.db.update_signup_role(event['event_id'], i.user.id, None, None)
-            await self.update_embed(i, event['event_id'])
+        await i.response.defer(ephemeral=True)
+        try:
+            if event := await self.db.get_event_by_message_id(i.message.id):
+                await self.db.set_rsvp(event['event_id'], i.user.id, RsvpStatus.DECLINED)
+                await self.db.update_signup_role(event['event_id'], i.user.id, None, None)
+                await self.update_embed(i, event['event_id'])
+                await i.followup.send("Your RSVP has been set to Declined.", ephemeral=True)
+        except Exception as e:
+            print(f"Error in 'decline' button: {e}")
+            traceback.print_exc()
+            try:
+                await i.followup.send("An error occurred while processing your RSVP. Please try again.", ephemeral=True)
+            except:
+                pass
 
 class ConfirmationView(ui.View):
     def __init__(self):

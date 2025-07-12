@@ -90,7 +90,6 @@ class SquadBuildRequest(BaseModel):
     arty_squads: int = 0
 
 class SendEmbedRequest(BaseModel):
-    # --- FIX: Changed channel_id from int to str ---
     channel_id: str
     squads: List[Squad]
 
@@ -112,3 +111,7 @@ class PlayerStats(BaseModel):
 
 class RosterUpdateRequest(BaseModel):
     squads: List[Squad]
+
+class AcceptedEvent(BaseModel):
+    title: str
+    event_time: datetime

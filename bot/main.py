@@ -68,3 +68,8 @@ async def admin_page(request: Request):
 @app.get("/stats", tags=["HTML"], summary="Serves the engagement stats page")
 async def stats_page(request: Request):
     return templates.TemplateResponse("stats.html", {"request": request})
+
+@app.get("/stats/player/{user_id}", tags=["HTML"], summary="Serves the player detail page")
+async def player_detail_page(request: Request, user_id: int):
+    # We can pass the user_id to the template if needed, but JS will handle fetching
+    return templates.TemplateResponse("player_detail.html", {"request": request, "user_id": user_id})

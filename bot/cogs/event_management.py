@@ -44,7 +44,7 @@ CURATED_TIMEZONES = {
         "Canada/Atlantic", "US/Alaska", "US/Hawaii"
     ],
     "UK / Europe": [
-        "Europe/London", "Europe/Paris", "Europe/Berlin",
+        "Europe/London", "Europe/Paris", "Europe/Berlin", 
         "Europe/Helsinki", "Europe/Moscow"
     ],
     "Other": ["UTC"]
@@ -53,12 +53,12 @@ CURATED_TIMEZONES = {
 async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> discord.Embed:
     event = await db.get_event_by_id(event_id)
     if not event: return discord.Embed(title="Error", description="Event not found.", color=discord.Color.red())
-
+    
     guild = bot.get_guild(event['guild_id'])
     if not guild: return discord.Embed(title="Error", description="Could not find the server for this event.", color=discord.Color.red())
-
+    
     signups = await db.get_signups_for_event(event_id)
-
+    
     specialty_roles = {
         "arty": os.getenv("ROLE_ID_ARTY"), "armour": os.getenv("ROLE_ID_ARMOUR"),
         "attack": os.getenv("ROLE_ID_ATTACK"), "defence": os.getenv("ROLE_ID_DEFENCE"),
@@ -72,7 +72,7 @@ async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> 
             role = guild.get_role(role_id)
             if role:
                 role_mentions.append(role.mention)
-
+        
         if role_mentions:
             roles_text = ", ".join(role_mentions)
             restriction_notice = (
@@ -86,12 +86,12 @@ async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> 
     if event['end_time']: time_str += f"\n**Ends:** {discord.utils.format_dt(event['end_time'], style='F')}"
     if event['timezone']: time_str += f"\nTimezone: {event['timezone']}"
     embed.add_field(name="Time", value=time_str, inline=False)
-
+    
     accepted_signups, tentative_users, declined_users = defaultdict(list), [], []
     for signup in signups:
         member = guild.get_member(signup['user_id'])
         if not member: continue
-
+        
         if signup['rsvp_status'] == RsvpStatus.ACCEPTED:
             user_role_ids = {r.id for r in member.roles}
             specialty = ""
@@ -103,7 +103,7 @@ async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> 
             elif attack_role and defence_role and attack_role in user_role_ids and defence_role in user_role_ids: specialty = " (Flex)"
             elif attack_role in user_role_ids: specialty = " (Attack)"
             elif defence_role in user_role_ids: specialty = " (Defence)"
-
+            
             role, subclass = signup['role_name'] or "Unassigned", signup['subclass_name']
             signup_text = f"**{member.display_name}**"
             if subclass: signup_text += f" ({EMOJI_MAPPING.get(subclass, '❔')})"
@@ -111,25 +111,25 @@ async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> 
             accepted_signups[role].append(signup_text)
         elif signup['rsvp_status'] == RsvpStatus.TENTATIVE: tentative_users.append(member.display_name)
         elif signup['rsvp_status'] == RsvpStatus.DECLINED: declined_users.append(member.display_name)
-
+        
     total_accepted = sum(len(v) for v in accepted_signups.values())
     embed.add_field(name=f"✅ Accepted ({total_accepted})", value="\u200b", inline=False)
-
+    
     for role in ROLES + ["Unassigned"]:
         if role == "Unassigned" and not accepted_signups.get("Unassigned"): continue
         users_in_role = accepted_signups.get(role, [])
         embed.add_field(name=f"{EMOJI_MAPPING.get(role, '')} **{role}** ({len(users_in_role)})", value="\n".join(users_in_role) or "No one yet", inline=False)
-
+        
     if tentative_users: embed.add_field(name=f"🤔 Tentative ({len(tentative_users)})", value=", ".join(tentative_users), inline=False)
     if declined_users: embed.add_field(name=f"❌ Declined ({len(declined_users)})", value=", ".join(declined_users), inline=False)
-
+    
     creator_name = "Unknown User"
     if creator_id := event.get('creator_id'):
         try:
             creator = guild.get_member(creator_id) or await guild.fetch_member(creator_id)
             creator_name = creator.display_name if creator else (await bot.fetch_user(creator_id)).name
         except discord.NotFound: pass
-
+        
     embed.set_footer(text=f"Event ID: {event_id} | Created by: {creator_name}")
     return embed
 
@@ -142,7 +142,7 @@ class RoleSelect(ui.Select):
             options.append(discord.SelectOption(label="No roles available for you", value="unassigned"))
 
         super().__init__(placeholder="1. Choose your primary role...", options=options)
-
+    
     async def callback(self, i: discord.Interaction):
         selected_role = self.values[0]
         if selected_role == "unassigned":
@@ -151,10 +151,10 @@ class RoleSelect(ui.Select):
             asyncio.create_task(self.view.update_original_embed())
             self.view.stop()
             return
-
+            
         self.view.role = selected_role
         subclass_select = self.view.subclass_select
-
+        
         all_subclasses = SUBCLASSES.get(self.view.role, [])
         if not all_subclasses:
             await self.db.update_signup_role(self.event_id, i.user.id, self.view.role, None)
@@ -171,11 +171,11 @@ class RoleSelect(ui.Select):
         guild = self.view.bot.get_guild(event['guild_id'])
         if not guild:
             return await i.response.edit_message(content="Error: Bot is not in the event's server.", view=None)
-
+        
         member = guild.get_member(i.user.id) or await guild.fetch_member(i.user.id)
         if not member:
             return await i.response.edit_message(content="Error: Could not find you in the event's server.", view=None)
-
+        
         user_role_ids = {r.id for r in member.roles}
 
         restricted_roles_config = {
@@ -183,13 +183,13 @@ class RoleSelect(ui.Select):
             "Tank Commander": os.getenv("ROLE_ID_TANK_COMMANDER"),
         }
         restricted_roles_config = {k: int(v) for k, v in restricted_roles_config.items() if v and v.isdigit()}
-
+        
         available_subclasses = []
         for subclass in all_subclasses:
             if subclass not in RESTRICTED_ROLES:
                 available_subclasses.append(subclass)
                 continue
-
+            
             required_role_id = restricted_roles_config.get(subclass)
             if not required_role_id or required_role_id in user_role_ids:
                 available_subclasses.append(subclass)
@@ -208,7 +208,7 @@ class SubclassSelect(ui.Select):
     def __init__(self, db: Database, event_id: int):
         self.db, self.event_id = db, event_id
         super().__init__(placeholder="Select a primary role first...", disabled=True, options=[discord.SelectOption(label="placeholder")])
-
+    
     async def callback(self, i: discord.Interaction):
         subclass = self.values[0]
         await self.db.update_signup_role(self.event_id, i.user.id, self.view.role, subclass)
@@ -231,7 +231,7 @@ class RoleSelectionView(ui.View):
             await self.update_original_embed()
             try: await self.user.send("Your role selection timed out. You are 'Unassigned'.")
             except discord.Forbidden: pass
-
+            
     async def update_original_embed(self):
         if not (event := await self.db.get_event_by_id(self.event_id)): return
         try:
@@ -244,17 +244,17 @@ class PersistentEventView(ui.View):
     def __init__(self, db: Database):
         super().__init__(timeout=None)
         self.db = db
-
+        
     async def update_embed(self, i: discord.Interaction, event_id: int):
         try: await i.message.edit(embed=await create_event_embed(i.client, event_id, self.db))
         except Exception as e: print(f"Error updating embed: {e}")
-
+        
     @ui.button(label="Accept", style=discord.ButtonStyle.success, custom_id="persistent_view:accept")
     async def accept(self, i: discord.Interaction, button: ui.Button):
         await i.response.defer(ephemeral=True)
         event = await self.db.get_event_by_message_id(i.message.id)
         if not event: return await i.followup.send("Event not found.", ephemeral=True)
-
+        
         restricted_roles_config = {
             "Commander": os.getenv("ROLE_ID_COMMANDER"), "Officer": os.getenv("ROLE_ID_OFFICER"),
             "Recon": os.getenv("ROLE_ID_RECON"), "Tank Commander": os.getenv("ROLE_ID_TANK_COMMANDER"),
@@ -269,13 +269,13 @@ class PersistentEventView(ui.View):
             if role not in RESTRICTED_ROLES:
                 available_roles.append(role)
                 continue
-
+            
             required_role_id = restricted_roles_config.get(role)
             if not required_role_id or required_role_id in user_role_ids:
                 available_roles.append(role)
 
         await self.db.set_rsvp(event['event_id'], i.user.id, RsvpStatus.ACCEPTED)
-
+        
         try:
             view = RoleSelectionView(i.client, self.db, event['event_id'], i.message.id, i.user, available_roles)
             await i.user.send(f"You accepted **{event['title']}**. Select your role:", view=view)
@@ -283,7 +283,7 @@ class PersistentEventView(ui.View):
         except discord.Forbidden:
             await self.db.update_signup_role(event['event_id'], i.user.id, "Unassigned", None)
             await i.followup.send("Accepted, but I couldn't DM you. Role set to 'Unassigned'.", ephemeral=True)
-
+            
         await self.update_embed(i, event['event_id'])
 
     @ui.button(label="Tentative", style=discord.ButtonStyle.secondary, custom_id="persistent_view:tentative")
@@ -302,7 +302,7 @@ class PersistentEventView(ui.View):
                 await i.followup.send("An error occurred while processing your RSVP. Please try again.", ephemeral=True)
             except:
                 pass
-
+            
     @ui.button(label="Decline", style=discord.ButtonStyle.danger, custom_id="persistent_view:decline")
     async def decline(self, i: discord.Interaction, button: ui.Button):
         await i.response.defer(ephemeral=True)
@@ -320,76 +320,113 @@ class PersistentEventView(ui.View):
             except:
                 pass
 
-class ReminderModal(ui.Modal, title="Event Reminder"):
-    message = ui.TextInput(
-        label="Reminder Message",
-        style=discord.TextStyle.paragraph,
-        placeholder="e.g., Friendly reminder that our match is tonight! Please sign up in the event channel if you can make it.",
-        required=True,
-        max_length=1000,
-    )
-
-    def __init__(self, db: Database, job_id: uuid.UUID, guild: discord.Guild):
-        super().__init__()
-        self.db = db
-        self.job_id = job_id
-        self.guild = guild
-
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True, thinking=True)
-
-        member_ids_to_dm = await self.db.get_reminder_job(self.job_id)
-        if not member_ids_to_dm:
-            await interaction.followup.send("Could not find the reminder job. It may have expired.", ephemeral=True)
-            return
-
-        success_count = 0
-        fail_count = 0
-
-        for member_id in member_ids_to_dm:
-            try:
-                member = await self.guild.fetch_member(member_id)
-                await member.send(self.message.value)
-                success_count += 1
-            except (discord.Forbidden, discord.HTTPException, discord.NotFound):
-                fail_count += 1
-
-        await interaction.followup.send(
-            f"Reminders sent!\n"
-            f"✅ Successfully sent to {success_count} member(s).\n"
-            f"❌ Failed to send to {fail_count} member(s) (they may have DMs disabled or have left the server).",
-            ephemeral=True
-        )
-        await self.db.delete_reminder_job(self.job_id)
-
-class ReminderConfirmationView(ui.View):
-    def __init__(self, db: Database, job_id: uuid.UUID, guild: discord.Guild):
-        super().__init__(timeout=300)
-        self.db = db
-        self.job_id = job_id
-        self.guild = guild
-
-    @ui.button(label="Compose & Send Reminder", style=discord.ButtonStyle.primary)
-    async def send_reminder(self, interaction: discord.Interaction, button: ui.Button):
-        modal = ReminderModal(self.db, self.job_id, self.guild)
-        await interaction.response.send_modal(modal)
+# --- REMOVED ReminderModal and ReminderConfirmationView ---
+# --- They are replaced by the new ReminderConversation class ---
 
 class ConfirmationView(ui.View):
     def __init__(self):
         super().__init__(timeout=120)
         self.value = None
-
-    @ui.button(label="Yes", style=discord.ButtonStyle.green)
+        
+    @ui.button(label="Yes, Send Reminder", style=discord.ButtonStyle.green)
     async def confirm(self, i: discord.Interaction, button: ui.Button):
         await i.response.defer()
         self.value = True
         self.stop()
-
-    @ui.button(label="No/Skip", style=discord.ButtonStyle.red)
+    
+    @ui.button(label="No, Cancel", style=discord.ButtonStyle.red)
     async def reject(self, i: discord.Interaction, button: ui.Button):
         await i.response.defer()
         self.value = False
         self.stop()
+
+# --- ADDED: New Conversation Class for Reminders ---
+class ReminderConversation:
+    def __init__(self, cog: 'EventManagement', interaction: discord.Interaction, target_role: discord.Role, member_ids: list[int]):
+        self.cog = cog
+        self.bot = cog.bot
+        self.db = cog.db
+        self.user = interaction.user
+        self.guild = interaction.guild
+        self.target_role = target_role
+        self.member_ids = member_ids
+        self.is_finished = False
+
+    async def _wait_for_message(self):
+        return await self.bot.wait_for('message', check=lambda m: m.author == self.user and isinstance(m.channel, discord.DMChannel), timeout=300.0)
+
+    async def start(self):
+        try:
+            if not await self.ask_for_confirmation():
+                await self.user.send("Reminder cancelled.")
+                return
+            
+            message_content = await self.ask_for_message()
+            if not message_content:
+                return # Timeout or cancellation handled in the method
+
+            await self.send_reminders(message_content)
+
+        except asyncio.TimeoutError:
+            await self.user.send("Your reminder request has timed out.")
+        except Exception as e:
+            print(f"Error in reminder conversation: {e}")
+            traceback.print_exc()
+            await self.user.send("An unexpected error occurred. The reminder has been cancelled.")
+        finally:
+            self.finish()
+
+    async def ask_for_confirmation(self) -> bool:
+        view = ConfirmationView()
+        msg = await self.user.send(
+            f"You are about to send a reminder to **{len(self.member_ids)}** members of the '{self.target_role.name}' role. Do you wish to proceed?",
+            view=view
+        )
+        await view.wait()
+        if view.value is None:
+            await msg.edit(content="Confirmation timed out.", view=None)
+            return False
+        
+        await msg.delete()
+        return view.value
+
+    async def ask_for_message(self) -> Optional[str]:
+        await self.user.send("Please type the reminder message you would like to send. Type `cancel` to stop.")
+        try:
+            message = await self._wait_for_message()
+            if message.content.lower() == 'cancel':
+                await self.user.send("Reminder cancelled.")
+                return None
+            return message.content
+        except asyncio.TimeoutError:
+            await self.user.send("Message input timed out. Reminder cancelled.")
+            return None
+
+    async def send_reminders(self, message_content: str):
+        await self.user.send(f"Sending reminders to {len(self.member_ids)} members... This may take a moment.")
+        
+        success_count = 0
+        fail_count = 0
+
+        for member_id in self.member_ids:
+            try:
+                member = await self.guild.fetch_member(member_id)
+                await member.send(message_content)
+                success_count += 1
+                await asyncio.sleep(0.5) # Avoid rate limits
+            except (discord.Forbidden, discord.HTTPException, discord.NotFound):
+                fail_count += 1
+        
+        await self.user.send(
+            f"Reminder process complete!\n"
+            f"✅ Successfully sent to {success_count} member(s).\n"
+            f"❌ Failed to send to {fail_count} member(s) (they may have DMs disabled or have left the server)."
+        )
+
+    def finish(self):
+        self.is_finished = True
+        if self.user.id in self.cog.active_conversations:
+            del self.cog.active_conversations[self.user.id]
 
 class Conversation:
     def __init__(self, cog: 'EventManagement', interaction: discord.Interaction, db: Database, event_id: int = None):
@@ -406,7 +443,7 @@ class Conversation:
             print(f"Error starting conversation: {e}")
             traceback.print_exc()
             await self.cancel()
-
+    
     async def run_conversation(self):
         steps = [
             ("What is the title of the event?", self.process_text, 'title'),
@@ -442,7 +479,7 @@ class Conversation:
 
     async def process_timezone(self, prompt, data_key):
         flat_tz_list = [tz for region in CURATED_TIMEZONES.values() for tz in region]
-
+        
         description_lines = []
         count = 1
         for region, timezones in CURATED_TIMEZONES.items():
@@ -450,17 +487,17 @@ class Conversation:
             for tz in timezones:
                 description_lines.append(f"`{count}` {tz}")
                 count += 1
-
+        
         embed = discord.Embed(title="Please Select a Timezone", description="\n".join(description_lines), color=discord.Color.blue())
         prompt_msg = "Please reply with the number for your desired timezone."
         if self.event_id and self.data.get(data_key): prompt_msg += f"\n(Current: `{self.data.get(data_key)}`)"
-
+        
         await self.user.send(prompt_msg, embed=embed)
-
+        
         try:
             msg = await self._wait_for_message()
             if msg.content.lower() == 'cancel': return False
-
+            
             choice = int(msg.content)
             if 1 <= choice <= len(flat_tz_list):
                 self.data[data_key] = flat_tz_list[choice - 1]
@@ -569,9 +606,9 @@ class Conversation:
 
         if view.value:
             guild_roles = sorted([r for r in self.interaction.guild.roles if r.name != "@everyone" and not r.managed], key=lambda r: r.position, reverse=True)
-
+            
             description_lines = [f"`{i+1}` {role.name}" for i, role in enumerate(guild_roles)]
-
+            
             embed = discord.Embed(title="Please Select Role(s)", description="\n".join(description_lines), color=discord.Color.blue())
             prompt_msg = "Please reply with the number(s) for your desired roles, separated by commas (e.g., `1, 5, 12`)."
             await self.user.send(prompt_msg, embed=embed)
@@ -579,10 +616,10 @@ class Conversation:
             try:
                 msg = await self._wait_for_message()
                 if msg.content.lower() == 'cancel': return False
-
+                
                 selected_indices = [int(i.strip()) - 1 for i in msg.content.split(',')]
                 selected_role_ids = [guild_roles[i].id for i in selected_indices if 0 <= i < len(guild_roles)]
-
+                
                 self.data[data_key] = selected_role_ids
                 if not selected_role_ids:
                      await self.user.send("No valid roles selected.")
@@ -599,7 +636,7 @@ class Conversation:
 
     async def ask_mention_roles(self, p, dk): return await self._ask_roles(p, dk, "Mention roles in the announcement?")
     async def ask_restrict_roles(self, p, dk): return await self._ask_roles(p, dk, "Restrict sign-ups to specific roles?")
-
+        
     async def finish(self):
         if self.is_finished: return
         self.is_finished = True
@@ -613,10 +650,10 @@ class Conversation:
             if self.event_id:
                 old_event_data = await self.db.get_event_by_id(self.event_id)
                 old_thread_id = old_event_data.get('thread_id') if old_event_data else None
-
+                
                 await self.db.update_event(self.event_id, self.data)
                 embed = await create_event_embed(self.bot, self.event_id, self.db)
-
+                
                 try:
                     channel = self.bot.get_channel(self.data['channel_id']) or await self.bot.fetch_channel(self.data['channel_id'])
                     message = await channel.fetch_message(self.data['message_id'])
@@ -682,7 +719,7 @@ class DeleteConfirmationView(ui.View):
                 message = await channel.fetch_message(event['message_id'])
                 await message.delete()
             except Exception as e: print(f"Could not delete event message: {e}")
-
+        
         if event.get('thread_id'):
             try:
                 thread = self.cog.bot.get_channel(event['thread_id']) or await self.cog.bot.fetch_channel(event['thread_id'])
@@ -698,7 +735,7 @@ class DeleteConfirmationView(ui.View):
                 user = self.cog.bot.get_user(user_id) or await self.cog.bot.fetch_user(user_id)
                 await user.send(f"The event **{event['title']}** has been cancelled by an administrator.")
             except Exception as e: print(f"Could not DM user {user_id} about cancellation: {e}")
-
+        
         await interaction.edit_original_response(content=f"Event '{event['title']}' has been deleted and attendees notified.", view=None)
 
     @ui.button(label="No, Cancel", style=discord.ButtonStyle.secondary)
@@ -720,26 +757,6 @@ class EventManagement(commands.Cog):
             app_commands.Choice(name=role.name, value=str(role.id))
             for role in roles if current.lower() in role.name.lower() and not role.is_default()
         ][:25]
-
-    async def dm_reminder_confirmation(self, interaction: discord.Interaction, target_role: discord.Role, member_ids_to_remind: list[int]):
-        """Creates the DB job and sends the confirmation view to the user via DM."""
-        job_id = uuid.uuid4()
-        await self.db.create_reminder_job(job_id, member_ids_to_remind)
-        
-        view = ReminderConfirmationView(self.db, job_id, interaction.guild)
-        
-        try:
-            await interaction.user.send(
-                f"Found **{len(member_ids_to_remind)}** members of the '{target_role.name}' role who have not responded to the event. "
-                f"Click the button below to compose and send them a DM reminder.",
-                view=view
-            )
-        except discord.Forbidden:
-            # This handles the case where the bot can't DM the admin
-            await interaction.followup.send(
-                "I couldn't send you a DM to confirm the reminder. Please check your privacy settings.",
-                ephemeral=True
-            )
 
     @event_group.command(name="create", description="Create a new event via DM.")
     async def create(self, interaction: discord.Interaction):
@@ -811,6 +828,9 @@ class EventManagement(commands.Cog):
     async def remind(self, interaction: discord.Interaction, event_id: int, role: str):
         await interaction.response.send_message("Preparing your reminder, please check your DMs...", ephemeral=True)
         
+        if interaction.user.id in self.active_conversations:
+            return await interaction.followup.send("You are already in an active conversation with me. Please finish or cancel it first.", ephemeral=True)
+
         try:
             role_id = int(role)
             target_role = interaction.guild.get_role(role_id)
@@ -836,8 +856,9 @@ class EventManagement(commands.Cog):
                 ephemeral=True
             )
         
-        # This is the single, correct call to start the DM process.
-        asyncio.create_task(self.dm_reminder_confirmation(interaction, target_role, member_ids_to_remind))
+        conv = ReminderConversation(self, interaction, target_role, member_ids_to_remind)
+        self.active_conversations[interaction.user.id] = conv
+        asyncio.create_task(conv.start())
 
     async def start_conversation(self, interaction: discord.Interaction, event_id: int = None):
         if interaction.user.id in self.active_conversations:

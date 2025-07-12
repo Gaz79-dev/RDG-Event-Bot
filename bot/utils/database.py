@@ -93,7 +93,6 @@ class Database:
                         last_signup_date TIMESTAMP WITH TIME ZONE
                     );
                 """)
-                # --- FIX: Added missing columns to the history table ---
                 await connection.execute("""
                     CREATE TABLE IF NOT EXISTS player_event_history (
                         history_id SERIAL PRIMARY KEY,

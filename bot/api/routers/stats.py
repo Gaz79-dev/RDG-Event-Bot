@@ -51,7 +51,7 @@ async def get_engagement_stats(db: Database = Depends(get_db)):
                 days_since = (datetime.datetime.now(datetime.timezone.utc) - stats['last_signup_date']).days
 
             player_stats_list.append(PlayerStats(
-                user_id=user_id,
+                user_id=str(user_id), # Ensure it's a string for the model
                 display_name=display_name,
                 accepted_count=stats.get('accepted_count', 0),
                 tentative_count=stats.get('tentative_count', 0),
@@ -63,6 +63,7 @@ async def get_engagement_stats(db: Database = Depends(get_db)):
     return player_stats_list
 
 @router.get("/player/{user_id}/accepted-events", response_model=List[AcceptedEvent])
-async def get_player_accepted_events(user_id: int, db: Database = Depends(get_db)):
-    """Gets a list of all events a specific player has accepted."""
-    return await db.get_accepted_events_for_user(user_id)
+async def get_player_accepted_events(user_id: str, db: Database = Depends(get_db)): # CHANGED: Accept user_id as a string
+    """Gets a list of all events a specific player has accepted from the permanent history log."""
+    # The database function still expects an integer, so we convert it here.
+    return await db.get_accepted_events_for_user(int(user_id))

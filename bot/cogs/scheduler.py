@@ -20,8 +20,8 @@ class Scheduler(commands.Cog):
         self.recreate_recurring_events.start()
         self.cleanup_finished_events.start()
         self.purge_deleted_events.start()
-        # --- ADDITION: Start the new sync task ---
         self.sync_event_threads.start()
+        self.process_tentatives.start()
 
     def cog_unload(self):
         """Cleanly cancels all tasks when the cog is unloaded."""
@@ -29,9 +29,30 @@ class Scheduler(commands.Cog):
         self.recreate_recurring_events.cancel()
         self.cleanup_finished_events.cancel()
         self.purge_deleted_events.cancel()
-        # --- ADDITION: Cancel the new sync task ---
         self.sync_event_threads.cancel()
+        self.process_tentatives.cancel()
 
+    #Process Tentative RSVP's for Player Stats
+    @tasks.loop(hours=1)
+    async def process_tentatives(self):
+        """Periodically converts 'Tentative' to 'Declined' for past events."""
+        print("\n[Scheduler] Running process_tentatives loop...")
+        try:
+            tentative_signups = await self.db.get_past_events_with_tentatives()
+            if not tentative_signups:
+                print("[Scheduler] No tentative signups to process.")
+                return
+
+            for signup in tentative_signups:
+                # This will trigger the decrement/increment logic in the database
+                await self.db.set_rsvp(signup['event_id'], signup['user_id'], RsvpStatus.DECLINED)
+                print(f"  [ProcessTentative] Converted User {signup['user_id']} to Declined for Event {signup['event_id']}.")
+            
+            print(f"[Scheduler] Processed {len(tentative_signups)} tentative signups.")
+        except Exception as e:
+            print(f"[Scheduler] FATAL ERROR in process_tentatives loop: {e}")
+            traceback.print_exc()
+    
     # --- ADDITION: The new task to sync members ---
     @tasks.loop(minutes=5)
     async def sync_event_threads(self):
@@ -296,6 +317,7 @@ class Scheduler(commands.Cog):
             traceback.print_exc()
 
     # --- ADDITION: Add the before_loop waiter for the new task ---
+    @process_tentatives.before_loop
     @sync_event_threads.before_loop
     @create_event_threads.before_loop
     @recreate_recurring_events.before_loop

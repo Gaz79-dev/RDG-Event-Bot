@@ -31,8 +31,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 const eventDate = new Date(event.event_time).toLocaleString('en-GB', {
                     day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit'
                 });
+                // --- FIX: Changed event.title to event.event_title ---
                 tr.innerHTML = `
-                    <td class="px-6 py-4 whitespace-nowrap">${event.title}</td>
+                    <td class="px-6 py-4 whitespace-nowrap">${event.event_title}</td>
                     <td class="px-6 py-4 whitespace-nowrap">${eventDate}</td>
                 `;
                 tableBody.appendChild(tr);

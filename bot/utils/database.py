@@ -84,7 +84,6 @@ class Database:
                         UNIQUE(squad_id, user_id)
                     );
                 """)
-                # --- ADDITION: Create the new permanent tables for stats ---
                 await connection.execute("""
                     CREATE TABLE IF NOT EXISTS player_stats (
                         user_id BIGINT PRIMARY KEY,
@@ -104,7 +103,6 @@ class Database:
                         UNIQUE(user_id, event_id)
                     );
                 """)
-                # --- END ADDITION ---
                 print("Database setup is complete.")
 
     # --- User Management Functions ---
@@ -204,20 +202,27 @@ class Database:
     async def set_rsvp(self, event_id: int, user_id: int, new_status: str):
         async with self.pool.acquire() as connection:
             async with connection.transaction():
-                current_record = await connection.fetchrow(
+                # Correctly fetch the event details and any existing signup status for the user
+                event_and_signup_data = await connection.fetchrow(
                     """
-                    SELECT s.rsvp_status, e.title, e.event_time FROM signups s
-                    RIGHT JOIN events e ON s.event_id = e.event_id AND s.user_id = $2
+                    SELECT e.title, e.event_time, s.rsvp_status
+                    FROM events e
+                    LEFT JOIN signups s ON e.event_id = s.event_id AND s.user_id = $2
                     WHERE e.event_id = $1
                     """,
                     event_id, user_id
                 )
-                
-                old_status = current_record['rsvp_status'] if current_record and current_record['rsvp_status'] else None
+
+                # If the event doesn't exist at all, we can't proceed.
+                if not event_and_signup_data:
+                    return
+
+                old_status = event_and_signup_data['rsvp_status']
 
                 if old_status == new_status:
                     return
 
+                # Update the main signups table
                 await connection.execute(
                     """
                     INSERT INTO signups (event_id, user_id, rsvp_status) VALUES ($1, $2, $3)
@@ -226,18 +231,23 @@ class Database:
                     event_id, user_id, new_status
                 )
 
+                # Update the permanent aggregate stats
                 await self.update_player_stats(user_id, old_status, new_status)
 
+                # Update the permanent event history log
                 if new_status == RsvpStatus.ACCEPTED:
-                    if current_record:
-                        await connection.execute(
-                            """
-                            INSERT INTO player_event_history (user_id, event_id, event_title, event_time)
-                            VALUES ($1, $2, $3, $4) ON CONFLICT (user_id, event_id) DO NOTHING;
-                            """,
-                            user_id, event_id, current_record['title'], current_record['event_time']
-                        )
+                    await connection.execute(
+                        """
+                        INSERT INTO player_event_history (user_id, event_id, event_title, event_time)
+                        VALUES ($1, $2, $3, $4) ON CONFLICT (user_id, event_id) DO NOTHING;
+                        """,
+                        user_id,
+                        event_id,
+                        event_and_signup_data['title'],
+                        event_and_signup_data['event_time']
+                    )
                 elif old_status == RsvpStatus.ACCEPTED:
+                    # If they changed their mind from 'Accepted', remove it from history
                     await connection.execute(
                         "DELETE FROM player_event_history WHERE user_id = $1 AND event_id = $2;",
                         user_id, event_id

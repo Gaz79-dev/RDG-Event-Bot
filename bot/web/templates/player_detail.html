@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gridiron - Player Details</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-gray-300 font-sans">
+
+    <header class="bg-gray-800 shadow-lg">
+        <nav class="container mx-auto px-6 py-4 flex justify-between items-center">
+            <div class="flex items-center">
+                <img src="/static/logo.jpg" alt="Gridiron Logo" class="h-8 w-8 mr-3">
+                <h1 id="page-title" class="text-2xl font-bold text-white">Player Details</h1>
+            </div>
+            <div>
+                <a href="/stats" class="text-gray-300 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Back to Stats</a>
+                <button id="logout-btn" class="text-gray-300 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Logout</button>
+            </div>
+        </nav>
+    </header>
+
+    <main class="container mx-auto px-6 py-8">
+        <section class="bg-gray-800 p-6 rounded-lg shadow-md">
+            <h2 class="text-xl font-semibold text-white mb-4">Accepted Event History</h2>
+            <div class="overflow-x-auto">
+                <table class="min-w-full">
+                    <thead>
+                        <tr class="border-b border-gray-700">
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Event Title</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Event Date</th>
+                        </tr>
+                    </thead>
+                    <tbody id="events-table-body">
+                        <tr><td colspan="2" class="text-center p-8">Loading event history...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <script src="/static/auth.js"></script>
+    <script src="/static/player_detail.js"></script>
+</body>
+</html>

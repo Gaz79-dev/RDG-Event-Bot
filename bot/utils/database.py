@@ -202,23 +202,14 @@ class Database:
     async def set_rsvp(self, event_id: int, user_id: int, new_status: str):
         async with self.pool.acquire() as connection:
             async with connection.transaction():
-                # Correctly fetch the event details and any existing signup status for the user
-                event_and_signup_data = await connection.fetchrow(
-                    """
-                    SELECT e.title, e.event_time, s.rsvp_status
-                    FROM events e
-                    LEFT JOIN signups s ON e.event_id = s.event_id AND s.user_id = $2
-                    WHERE e.event_id = $1
-                    """,
+                # Get the user's current status for this event, if any.
+                signup_record = await connection.fetchrow(
+                    "SELECT rsvp_status FROM signups WHERE event_id = $1 AND user_id = $2",
                     event_id, user_id
                 )
+                old_status = signup_record['rsvp_status'] if signup_record else None
 
-                # If the event doesn't exist at all, we can't proceed.
-                if not event_and_signup_data:
-                    return
-
-                old_status = event_and_signup_data['rsvp_status']
-
+                # If the status is the same, do nothing.
                 if old_status == new_status:
                     return
 
@@ -236,16 +227,19 @@ class Database:
 
                 # Update the permanent event history log
                 if new_status == RsvpStatus.ACCEPTED:
-                    await connection.execute(
-                        """
-                        INSERT INTO player_event_history (user_id, event_id, event_title, event_time)
-                        VALUES ($1, $2, $3, $4) ON CONFLICT (user_id, event_id) DO NOTHING;
-                        """,
-                        user_id,
-                        event_id,
-                        event_and_signup_data['title'],
-                        event_and_signup_data['event_time']
-                    )
+                    # Fetch the event details needed for the history log
+                    event_details = await self.get_event_by_id(event_id)
+                    if event_details:
+                        await connection.execute(
+                            """
+                            INSERT INTO player_event_history (user_id, event_id, event_title, event_time)
+                            VALUES ($1, $2, $3, $4) ON CONFLICT (user_id, event_id) DO NOTHING;
+                            """,
+                            user_id,
+                            event_id,
+                            event_details['title'],
+                            event_details['event_time']
+                        )
                 elif old_status == RsvpStatus.ACCEPTED:
                     # If they changed their mind from 'Accepted', remove it from history
                     await connection.execute(

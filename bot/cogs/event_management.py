@@ -9,6 +9,7 @@ from urllib.parse import urlencode
 import asyncio
 from typing import List, Dict, Optional
 from collections import defaultdict
+import uuid
 
 # Use relative import to go up one level to the 'bot' package root
 from ..utils.database import Database, RsvpStatus, ROLES, SUBCLASSES, RESTRICTED_ROLES
@@ -328,17 +329,23 @@ class ReminderModal(ui.Modal, title="Event Reminder"):
         max_length=1000,
     )
 
-    def __init__(self, member_ids_to_dm: List[int]):
+    def __init__(self, db: Database, job_id: uuid.UUID):
         super().__init__()
-        self.member_ids_to_dm = member_ids_to_dm
+        self.db = db
+        self.job_id = job_id
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
         
+        member_ids_to_dm = await self.db.get_reminder_job(self.job_id)
+        if not member_ids_to_dm:
+            await interaction.followup.send("Could not find the reminder job. It may have expired.", ephemeral=True)
+            return
+
         success_count = 0
         fail_count = 0
 
-        for member_id in self.member_ids_to_dm:
+        for member_id in member_ids_to_dm:
             try:
                 member = await interaction.guild.fetch_member(member_id)
                 await member.send(self.message.value)
@@ -352,21 +359,22 @@ class ReminderModal(ui.Modal, title="Event Reminder"):
             f"❌ Failed to send to {fail_count} member(s) (they may have DMs disabled or have left the server).",
             ephemeral=True
         )
+        # Clean up the job from the database
+        await self.db.delete_reminder_job(self.job_id)
 
 class ReminderConfirmationView(ui.View):
-    def __init__(self, member_ids_to_dm: List[int]):
+    def __init__(self, db: Database, job_id: uuid.UUID):
         super().__init__(timeout=300)
-        self.member_ids_to_dm = member_ids_to_dm
+        self.db = db
+        self.job_id = job_id
 
     @ui.button(label="Compose & Send Reminder", style=discord.ButtonStyle.primary)
     async def send_reminder(self, interaction: discord.Interaction, button: ui.Button):
-        # --- FIX: Send the modal as the only response to the button click ---
-        await interaction.response.send_modal(ReminderModal(self.member_ids_to_dm))
+        modal = ReminderModal(self.db, self.job_id)
+        await interaction.response.send_modal(modal)
         
-        # Disable the button after the modal is sent to prevent re-clicks.
         button.disabled = True
-        # Use a followup to edit the original message, which is a separate action.
-        await interaction.followup.edit_message(interaction.message.id, view=self)
+        await interaction.edit_original_response(view=self)
         self.stop()
 
 class ConfirmationView(ui.View):
@@ -811,7 +819,11 @@ class EventManagement(commands.Cog):
                 ephemeral=True
             )
         
-        view = ReminderConfirmationView(member_ids_to_remind)
+        # --- FIX: Use the new temporary database job architecture ---
+        job_id = uuid.uuid4()
+        await self.db.create_reminder_job(job_id, member_ids_to_remind)
+        
+        view = ReminderConfirmationView(self.db, job_id)
         await interaction.followup.send(
             f"Found {len(member_ids_to_remind)} members of '{target_role.name}' who have not responded. "
             f"Click the button below to compose and send them a DM reminder.",

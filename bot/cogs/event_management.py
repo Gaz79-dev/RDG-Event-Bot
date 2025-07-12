@@ -721,6 +721,26 @@ class EventManagement(commands.Cog):
             for role in roles if current.lower() in role.name.lower() and not role.is_default()
         ][:25]
 
+    async def dm_reminder_confirmation(self, interaction: discord.Interaction, target_role: discord.Role, member_ids_to_remind: list[int]):
+        """Creates the DB job and sends the confirmation view to the user via DM."""
+        job_id = uuid.uuid4()
+        await self.db.create_reminder_job(job_id, member_ids_to_remind)
+        
+        view = ReminderConfirmationView(self.db, job_id)
+        
+        try:
+            await interaction.user.send(
+                f"Found **{len(member_ids_to_remind)}** members of the '{target_role.name}' role who have not responded to the event. "
+                f"Click the button below to compose and send them a DM reminder.",
+                view=view
+            )
+        except discord.Forbidden:
+            # This handles the case where the bot can't DM the admin
+            await interaction.followup.send(
+                "I couldn't send you a DM to confirm the reminder. Please check your privacy settings.",
+                ephemeral=True
+            )
+
     @event_group.command(name="create", description="Create a new event via DM.")
     async def create(self, interaction: discord.Interaction):
         await self.start_conversation(interaction)
@@ -789,7 +809,8 @@ class EventManagement(commands.Cog):
     @app_commands.autocomplete(role=role_autocomplete)
     @app_commands.default_permissions(administrator=True)
     async def remind(self, interaction: discord.Interaction, event_id: int, role: str):
-        await interaction.response.defer(ephemeral=True, thinking=True)
+        # 1. Immediately acknowledge the command so it doesn't time out.
+        await interaction.response.send_message("Preparing your reminder, please check your DMs...", ephemeral=True)
         
         try:
             role_id = int(role)
@@ -815,6 +836,9 @@ class EventManagement(commands.Cog):
                 f"No members of the '{target_role.name}' role need a reminder for this event. They have all RSVP'd.",
                 ephemeral=True
             )
+        
+        # 2. Run the logic to send the DM in a separate, non-blocking task.
+        asyncio.create_task(self.dm_reminder_confirmation(interaction, target_role, member_ids_to_remind))
         
         # --- FIX: Use the new temporary database job architecture ---
         job_id = uuid.uuid4()

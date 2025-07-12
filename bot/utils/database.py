@@ -80,10 +80,32 @@ class Database:
                         squad_id INT NOT NULL REFERENCES squads(squad_id) ON DELETE CASCADE,
                         user_id BIGINT NOT NULL,
                         assigned_role_name VARCHAR(100) NOT NULL,
-                        startup_task VARCHAR(100), -- ADD THIS LINE
+                        startup_task VARCHAR(100),
                         UNIQUE(squad_id, user_id)
                     );
                 """)
+                # --- ADDITION: Create the new permanent tables for stats ---
+                await connection.execute("""
+                    CREATE TABLE IF NOT EXISTS player_stats (
+                        user_id BIGINT PRIMARY KEY,
+                        accepted_count INT DEFAULT 0,
+                        tentative_count INT DEFAULT 0,
+                        declined_count INT DEFAULT 0,
+                        last_signup_date TIMESTAMP WITH TIME ZONE
+                    );
+                """)
+                await connection.execute("""
+                    CREATE TABLE IF NOT EXISTS player_event_history (
+                        history_id SERIAL PRIMARY KEY,
+                        user_id BIGINT NOT NULL,
+                        event_id INT NOT NULL,
+                        event_title VARCHAR(255) NOT NULL,
+                        event_time TIMESTAMP WITH TIME ZONE NOT NULL,
+                        UNIQUE(user_id, event_id)
+                    );
+                """)
+                # --- END ADDITION ---
+                print("Database setup is complete.")
 
     # --- User Management Functions ---
     async def get_user_by_username(self, username: str) -> Optional[Dict]:
@@ -181,15 +203,57 @@ class Database:
             row = await conn.fetchrow("SELECT * FROM events WHERE message_id = $1;", message_id)
             return dict(row) if row else None
 
-    async def set_rsvp(self, event_id: int, user_id: int, status: str):
-        query = """
-            INSERT INTO signups (event_id, user_id, rsvp_status)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (event_id, user_id)
-            DO UPDATE SET rsvp_status = EXCLUDED.rsvp_status;
+    async def set_rsvp(self, event_id: int, user_id: int, new_status: str):
+        """
+        Sets a user's RSVP status, updates their permanent stats, and logs their event history.
         """
         async with self.pool.acquire() as connection:
-            await connection.execute(query, event_id, user_id, status)
+            async with connection.transaction():
+                # Get the current status and the event details in one go
+                current_record = await connection.fetchrow(
+                    """
+                    SELECT s.rsvp_status, e.title, e.event_time FROM signups s
+                    JOIN events e ON s.event_id = e.event_id
+                    WHERE s.event_id = $1 AND s.user_id = $2
+                    """,
+                    event_id, user_id
+                )
+                
+                old_status = current_record['rsvp_status'] if current_record else None
+
+                if old_status == new_status:
+                    return
+
+                # Update the main signup record
+                await connection.execute(
+                    """
+                    INSERT INTO signups (event_id, user_id, rsvp_status) VALUES ($1, $2, $3)
+                    ON CONFLICT (event_id, user_id) DO UPDATE SET rsvp_status = EXCLUDED.rsvp_status;
+                    """,
+                    event_id, user_id, new_status
+                )
+
+                # Update the aggregate stats counters
+                await self.update_player_stats(user_id, old_status, new_status)
+
+                # Update the permanent event history log
+                if new_status == RsvpStatus.ACCEPTED:
+                    # If we don't have event details (because it's a new signup), fetch them.
+                    event_details = current_record or await self.get_event_by_id(event_id)
+                    if event_details:
+                        await connection.execute(
+                            """
+                            INSERT INTO player_event_history (user_id, event_id, event_title, event_time)
+                            VALUES ($1, $2, $3, $4) ON CONFLICT (user_id, event_id) DO NOTHING;
+                            """,
+                            user_id, event_id, event_details['title'], event_details['event_time']
+                        )
+                elif old_status == RsvpStatus.ACCEPTED:
+                    # If they changed their mind from 'Accepted', remove it from history
+                    await connection.execute(
+                        "DELETE FROM player_event_history WHERE user_id = $1 AND event_id = $2;",
+                        user_id, event_id
+                    )
     
     async def get_upcoming_events(self) -> List[Dict]:
         """
@@ -226,31 +290,54 @@ class Database:
         async with self.pool.acquire() as connection:
             await connection.execute("UPDATE signups SET role_name = $1, subclass_name = $2 WHERE event_id = $3 AND user_id = $4;", role_name, subclass_name, event_id, user_id)
 
-    #Member statistics data
-    async def get_all_unique_signup_users(self) -> List[Dict]:
-        """Gets all unique user IDs from the signups table."""
-        query = "SELECT DISTINCT user_id FROM signups;"
+    # --- Player Statistics Functions ---
+    async def update_player_stats(self, user_id: int, old_status: Optional[str], new_status: str):
+        """Atomically updates the player_stats table based on an RSVP change."""
+        
+        # Determine which counters to increment and decrement
+        decrement_col = f"{old_status.lower()}_count" if old_status else None
+        increment_col = f"{new_status.lower()}_count"
+
+        # Build the dynamic part of the query
+        update_parts = [f"{increment_col} = {increment_col} + 1"]
+        if decrement_col:
+            update_parts.append(f"{decrement_col} = GREATEST(0, {decrement_col} - 1)")
+
+        # Update last_signup_date only on new "Accepted" RSVPs
+        if new_status == RsvpStatus.ACCEPTED:
+            update_parts.append("last_signup_date = (NOW() AT TIME ZONE 'utc')")
+        
+        query = f"""
+            INSERT INTO player_stats (user_id, {increment_col}) VALUES ($1, 1)
+            ON CONFLICT (user_id) DO UPDATE SET {', '.join(update_parts)};
+        """
+        
+        async with self.pool.acquire() as connection:
+            await connection.execute(query, user_id)
+
+    async def get_past_events_with_tentatives(self) -> List[Dict]:
+        """Gets events that have finished and still have tentative signups."""
+        query = """
+            SELECT s.event_id, s.user_id FROM signups s
+            JOIN events e ON s.event_id = e.event_id
+            WHERE s.rsvp_status = 'Tentative' AND e.end_time < (NOW() AT TIME ZONE 'utc');
+        """
         async with self.pool.acquire() as connection:
             return [dict(row) for row in await connection.fetch(query)]
 
-    async def get_stats_for_user(self, user_id: int) -> Dict:
-        """
-        Calculates the total accepted, tentative, and declined counts,
-        and the last signup date for a specific user.
-        """
+    async def get_all_player_stats(self) -> List[Dict]:
+        """Gets all records from the player_stats table."""
+        async with self.pool.acquire() as connection:
+            return [dict(row) for row in await connection.fetch("SELECT * FROM player_stats;")]
+            
+    async def get_accepted_events_for_user(self, user_id: int) -> List[Dict]:
+        """Gets a user's accepted event history from the permanent log."""
         query = """
-            SELECT
-                COUNT(*) FILTER (WHERE rsvp_status = 'Accepted') AS accepted_count,
-                COUNT(*) FILTER (WHERE rsvp_status = 'Tentative') AS tentative_count,
-                COUNT(*) FILTER (WHERE rsvp_status = 'Declined') AS declined_count,
-                MAX(e.event_time) FILTER (WHERE s.rsvp_status = 'Accepted') AS last_signup_date
-            FROM signups s
-            JOIN events e ON s.event_id = e.event_id
-            WHERE s.user_id = $1;
+            SELECT event_title, event_time FROM player_event_history
+            WHERE user_id = $1 ORDER BY event_time DESC;
         """
         async with self.pool.acquire() as connection:
-            row = await connection.fetchrow(query, user_id)
-            return dict(row) if row else {}
+            return [dict(row) for row in await connection.fetch(query, user_id)]
     
     # --- Squad & Guild Config Functions ---
     async def force_unlock_all_events(self):
@@ -329,7 +416,6 @@ class Database:
 
     async def get_finished_events_for_cleanup(self) -> List[dict]:
         """Gets old, non-recurring events that ended more than 2 hours ago."""
-        # This query now implements the 2-hour cleanup delay after an event's end_time.
         query = """
             SELECT event_id, thread_id, message_id, channel_id FROM events
             WHERE is_recurring = FALSE AND end_time < (NOW() AT TIME ZONE 'utc' - INTERVAL '2 hours');
@@ -372,7 +458,6 @@ class Database:
         async with self.pool.acquire() as connection:
             await connection.execute(query, event_id)
     
-    # Add this method to your Database class:
     async def get_squad_by_id(self, squad_id: int) -> Optional[dict]:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow("SELECT * FROM squads WHERE squad_id = $1", squad_id)
@@ -416,15 +501,6 @@ class Database:
                 processed_squads.append(squad)
         return processed_squads
 
-        query = f"""
-            INSERT INTO guilds (guild_id, {column_name})
-            VALUES ($1, $2)
-            ON CONFLICT (guild_id)
-            DO UPDATE SET {column_name} = EXCLUDED.{column_name};
-        """
-        async with self.pool.acquire() as connection:
-            await connection.execute(query, guild_id, role_id)
-    
     async def delete_squads_for_event(self, event_id: int):
         async with self.pool.acquire() as connection:
             await connection.execute("DELETE FROM squads WHERE event_id = $1;", event_id)

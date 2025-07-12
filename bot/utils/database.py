@@ -4,6 +4,7 @@ import datetime
 import json
 import httpx
 from typing import List, Optional, Dict
+import uuid
 
 # Static Definitions
 ROLES = ["Commander", "Infantry", "Armour", "Recon", "Pathfinders", "Artillery"]
@@ -103,6 +104,14 @@ class Database:
                         role_name VARCHAR(100),
                         subclass_name VARCHAR(100),
                         UNIQUE(user_id, event_id)
+                    );
+                """)
+                # --- ADDITION: New temporary table for reminder jobs ---
+                await connection.execute("""
+                    CREATE TABLE IF NOT EXISTS reminder_jobs (
+                        job_id UUID PRIMARY KEY,
+                        user_ids BIGINT[] NOT NULL,
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT (NOW() AT TIME ZONE 'utc')
                     );
                 """)
                 print("Database setup is complete.")
@@ -314,13 +323,31 @@ class Database:
         async with self.pool.acquire() as connection:
             return [dict(row) for row in await connection.fetch(query, user_id)]
     
-    # --- ADDITION: New function for the reminder command ---
     async def get_all_rsvpd_user_ids_for_event(self, event_id: int) -> List[int]:
-        """Gets a list of all user IDs that have any RSVP status for a given event."""
         query = "SELECT user_id FROM signups WHERE event_id = $1;"
         async with self.pool.acquire() as connection:
             records = await connection.fetch(query, event_id)
             return [record['user_id'] for record in records]
+
+    # --- Reminder Job Functions ---
+    async def create_reminder_job(self, job_id: uuid.UUID, user_ids: List[int]) -> None:
+        """Creates a new reminder job in the temporary table."""
+        query = "INSERT INTO reminder_jobs (job_id, user_ids) VALUES ($1, $2);"
+        async with self.pool.acquire() as connection:
+            await connection.execute(query, job_id, user_ids)
+
+    async def get_reminder_job(self, job_id: uuid.UUID) -> Optional[List[int]]:
+        """Retrieves the list of user IDs for a given reminder job."""
+        query = "SELECT user_ids FROM reminder_jobs WHERE job_id = $1;"
+        async with self.pool.acquire() as connection:
+            record = await connection.fetchrow(query, job_id)
+            return record['user_ids'] if record else None
+
+    async def delete_reminder_job(self, job_id: uuid.UUID) -> None:
+        """Deletes a reminder job after it has been processed."""
+        query = "DELETE FROM reminder_jobs WHERE job_id = $1;"
+        async with self.pool.acquire() as connection:
+            await connection.execute(query, job_id)
 
     # --- Squad & Guild Config Functions ---
     async def force_unlock_all_events(self):

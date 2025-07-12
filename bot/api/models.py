@@ -98,6 +98,7 @@ class RoleUpdateRequest(BaseModel):
     event_id: int
 
 class SquadMoveRequest(BaseModel):
+    new_squad_id: int
 
 class PlayerStats(BaseModel):
     user_id: int

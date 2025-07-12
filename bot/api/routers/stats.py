@@ -4,11 +4,10 @@ import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from typing import List
 
-# Use absolute imports from the 'bot' package root
 from bot.utils.database import Database
 from bot.api import auth
 from bot.api.dependencies import get_db
-from bot.api.models import PlayerStats
+from bot.api.models import PlayerStats, AcceptedEvent
 
 router = APIRouter(
     prefix="/api/stats",
@@ -22,20 +21,19 @@ BOT_TOKEN = os.getenv("DISCORD_TOKEN")
 @router.get("/engagement", response_model=List[PlayerStats])
 async def get_engagement_stats(db: Database = Depends(get_db)):
     """
-    Calculates and returns engagement statistics for all players who have ever signed up.
+    Retrieves and returns engagement statistics for all players.
     """
     if not GUILD_ID or not BOT_TOKEN:
         raise HTTPException(status_code=500, detail="Bot token or Guild ID not configured on server.")
 
-    unique_users = await db.get_all_unique_signup_users()
+    all_player_stats = await db.get_all_player_stats()
     player_stats_list = []
     headers = {"Authorization": f"Bot {BOT_TOKEN}"}
 
     async with httpx.AsyncClient() as client:
-        for user_record in unique_users:
-            user_id = user_record['user_id']
+        for stats in all_player_stats:
+            user_id = stats['user_id']
             
-            # Fetch user's display name from Discord
             display_name = f"User ID: {user_id}"
             url = f"https://discord.com/api/v10/guilds/{GUILD_ID}/members/{user_id}"
             try:
@@ -48,10 +46,6 @@ async def get_engagement_stats(db: Database = Depends(get_db)):
             except Exception as e:
                 print(f"Error fetching member {user_id} for stats: {e}")
 
-            # Get RSVP stats from the database
-            stats = await db.get_stats_for_user(user_id)
-            
-            # Calculate days since last signup
             days_since = None
             if stats.get('last_signup_date'):
                 days_since = (datetime.datetime.now(datetime.timezone.utc) - stats['last_signup_date']).days
@@ -67,3 +61,8 @@ async def get_engagement_stats(db: Database = Depends(get_db)):
             ))
             
     return player_stats_list
+
+@router.get("/player/{user_id}/accepted-events", response_model=List[AcceptedEvent])
+async def get_player_accepted_events(user_id: int, db: Database = Depends(get_db)):
+    """Gets a list of all events a specific player has accepted."""
+    return await db.get_accepted_events_for_user(user_id)

@@ -10,7 +10,7 @@ from fastapi.templating import Jinja2Templates
 # Use absolute imports from the 'bot' package root
 from bot.utils.database import Database
 # --- FIX: Separated the 'auth' import from the 'routers' import ---
-from bot.api.routers import events, users, squads
+from bot.api.routers import events, users, squads, stats
 from bot.api import auth
 
 # Load environment variables
@@ -50,6 +50,7 @@ app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(events.router)
 app.include_router(squads.router)
+app.include_router(stats.router)
 
 # --- Web Page Routes ---
 @app.get("/login", tags=["HTML"], summary="Serves the login page")
@@ -63,3 +64,7 @@ async def main_page(request: Request):
 @app.get("/admin", tags=["HTML"], summary="Serves the admin page")
 async def admin_page(request: Request):
     return templates.TemplateResponse("admin.html", {"request": request})
+
+@app.get("/stats", tags=["HTML"], summary="Serves the engagement stats page")
+async def stats_page(request: Request):
+    return templates.TemplateResponse("stats.html", {"request": request})

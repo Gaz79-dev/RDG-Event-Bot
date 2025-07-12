@@ -105,7 +105,7 @@ class StartupTaskUpdateRequest(BaseModel):
 
 # --- Player Statistics Models ---
 class PlayerStats(BaseModel):
-    user_id: int
+    user_id: str # CHANGED: Treat user_id as a string to prevent JS number precision issues.
     display_name: str
     accepted_count: int
     tentative_count: int

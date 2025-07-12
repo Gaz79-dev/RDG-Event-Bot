@@ -31,10 +31,10 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             const tr = document.createElement('tr');
-            // --- FIX: Added classes and data attribute to make rows clickable ---
             tr.className = `border-b border-gray-700 hover:bg-gray-700 cursor-pointer ${rowClass}`;
             tr.dataset.userId = player.user_id;
-            // --- END FIX ---
+            // --- ADDITION: Store player name to pass to next page ---
+            tr.dataset.playerName = player.display_name;
             
             tr.innerHTML = `
                 <td class="px-6 py-4 whitespace-nowrap">${player.display_name}</td>
@@ -93,14 +93,15 @@ document.addEventListener('DOMContentLoaded', () => {
         renderTable(sortData(filteredStats));
     });
 
-    // --- ADDITION: Event listener for clicking on a table row ---
     tableBody.addEventListener('click', (e) => {
         const row = e.target.closest('tr');
         if (row && row.dataset.userId) {
-            window.location.href = `/stats/player/${row.dataset.userId}`;
+            const userId = row.dataset.userId;
+            const playerName = row.dataset.playerName;
+            // --- UPDATE: Add player name as a query parameter ---
+            window.location.href = `/stats/player/${userId}?name=${encodeURIComponent(playerName)}`;
         }
     });
-    // --- END ADDITION ---
 
     fetch('/api/stats/engagement', { headers })
         .then(response => {

@@ -99,6 +99,15 @@ class RoleUpdateRequest(BaseModel):
     event_id: int
 
 class SquadMoveRequest(BaseModel):
+
+class PlayerStats(BaseModel):
+    user_id: int
+    display_name: str
+    accepted_count: int
+    tentative_count: int
+    declined_count: int
+    last_signup_date: Optional[datetime] = None
+    days_since_last_signup: Optional[int] = None
     new_squad_id: int
 
 class RosterUpdateRequest(BaseModel):

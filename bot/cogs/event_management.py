@@ -352,7 +352,6 @@ class ReminderModal(ui.Modal, title="Event Reminder"):
             ephemeral=True
         )
 
-# --- ADDITION: New View for the Reminder Command Confirmation ---
 class ReminderConfirmationView(ui.View):
     def __init__(self, members_to_dm: List[discord.Member]):
         super().__init__(timeout=300)
@@ -362,7 +361,6 @@ class ReminderConfirmationView(ui.View):
     async def send_reminder(self, interaction: discord.Interaction, button: ui.Button):
         modal = ReminderModal(self.members_to_dm)
         await interaction.response.send_modal(modal)
-        # Disable the button after it's clicked
         button.disabled = True
         await interaction.edit_original_response(view=self)
         self.stop()
@@ -775,9 +773,11 @@ class EventManagement(commands.Cog):
     )
     @app_commands.default_permissions(administrator=True)
     async def remind(self, interaction: discord.Interaction, event_id: int, role: discord.Role):
+        await interaction.response.defer(ephemeral=True)
+        
         event = await self.db.get_event_by_id(event_id)
         if not event or event['guild_id'] != interaction.guild_id:
-            return await interaction.response.send_message("Event not found in this server.", ephemeral=True)
+            return await interaction.followup.send("Event not found in this server.", ephemeral=True)
 
         rsvpd_user_ids = await self.db.get_all_rsvpd_user_ids_for_event(event_id)
         
@@ -787,13 +787,18 @@ class EventManagement(commands.Cog):
                 members_to_remind.append(member)
 
         if not members_to_remind:
-            return await interaction.response.send_message(
+            return await interaction.followup.send(
                 f"No members of the '{role.name}' role need a reminder for this event. They have all RSVP'd.",
                 ephemeral=True
             )
-
-        modal = ReminderModal(members_to_remind)
-        await interaction.response.send_modal(modal)
+        
+        view = ReminderConfirmationView(members_to_remind)
+        await interaction.followup.send(
+            f"Found {len(members_to_remind)} members of '{role.name}' who have not responded. "
+            f"Click the button below to compose and send them a DM reminder.",
+            view=view,
+            ephemeral=True
+        )
 
     async def start_conversation(self, interaction: discord.Interaction, event_id: int = None):
         if interaction.user.id in self.active_conversations:

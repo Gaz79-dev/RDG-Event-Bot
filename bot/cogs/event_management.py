@@ -319,7 +319,6 @@ class PersistentEventView(ui.View):
             except:
                 pass
 
-# --- ADDITION: New Modal for the Reminder Command ---
 class ReminderModal(ui.Modal, title="Event Reminder"):
     message = ui.TextInput(
         label="Reminder Message",
@@ -352,6 +351,21 @@ class ReminderModal(ui.Modal, title="Event Reminder"):
             f"❌ Failed to send to {fail_count} member(s) (they may have DMs disabled).",
             ephemeral=True
         )
+
+# --- ADDITION: New View for the Reminder Command Confirmation ---
+class ReminderConfirmationView(ui.View):
+    def __init__(self, members_to_dm: List[discord.Member]):
+        super().__init__(timeout=300)
+        self.members_to_dm = members_to_dm
+
+    @ui.button(label="Compose & Send Reminder", style=discord.ButtonStyle.primary)
+    async def send_reminder(self, interaction: discord.Interaction, button: ui.Button):
+        modal = ReminderModal(self.members_to_dm)
+        await interaction.response.send_modal(modal)
+        # Disable the button after it's clicked
+        button.disabled = True
+        await interaction.edit_original_response(view=self)
+        self.stop()
 
 class ConfirmationView(ui.View):
     def __init__(self):

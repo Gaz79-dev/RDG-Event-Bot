@@ -84,7 +84,6 @@ class Database:
                         UNIQUE(squad_id, user_id)
                     );
                 """)
-                # --- ADDITION: Create the new permanent tables for stats ---
                 await connection.execute("""
                     CREATE TABLE IF NOT EXISTS player_stats (
                         user_id BIGINT PRIMARY KEY,
@@ -104,7 +103,6 @@ class Database:
                         UNIQUE(user_id, event_id)
                     );
                 """)
-                # --- END ADDITION ---
                 print("Database setup is complete.")
 
     # --- User Management Functions ---
@@ -175,14 +173,13 @@ class Database:
             )
 
     async def update_event(self, event_id: int, data: Dict):
-        # This query is modified to reset the thread creation status on every edit
         query = """
             UPDATE events SET
                 title = $1, description = $2, event_time = $3, end_time = $4, timezone = $5,
                 is_recurring = $6, recurrence_rule = $7, mention_role_ids = $8,
                 restrict_to_role_ids = $9, recreation_hours = $10,
-                thread_created = FALSE, -- Reset the flag to allow recreation
-                thread_id = NULL -- Clear the old channel ID
+                thread_created = FALSE,
+                thread_id = NULL
             WHERE event_id = $11;
         """
         async with self.pool.acquire() as connection:
@@ -204,12 +201,8 @@ class Database:
             return dict(row) if row else None
 
     async def set_rsvp(self, event_id: int, user_id: int, new_status: str):
-        """
-        Sets a user's RSVP status, updates their permanent stats, and logs their event history.
-        """
         async with self.pool.acquire() as connection:
             async with connection.transaction():
-                # Get the current status and the event details in one go
                 current_record = await connection.fetchrow(
                     """
                     SELECT s.rsvp_status, e.title, e.event_time FROM signups s
@@ -224,7 +217,6 @@ class Database:
                 if old_status == new_status:
                     return
 
-                # Update the main signup record
                 await connection.execute(
                     """
                     INSERT INTO signups (event_id, user_id, rsvp_status) VALUES ($1, $2, $3)
@@ -233,12 +225,9 @@ class Database:
                     event_id, user_id, new_status
                 )
 
-                # Update the aggregate stats counters
                 await self.update_player_stats(user_id, old_status, new_status)
 
-                # Update the permanent event history log
                 if new_status == RsvpStatus.ACCEPTED:
-                    # If we don't have event details (because it's a new signup), fetch them.
                     event_details = current_record or await self.get_event_by_id(event_id)
                     if event_details:
                         await connection.execute(
@@ -249,16 +238,12 @@ class Database:
                             user_id, event_id, event_details['title'], event_details['event_time']
                         )
                 elif old_status == RsvpStatus.ACCEPTED:
-                    # If they changed their mind from 'Accepted', remove it from history
                     await connection.execute(
                         "DELETE FROM player_event_history WHERE user_id = $1 AND event_id = $2;",
                         user_id, event_id
                     )
     
     async def get_upcoming_events(self) -> List[Dict]:
-        """
-        Gets all upcoming and recently passed events that are NOT soft-deleted.
-        """
         query = "SELECT * FROM events WHERE deleted_at IS NULL AND COALESCE(end_time, event_time + INTERVAL '2 hours') > (NOW() AT TIME ZONE 'utc' - INTERVAL '12 hours');"
         async with self.pool.acquire() as connection:
             return [dict(row) for row in await connection.fetch(query)]
@@ -274,9 +259,6 @@ class Database:
             return dict(row) if row else None
             
     async def get_event_by_id(self, event_id: int, include_deleted: bool = False) -> Optional[Dict]:
-        """
-        Gets a single event by its ID. By default, it ignores soft-deleted events.
-        """
         query = "SELECT * FROM events WHERE event_id = $1"
         if not include_deleted:
             query += " AND deleted_at IS NULL"
@@ -294,16 +276,14 @@ class Database:
     async def update_player_stats(self, user_id: int, old_status: Optional[str], new_status: str):
         """Atomically updates the player_stats table based on an RSVP change."""
         
-        # Determine which counters to increment and decrement
         decrement_col = f"{old_status.lower()}_count" if old_status else None
         increment_col = f"{new_status.lower()}_count"
 
-        # Build the dynamic part of the query
-        update_parts = [f"{increment_col} = {increment_col} + 1"]
+        # --- FIX: Qualify column names with the table name to resolve ambiguity ---
+        update_parts = [f"{increment_col} = player_stats.{increment_col} + 1"]
         if decrement_col:
-            update_parts.append(f"{decrement_col} = GREATEST(0, {decrement_col} - 1)")
+            update_parts.append(f"{decrement_col} = GREATEST(0, player_stats.{decrement_col} - 1)")
 
-        # Update last_signup_date only on new "Accepted" RSVPs
         if new_status == RsvpStatus.ACCEPTED:
             update_parts.append("last_signup_date = (NOW() AT TIME ZONE 'utc')")
         

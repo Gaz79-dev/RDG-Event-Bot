@@ -328,9 +328,9 @@ class ReminderModal(ui.Modal, title="Event Reminder"):
         max_length=1000,
     )
 
-    def __init__(self, members_to_dm: List[discord.Member]):
+    def __init__(self, member_ids_to_dm: List[int]):
         super().__init__()
-        self.members_to_dm = members_to_dm
+        self.member_ids_to_dm = member_ids_to_dm
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -338,28 +338,29 @@ class ReminderModal(ui.Modal, title="Event Reminder"):
         success_count = 0
         fail_count = 0
 
-        for member in self.members_to_dm:
+        for member_id in self.member_ids_to_dm:
             try:
+                member = await interaction.guild.fetch_member(member_id)
                 await member.send(self.message.value)
                 success_count += 1
-            except (discord.Forbidden, discord.HTTPException):
+            except (discord.Forbidden, discord.HTTPException, discord.NotFound):
                 fail_count += 1
         
         await interaction.followup.send(
             f"Reminders sent!\n"
             f"✅ Successfully sent to {success_count} member(s).\n"
-            f"❌ Failed to send to {fail_count} member(s) (they may have DMs disabled).",
+            f"❌ Failed to send to {fail_count} member(s) (they may have DMs disabled or have left the server).",
             ephemeral=True
         )
 
 class ReminderConfirmationView(ui.View):
-    def __init__(self, members_to_dm: List[discord.Member]):
+    def __init__(self, member_ids_to_dm: List[int]):
         super().__init__(timeout=300)
-        self.members_to_dm = members_to_dm
+        self.member_ids_to_dm = member_ids_to_dm
 
     @ui.button(label="Compose & Send Reminder", style=discord.ButtonStyle.primary)
     async def send_reminder(self, interaction: discord.Interaction, button: ui.Button):
-        modal = ReminderModal(self.members_to_dm)
+        modal = ReminderModal(self.member_ids_to_dm)
         await interaction.response.send_modal(modal)
         button.disabled = True
         await interaction.edit_original_response(view=self)
@@ -705,7 +706,6 @@ class EventManagement(commands.Cog):
 
     event_group = app_commands.Group(name="event", description="Commands for creating and managing events.")
 
-    # --- FIX: Add autocomplete function for roles ---
     async def role_autocomplete(self, interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
         roles = interaction.guild.roles
         return [
@@ -778,10 +778,10 @@ class EventManagement(commands.Cog):
         event_id="The ID of the event to send reminders for.",
         role="The role to target for reminders."
     )
-    @app_commands.autocomplete(role=role_autocomplete) # --- FIX: Use the autocomplete function ---
+    @app_commands.autocomplete(role=role_autocomplete)
     @app_commands.default_permissions(administrator=True)
     async def remind(self, interaction: discord.Interaction, event_id: int, role: str):
-        await interaction.response.defer(ephemeral=True, thinking=True) # --- FIX: Defer the response to prevent timeout ---
+        await interaction.response.defer(ephemeral=True, thinking=True)
         
         try:
             role_id = int(role)
@@ -797,21 +797,20 @@ class EventManagement(commands.Cog):
 
         rsvpd_user_ids = await self.db.get_all_rsvpd_user_ids_for_event(event_id)
         
-        members_to_remind = []
+        member_ids_to_remind = []
         for member in target_role.members:
             if not member.bot and member.id not in rsvpd_user_ids:
-                members_to_remind.append(member)
+                member_ids_to_remind.append(member.id)
 
-        if not members_to_remind:
+        if not member_ids_to_remind:
             return await interaction.followup.send(
                 f"No members of the '{target_role.name}' role need a reminder for this event. They have all RSVP'd.",
                 ephemeral=True
             )
         
-        # --- FIX: Use a confirmation view with a button to open the modal ---
-        view = ReminderConfirmationView(members_to_remind)
+        view = ReminderConfirmationView(member_ids_to_remind)
         await interaction.followup.send(
-            f"Found {len(members_to_remind)} members of '{target_role.name}' who have not responded. "
+            f"Found {len(member_ids_to_remind)} members of '{target_role.name}' who have not responded. "
             f"Click the button below to compose and send them a DM reminder.",
             view=view,
             ephemeral=True

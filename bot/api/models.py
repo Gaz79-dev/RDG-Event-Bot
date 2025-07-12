@@ -105,7 +105,7 @@ class StartupTaskUpdateRequest(BaseModel):
 
 # --- Player Statistics Models ---
 class PlayerStats(BaseModel):
-    user_id: str # CHANGED: Treat user_id as a string to prevent JS number precision issues.
+    user_id: str
     display_name: str
     accepted_count: int
     tentative_count: int
@@ -114,5 +114,6 @@ class PlayerStats(BaseModel):
     days_since_last_signup: Optional[int] = None
 
 class AcceptedEvent(BaseModel):
-    title: str
+    # FIX: Changed 'title' to 'event_title' to match the database query result.
+    event_title: str
     event_time: datetime

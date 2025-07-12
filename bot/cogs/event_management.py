@@ -329,12 +329,11 @@ class ReminderModal(ui.Modal, title="Event Reminder"):
         max_length=1000,
     )
 
-    # --- CHANGE: Accept guild in __init__ ---
     def __init__(self, db: Database, job_id: uuid.UUID, guild: discord.Guild):
         super().__init__()
         self.db = db
         self.job_id = job_id
-        self.guild = guild # Store the guild object
+        self.guild = guild
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -349,7 +348,6 @@ class ReminderModal(ui.Modal, title="Event Reminder"):
 
         for member_id in member_ids_to_dm:
             try:
-                # --- CHANGE: Use self.guild, not interaction.guild ---
                 member = await self.guild.fetch_member(member_id)
                 await member.send(self.message.value)
                 success_count += 1
@@ -362,20 +360,17 @@ class ReminderModal(ui.Modal, title="Event Reminder"):
             f"❌ Failed to send to {fail_count} member(s) (they may have DMs disabled or have left the server).",
             ephemeral=True
         )
-        # Clean up the job from the database
         await self.db.delete_reminder_job(self.job_id)
 
 class ReminderConfirmationView(ui.View):
-    # --- CHANGE: Accept guild in __init__ ---
     def __init__(self, db: Database, job_id: uuid.UUID, guild: discord.Guild):
         super().__init__(timeout=300)
         self.db = db
         self.job_id = job_id
-        self.guild = guild # Store the guild object
+        self.guild = guild
 
     @ui.button(label="Compose & Send Reminder", style=discord.ButtonStyle.primary)
     async def send_reminder(self, interaction: discord.Interaction, button: ui.Button):
-        # --- CHANGE: Pass self.guild to the modal ---
         modal = ReminderModal(self.db, self.job_id, self.guild)
         await interaction.response.send_modal(modal)
 
@@ -786,6 +781,7 @@ class EventManagement(commands.Cog):
         except Exception as e:
             await interaction.followup.send(f"Event data was restored, but failed to re-post the embed: {e}")
 
+    # --- THIS IS THE COMMAND TO BE FIXED ---
     @event_group.command(name="remind", description="Send a DM reminder to members of a role who have not RSVP'd.")
     @app_commands.describe(
         event_id="The ID of the event to send reminders for.",
@@ -824,6 +820,18 @@ class EventManagement(commands.Cog):
         
         # 2. Run the logic to send the DM in a separate, non-blocking task.
         asyncio.create_task(self.dm_reminder_confirmation(interaction, target_role, member_ids_to_remind))
+        
+        # --- FIX: Use the new temporary database job architecture ---
+        job_id = uuid.uuid4()
+        await self.db.create_reminder_job(job_id, member_ids_to_remind)
+        
+        view = ReminderConfirmationView(self.db, job_id)
+        await interaction.followup.send(
+            f"Found {len(member_ids_to_remind)} members of '{target_role.name}' who have not responded. "
+            f"Click the button below to compose and send them a DM reminder.",
+            view=view,
+            ephemeral=True
+        )
 
     async def start_conversation(self, interaction: discord.Interaction, event_id: int = None):
         if interaction.user.id in self.active_conversations:

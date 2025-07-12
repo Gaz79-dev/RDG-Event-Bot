@@ -314,6 +314,14 @@ class Database:
         async with self.pool.acquire() as connection:
             return [dict(row) for row in await connection.fetch(query, user_id)]
     
+    # --- ADDITION: New function for the reminder command ---
+    async def get_all_rsvpd_user_ids_for_event(self, event_id: int) -> List[int]:
+        """Gets a list of all user IDs that have any RSVP status for a given event."""
+        query = "SELECT user_id FROM signups WHERE event_id = $1;"
+        async with self.pool.acquire() as connection:
+            records = await connection.fetch(query, event_id)
+            return [record['user_id'] for record in records]
+
     # --- Squad & Guild Config Functions ---
     async def force_unlock_all_events(self):
         query = "UPDATE events SET locked_by_user_id = NULL, locked_at = NULL WHERE locked_by_user_id IS NOT NULL;"

@@ -259,7 +259,7 @@ class PersistentEventView(ui.View):
             "Recon": os.getenv("ROLE_ID_RECON"), "Tank Commander": os.getenv("ROLE_ID_TANK_COMMANDER"),
             "Pathfinders": os.getenv("ROLE_ID_PATHFINDER"), "Artillery": os.getenv("ROLE_ID_ARTY"),
         }
-        restricted_roles_config = {k: int(v) for k, v in restricted_roles_config.items() if v and v.isdigit()}
+        restricted_roles_config = {k: int(v) for k, v in specialty_roles.items() if v and v.isdigit()}
 
         user_role_ids = {r.id for r in i.user.roles}
         available_roles = []
@@ -365,7 +365,7 @@ class ReminderConfirmationView(ui.View):
         
         # Disable the button after the modal is sent to prevent re-clicks.
         button.disabled = True
-        # Use a follow-up to edit the original message, as the primary interaction is now the modal.
+        # Use a followup to edit the original message, which is a separate action.
         await interaction.followup.edit_message(interaction.message.id, view=self)
         self.stop()
 

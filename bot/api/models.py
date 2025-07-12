@@ -64,9 +64,6 @@ class SquadMember(BaseModel):
     display_name: Optional[str] = None
     startup_task: Optional[str] = None
 
-class StartupTaskUpdateRequest(BaseModel):
-    task: Optional[str] = None
-
 class Squad(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     squad_id: int
@@ -100,6 +97,13 @@ class RoleUpdateRequest(BaseModel):
 class SquadMoveRequest(BaseModel):
     new_squad_id: int
 
+class RosterUpdateRequest(BaseModel):
+    squads: List[Squad]
+
+class StartupTaskUpdateRequest(BaseModel):
+    task: Optional[str] = None
+
+# --- Player Statistics Models ---
 class PlayerStats(BaseModel):
     user_id: int
     display_name: str
@@ -108,10 +112,6 @@ class PlayerStats(BaseModel):
     declined_count: int
     last_signup_date: Optional[datetime] = None
     days_since_last_signup: Optional[int] = None
-    new_squad_id: int
-
-class RosterUpdateRequest(BaseModel):
-    squads: List[Squad]
 
 class AcceptedEvent(BaseModel):
     title: str

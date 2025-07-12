@@ -255,12 +255,14 @@ class PersistentEventView(ui.View):
         event = await self.db.get_event_by_message_id(i.message.id)
         if not event: return await i.followup.send("Event not found.", ephemeral=True)
         
+        # --- THIS IS THE CORRECTED BLOCK ---
         restricted_roles_config = {
             "Commander": os.getenv("ROLE_ID_COMMANDER"), "Officer": os.getenv("ROLE_ID_OFFICER"),
             "Recon": os.getenv("ROLE_ID_RECON"), "Tank Commander": os.getenv("ROLE_ID_TANK_COMMANDER"),
             "Pathfinders": os.getenv("ROLE_ID_PATHFINDER"), "Artillery": os.getenv("ROLE_ID_ARTY"),
         }
-        restricted_roles_config = {k: int(v) for k, v in specialty_roles.items() if v and v.isdigit()}
+        # The line below was the source of the error. It's now corrected to use its own definition.
+        restricted_roles_config = {k: int(v) for k, v in restricted_roles_config.items() if v and v.isdigit()}
 
         user_role_ids = {r.id for r in i.user.roles}
         available_roles = []
@@ -277,9 +279,14 @@ class PersistentEventView(ui.View):
         await self.db.set_rsvp(event['event_id'], i.user.id, RsvpStatus.ACCEPTED)
         
         try:
-            view = RoleSelectionView(i.client, self.db, event['event_id'], i.message.id, i.user, available_roles)
-            await i.user.send(f"You accepted **{event['title']}**. Select your role:", view=view)
-            await i.followup.send("Check your DMs to select your role!", ephemeral=True)
+            # If available_roles is empty, this view will not be sent.
+            if not available_roles:
+                await self.db.update_signup_role(event['event_id'], i.user.id, "Unassigned", None)
+                await i.followup.send("Accepted! There were no specific roles available for you, so you have been marked as 'Unassigned'.", ephemeral=True)
+            else:
+                view = RoleSelectionView(i.client, self.db, event['event_id'], i.message.id, i.user, available_roles)
+                await i.user.send(f"You accepted **{event['title']}**. Select your role:", view=view)
+                await i.followup.send("Check your DMs to select your role!", ephemeral=True)
         except discord.Forbidden:
             await self.db.update_signup_role(event['event_id'], i.user.id, "Unassigned", None)
             await i.followup.send("Accepted, but I couldn't DM you. Role set to 'Unassigned'.", ephemeral=True)
@@ -320,9 +327,6 @@ class PersistentEventView(ui.View):
             except:
                 pass
 
-# --- REMOVED ReminderModal and ReminderConfirmationView ---
-# --- They are replaced by the new ReminderConversation class ---
-
 class ConfirmationView(ui.View):
     def __init__(self):
         super().__init__(timeout=120)
@@ -340,7 +344,6 @@ class ConfirmationView(ui.View):
         self.value = False
         self.stop()
 
-# --- ADDED: New Conversation Class for Reminders ---
 class ReminderConversation:
     def __init__(self, cog: 'EventManagement', interaction: discord.Interaction, target_role: discord.Role, member_ids: list[int]):
         self.cog = cog
@@ -363,7 +366,7 @@ class ReminderConversation:
             
             message_content = await self.ask_for_message()
             if not message_content:
-                return # Timeout or cancellation handled in the method
+                return 
 
             await self.send_reminders(message_content)
 
@@ -413,7 +416,7 @@ class ReminderConversation:
                 member = await self.guild.fetch_member(member_id)
                 await member.send(message_content)
                 success_count += 1
-                await asyncio.sleep(0.5) # Avoid rate limits
+                await asyncio.sleep(0.5)
             except (discord.Forbidden, discord.HTTPException, discord.NotFound):
                 fail_count += 1
         
@@ -862,7 +865,7 @@ class EventManagement(commands.Cog):
 
     async def start_conversation(self, interaction: discord.Interaction, event_id: int = None):
         if interaction.user.id in self.active_conversations:
-            return await interaction.response.send_message("You are already creating an event.", ephemeral=True)
+            return await interaction.response.send_message("You are already in an active conversation with me. Please finish or cancel it first.", ephemeral=True)
         try:
             await interaction.response.send_message("I've sent you a DM to start the process!", ephemeral=True)
             conv = Conversation(self, interaction, self.db, event_id)

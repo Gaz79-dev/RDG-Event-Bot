@@ -90,6 +90,13 @@ document.addEventListener('DOMContentLoaded', () => {
         renderTable(sortData(filteredStats));
     });
 
+    tableBody.addEventListener('click', (e) => {
+        const row = e.target.closest('tr');
+        if (row && row.dataset.userId) {
+            window.location.href = `/stats/player/${row.dataset.userId}`;
+        }
+    });
+
     fetch('/api/stats/engagement', { headers })
         .then(response => {
             if (!response.ok) throw new Error('Failed to fetch stats');

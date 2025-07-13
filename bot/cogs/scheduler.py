@@ -240,7 +240,7 @@ class Scheduler(commands.Cog):
         
         child_data = dict(parent_event)
         duration = parent_event['end_time'] - parent_event['event_time']
-        child_data['start_time'] = next_start_time
+        child_data['event_time'] = next_start_time
         child_data['end_time'] = next_start_time + duration
         child_data['is_recurring'] = False
         child_data['parent_event_id'] = parent_event['event_id']

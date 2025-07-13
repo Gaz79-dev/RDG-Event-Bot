@@ -324,7 +324,6 @@ class PersistentEventView(ui.View):
             except:
                 pass
 
-# --- FIX: Renamed this view to be specific to Reminders ---
 class ReminderConfirmationView(ui.View):
     def __init__(self):
         super().__init__(timeout=120)
@@ -342,7 +341,6 @@ class ReminderConfirmationView(ui.View):
         self.value = False
         self.stop()
 
-# --- FIX: Re-created the generic ConfirmationView ---
 class ConfirmationView(ui.View):
     def __init__(self):
         super().__init__(timeout=120)
@@ -396,7 +394,6 @@ class ReminderConversation:
             self.finish()
 
     async def ask_for_confirmation(self) -> bool:
-        # --- FIX: Use the specific ReminderConfirmationView ---
         view = ReminderConfirmationView()
         msg = await self.user.send(
             f"You are about to send a reminder to **{len(self.member_ids)}** members of the '{self.target_role.name}' role. Do you wish to proceed?",
@@ -671,31 +668,53 @@ class Conversation:
                 old_event_data = await self.db.get_event_by_id(self.event_id)
                 old_thread_id = old_event_data.get('thread_id') if old_event_data else None
                 
+                # --- THIS IS THE CORRECTED LOGIC BLOCK ---
                 await self.db.update_event(self.event_id, self.data)
                 embed = await create_event_embed(self.bot, self.event_id, self.db)
                 
+                # Step 1: Try to edit the existing message
                 try:
                     channel = self.bot.get_channel(self.data['channel_id']) or await self.bot.fetch_channel(self.data['channel_id'])
                     message = await channel.fetch_message(self.data['message_id'])
                     await message.edit(content=content, embed=embed, view=view)
-                    await self.user.send("Event updated successfully! The scheduler will create a new discussion channel shortly.")
-
-                    if old_thread_id:
-                        try:
-                            old_channel = self.bot.get_channel(old_thread_id) or await self.bot.fetch_channel(old_thread_id)
-                            if old_channel:
-                                await old_channel.delete(reason="Event was edited.")
-                                await self.user.send("The old discussion channel has been deleted.")
-                        except discord.NotFound:
-                            pass
-                        except Exception as e:
-                            print(f"Could not delete old discussion channel {old_thread_id}: {e}")
-                            await self.user.send("Note: I couldn't delete the old discussion channel.")
-
+                    await self.user.send("Event updated successfully!")
                 except (discord.NotFound, discord.Forbidden):
                     await self.user.send("Event details were updated, but I couldn't find or edit the original event message. It may have been deleted.")
+                    # Stop here if the message can't be edited. Do not proceed.
+                    return 
+
+                # Step 2: Delete the old thread if it exists
+                if old_thread_id:
+                    try:
+                        old_thread = self.bot.get_channel(old_thread_id) or await self.bot.fetch_channel(old_thread_id)
+                        if old_thread:
+                            await old_thread.delete(reason="Event was edited.")
+                            await self.user.send("The old discussion channel has been deleted. A new one will be created by the scheduler.")
+                    except (discord.NotFound, discord.Forbidden):
+                         pass # Ignore if thread is already gone or permissions are missing
+                    except Exception as e:
+                        print(f"Could not delete old discussion channel {old_thread_id}: {e}")
+                        await self.user.send("Note: I couldn't delete the old discussion channel.")
+
+                # Step 3: Notify attendees of the change
+                signups = await self.db.get_signups_for_event(self.event_id)
+                accepted_user_ids = [s['user_id'] for s in signups if s['rsvp_status'] == RsvpStatus.ACCEPTED]
+                
+                if accepted_user_ids:
+                    await self.user.send(f"Notifying {len(accepted_user_ids)} accepted members of the changes...")
+                    notification_message = f"Please note: The event **{self.data['title']}** has been updated. Please check the event channel for the latest details."
+                    success_count = 0
+                    for user_id in accepted_user_ids:
+                        try:
+                            user = self.bot.get_user(user_id) or await self.bot.fetch_user(user_id)
+                            await user.send(notification_message)
+                            success_count += 1
+                        except (discord.Forbidden, discord.HTTPException):
+                            pass # Ignore users who can't be DMed
+                    await self.user.send(f"Successfully notified {success_count} member(s).")
 
             else:
+                # This block handles brand new event creation.
                 event_id = await self.db.create_event(self.interaction.guild.id, self.interaction.channel.id, self.user.id, self.data)
                 embed = await create_event_embed(self.bot, event_id, self.db)
                 target_channel = self.bot.get_channel(self.interaction.channel.id)

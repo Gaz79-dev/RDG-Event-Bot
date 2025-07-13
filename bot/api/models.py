@@ -119,3 +119,15 @@ class AcceptedEvent(BaseModel):
     # --- ADDITION: Add role and subclass fields ---
     role_name: Optional[str] = None
     subclass_name: Optional[str] = None
+
+class EventUpdate(BaseModel):
+    title: str
+    description: Optional[str] = None
+    event_time: datetime
+    end_time: datetime
+    timezone: str
+    is_recurring: bool
+    recurrence_rule: Optional[str] = None
+    recreation_hours: Optional[int] = None
+    mention_role_ids: List[int] = []
+    restrict_to_role_ids: List[int] = []

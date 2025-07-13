@@ -468,7 +468,7 @@ class Conversation:
         steps = [
             ("What is the title of the event?", self.process_text, 'title'),
             (None, self.process_timezone, 'timezone'),
-            ("What is the start date and time? Please use `DD-MM-YYYY HH:MM` format.", self.process_start_time, 'start_time'),
+            ("What is the start date and time? Please use `DD-MM-YYYY HH:MM` format.", self.process_start_time, 'event_time'),
             ("What is the end date and time? Format: `DD-MM-YYYY HH:MM`.", self.process_end_time, 'end_time'),
             ("Please provide a detailed description for the event.", self.process_text, 'description'),
             (None, self.ask_is_recurring, 'is_recurring'),

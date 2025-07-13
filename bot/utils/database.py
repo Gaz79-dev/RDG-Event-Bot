@@ -165,7 +165,7 @@ class Database:
             return await connection.fetchval(
                 query, guild_id, channel_id, creator_id,
                 data.get('title'), data.get('description'),
-                data.get('start_time'), data.get('end_time'), data.get('timezone'),
+                data.get('event_time'), data.get('end_time'), data.get('timezone'),
                 data.get('is_recurring'), data.get('recurrence_rule'),
                 data.get('mention_role_ids', []), data.get('restrict_to_role_ids', []),
                 data.get('recreation_hours')
@@ -184,7 +184,7 @@ class Database:
         async with self.pool.acquire() as connection:
             await connection.execute(
                 query, data.get('title'), data.get('description'),
-                data.get('start_time'), data.get('end_time'), data.get('timezone'),
+                data.get('event_time'), data.get('end_time'), data.get('timezone'),
                 data.get('is_recurring'), data.get('recurrence_rule'),
                 data.get('mention_role_ids', []), data.get('restrict_to_role_ids', []),
                 data.get('recreation_hours'), event_id

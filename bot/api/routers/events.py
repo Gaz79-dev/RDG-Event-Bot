@@ -69,6 +69,31 @@ async def get_events(db: Database = Depends(get_db)):
     """Gets all upcoming and recently passed events."""
     return await db.get_upcoming_events()
 
+@router.get("/recurring", response_model=List[Event], dependencies=[Depends(auth.get_current_admin_user)])
+async def get_recurring_events(db: Database = Depends(get_db)):
+    """Gets all parent recurring event templates."""
+    return await db.get_recurring_parent_events()
+
+@router.get("/deleted", response_model=List[Event], dependencies=[Depends(auth.get_current_admin_user)])
+async def get_deleted_events_for_restore(db: Database = Depends(get_db)):
+    """Gets all soft-deleted events."""
+    return await db.get_deleted_events()
+
+@router.get("/{event_id}", response_model=Event, dependencies=[Depends(auth.get_current_admin_user)])
+async def get_event_details(event_id: int, db: Database = Depends(get_db)):
+    """Gets all details for a single event."""
+    event = await db.get_event_by_id(event_id, include_deleted=True)
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+    return event
+
+@router.put("/{event_id}", response_model=Event, dependencies=[Depends(auth.get_current_admin_user)])
+async def update_event_details(event_id: int, event_data: EventUpdate, db: Database = Depends(get_db)):
+    """Updates the details of a recurring event template."""
+    # The Pydantic model automatically converts the dict to the right format
+    await db.update_event(event_id, event_data.model_dump())
+    return await get_event_details(event_id, db)
+
 @router.get("/{event_id}/lock-status", response_model=EventLockStatus)
 async def get_lock_status(event_id: int, db: Database = Depends(get_db)):
     """Checks who currently has the event locked."""

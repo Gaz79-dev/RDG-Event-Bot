@@ -106,7 +106,6 @@ class Database:
                         UNIQUE(user_id, event_id)
                     );
                 """)
-                # --- ADDITION: New temporary table for reminder jobs ---
                 await connection.execute("""
                     CREATE TABLE IF NOT EXISTS reminder_jobs (
                         job_id UUID PRIMARY KEY,
@@ -157,23 +156,30 @@ class Database:
  
     # --- Event & Signup Functions ---
     async def create_event(self, guild_id: int, channel_id: int, creator_id: int, data: Dict) -> int:
+        # --- MODIFIED: Added parent_event_id to the INSERT statement ---
         query = """
-            INSERT INTO events (guild_id, channel_id, creator_id, title, description, event_time, end_time, timezone, is_recurring, recurrence_rule, mention_role_ids, restrict_to_role_ids, recreation_hours)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING event_id;
+            INSERT INTO events (guild_id, channel_id, creator_id, title, description, event_time, end_time, timezone, is_recurring, recurrence_rule, mention_role_ids, restrict_to_role_ids, recreation_hours, parent_event_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING event_id;
         """
         async with self.pool.acquire() as connection:
             return await connection.fetchval(
                 query, guild_id, channel_id, creator_id,
-                data.get('title'), data.get('description'),
-                data.get('event_time'), data.get('end_time'), data.get('timezone'),
-                data.get('is_recurring'), data.get('recurrence_rule'),
-                data.get('mention_role_ids', []), data.get('restrict_to_role_ids', []),
-                data.get('recreation_hours')
+                data.get('title'),
+                data.get('description'),
+                data.get('event_time'),
+                data.get('end_time'),
+                data.get('timezone'),
+                data.get('is_recurring'),
+                data.get('recurrence_rule'),
+                data.get('mention_role_ids', []),
+                data.get('restrict_to_role_ids', []),
+                data.get('recreation_hours'),
+                data.get('parent_event_id') # Added new parameter
             )
 
     async def update_event(self, event_id: int, data: Dict):
         """Updates an event's details in the database."""
-        # This corrected version no longer resets thread information on every edit.
+        # This version allows editing recurrence rules, for use in the new admin UI
         query = """
             UPDATE events SET
                 title = $1, description = $2, event_time = $3, end_time = $4, timezone = $5,
@@ -291,6 +297,7 @@ class Database:
                     role_name, subclass_name, user_id, event_id
                 )
 
+    # --- ADDED: New functions for the Events web page ---
     async def get_recurring_parent_events(self) -> List[Dict]:
         """Gets all parent recurring event templates."""
         query = "SELECT * FROM events WHERE is_recurring = TRUE AND parent_event_id IS NULL AND deleted_at IS NULL ORDER BY event_time DESC;"
@@ -302,7 +309,14 @@ class Database:
         query = "SELECT * FROM events WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC;"
         async with self.pool.acquire() as connection:
             return [dict(row) for row in await connection.fetch(query)]
-    
+
+    async def get_latest_child_event(self, parent_event_id: int) -> Optional[Dict]:
+        """Gets the most recent child event for a given parent to find its message_id."""
+        query = "SELECT * FROM events WHERE parent_event_id = $1 AND deleted_at IS NULL ORDER BY event_time DESC LIMIT 1;"
+        async with self.pool.acquire() as connection:
+            row = await connection.fetchrow(query, parent_event_id)
+            return dict(row) if row else None
+            
     # --- Player Statistics Functions ---
     async def update_player_stats(self, user_id: int, old_status: Optional[str], new_status: str):
         decrement_col = f"{old_status.lower()}_count" if old_status else None

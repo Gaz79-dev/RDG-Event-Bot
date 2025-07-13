@@ -444,7 +444,7 @@ class ReminderConversation:
         self.is_finished = True
         if self.user.id in self.cog.active_conversations:
             del self.cog.active_conversations[self.user.id]
-
+            
 class Conversation:
     def __init__(self, cog: 'EventManagement', interaction: discord.Interaction, db: Database, event_id: int = None):
         self.cog, self.bot, self.interaction, self.user, self.db, self.event_id = cog, cog.bot, interaction, interaction.user, db, event_id
@@ -703,13 +703,17 @@ class Conversation:
                         await self.user.send(f"⚠️ **Warning:** Could not update the thread: {e}")
 
             else:
-                # This block handles brand new event creation.
+                # --- MODIFIED: This block handles brand new event creation. ---
                 if self.data.get('is_recurring'):
+                    # Create the parent template record. It will have no message_id.
                     parent_id = await self.db.create_event(self.interaction.guild.id, self.interaction.channel.id, self.user.id, self.data)
-                    await self.user.send(f"Recurring parent template created with ID: {parent_id}. You can manage this from the Events page on the website.")
+                    await self.user.send(f"✅ Recurring parent template created (ID: {parent_id}). You can manage this from the Events page on the website.")
                     
-                    # The first child is now created by the scheduler, not here.
+                    # The first child is now created by the scheduler, which will run shortly.
+                    await self.user.send(f"⏳ The first event occurrence will be created and posted by the scheduler based on your `recreation_hours` setting.")
+
                 else:
+                    # Standard non-recurring event creation
                     event_id = await self.db.create_event(self.interaction.guild.id, self.interaction.channel.id, self.user.id, self.data)
                     embed = await create_event_embed(self.bot, event_id, self.db)
                     view = PersistentEventView(self.db)
@@ -719,9 +723,9 @@ class Conversation:
                     if target_channel:
                         msg = await target_channel.send(content=content, embed=embed, view=view)
                         await self.db.update_event_message_id(event_id, msg.id)
-                        await self.user.send(f"Event created successfully! (ID: {event_id}). Posting it now...")
+                        await self.user.send(f"✅ Event created successfully! (ID: {event_id}).")
                     else:
-                        await self.user.send("Event created, but I could not find the channel to post it in.")
+                        await self.user.send("⚠️ Event created, but I could not find the channel to post it in.")
 
         except Exception as e:
             print(f"Error finishing conversation: {e}")

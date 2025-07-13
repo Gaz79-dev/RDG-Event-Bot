@@ -173,14 +173,12 @@ class Database:
 
     async def update_event(self, event_id: int, data: Dict):
         """Updates an event's details in the database."""
-        # This version allows editing recurrence rules, for use in the new admin UI
+        # This corrected version no longer resets thread information on every edit.
         query = """
             UPDATE events SET
                 title = $1, description = $2, event_time = $3, end_time = $4, timezone = $5,
                 is_recurring = $6, recurrence_rule = $7, mention_role_ids = $8,
-                restrict_to_role_ids = $9, recreation_hours = $10,
-                thread_created = FALSE,
-                thread_id = NULL
+                restrict_to_role_ids = $9, recreation_hours = $10
             WHERE event_id = $11;
         """
         async with self.pool.acquire() as connection:

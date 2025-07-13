@@ -665,19 +665,12 @@ class Conversation:
             content = " ".join([f"<@&{rid}>" for rid in self.data.get('mention_role_ids', [])])
 
             if self.event_id:
-                # --- THIS IS THE START OF THE NEW LOGIC BLOCK ---
-                
-                # Get original thread ID before updating the database
                 old_event_data = await self.db.get_event_by_id(self.event_id)
                 old_thread_id = old_event_data.get('thread_id') if old_event_data else None
-
-                # Update the event in the database first
-                await self.db.update_event(self.event_id, self.data)
                 
-                # Create the updated embed
+                await self.db.update_event(self.event_id, self.data)
                 embed = await create_event_embed(self.bot, self.event_id, self.db)
                 
-                # Step 1: Try to edit the existing message in the event channel
                 try:
                     channel = self.bot.get_channel(self.data['channel_id']) or await self.bot.fetch_channel(self.data['channel_id'])
                     message = await channel.fetch_message(self.data['message_id'])
@@ -685,25 +678,24 @@ class Conversation:
                     await self.user.send("✅ Event embed successfully updated in the channel.")
                 except (discord.NotFound, discord.Forbidden):
                     await self.user.send("⚠️ **Warning:** The event data was updated in the database, but I couldn't find or edit the original event message in Discord. It might have been deleted.")
-                    return # Abort if we can't edit the main message
+                    return
                 
-                # Step 2: Ask about the existing thread if one exists
                 if old_thread_id:
                     confirmation_view = ConfirmationView()
-                    await self.user.send("An event thread already exists. Do you want to delete it? A new one will be created by the scheduler based on the updated time.", view=confirmation_view)
+                    await self.user.send("An event thread already exists. Do you want to delete it and create a new one later?", view=confirmation_view)
                     await confirmation_view.wait()
 
-                    if confirmation_view.value is True: # User said YES
+                    if confirmation_view.value is True:
                         try:
                             thread = await self.bot.fetch_channel(old_thread_id)
-                            await thread.delete(reason="Event was edited.")
+                            # --- THIS IS THE CORRECTED LINE ---
+                            await thread.delete()
                             await self.user.send("✅ Old event thread deleted.")
                         except Exception as e:
                             await self.user.send(f"⚠️ **Warning:** Could not delete the old thread: {e}")
-                    elif confirmation_view.value is False: # User said NO
+                    elif confirmation_view.value is False:
                         try:
                             thread = await self.bot.fetch_channel(old_thread_id)
-                            # Create an embed without buttons to post in the thread
                             update_embed = await create_event_embed(self.bot, self.event_id, self.db)
                             await thread.send(
                                 content="@everyone Please note, the event details have been updated.",
@@ -714,13 +706,11 @@ class Conversation:
                         except Exception as e:
                             await self.user.send(f"⚠️ **Warning:** Could not post an update to the old thread: {e}")
                 
-                # Step 3: Notify all RSVP'd members of the change
                 signups = await self.db.get_signups_for_event(self.event_id)
                 if signups:
                     await self.user.send(f"Notifying {len(signups)} members who have previously RSVP'd...")
-                    notification_message = f"Please note: The event **{self.data['title']}** has been updated. Please check the event channel for the latest details, as this may affect your RSVP."
+                    notification_message = f"Please note: The event **{self.data['title']}** has been updated. Please check the event channel for the latest details. This may affect your ability to attend."
                     
-                    # Create embed without buttons for the DM
                     dm_embed = await create_event_embed(self.bot, self.event_id, self.db)
                     
                     success_count = 0
@@ -733,14 +723,11 @@ class Conversation:
                             success_count += 1
                         except (discord.Forbidden, discord.HTTPException):
                             fail_count += 1
-                        await asyncio.sleep(0.5) # Avoid rate-limiting
+                        await asyncio.sleep(0.5)
                     
                     await self.user.send(f"Successfully notified {success_count} member(s). Failed to notify {fail_count}.")
-                
-                # --- END OF THE NEW LOGIC BLOCK ---
 
             else:
-                # This block handles brand new event creation.
                 event_id = await self.db.create_event(self.interaction.guild.id, self.interaction.channel.id, self.user.id, self.data)
                 embed = await create_event_embed(self.bot, event_id, self.db)
                 target_channel = self.bot.get_channel(self.interaction.channel.id)

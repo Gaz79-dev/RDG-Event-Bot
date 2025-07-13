@@ -11,7 +11,7 @@ import discord
 from bot.utils.database import Database, RsvpStatus
 from bot.api import auth, squad_logic
 from bot.api.dependencies import get_db
-from bot.api.models import Event, Signup, Squad, SquadBuildRequest, RosterUpdateRequest, SendEmbedRequest, Channel, User, EventLockStatus
+from bot.api.models import Event, Signup, Squad, SquadBuildRequest, RosterUpdateRequest, SendEmbedRequest, Channel, User, EventLockStatus, EventUpdate
 
 # Import the emoji mapping for use in the embed
 from bot.cogs.event_management import EMOJI_MAPPING

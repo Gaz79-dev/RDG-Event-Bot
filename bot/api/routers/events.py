@@ -245,10 +245,14 @@ async def send_squad_embed(request: SendEmbedRequest, db: Database = Depends(get
             event_id = first_squad['event_id']
 
     event_details = await db.get_event_by_id(event_id) if event_id else None
+    
+    # --- MODIFIED: Logic to build the new title ---
+    title_str = "Team Composition"
     event_time_str = ""
     if event_details:
         event_timestamp = int(event_details['event_time'].timestamp())
         event_time_str = f" - <t:{event_timestamp}:F>"
+        title_str = f"Team Composition - {event_details['title']}"
 
     reserves_list = []
     for squad in request.squads:
@@ -263,12 +267,10 @@ async def send_squad_embed(request: SendEmbedRequest, db: Database = Depends(get
         member_list = []
         for m in squad.members:
             emoji = EMOJI_MAPPING.get(m.assigned_role_name, "❔")
-            # --- UPDATE: Append startup task to the member line if it exists ---
             member_line = f"{emoji} {m.display_name}"
             if m.startup_task:
                 member_line += f" - **{m.startup_task}**"
             member_list.append(member_line)
-            # --- END UPDATE ---
         value = "\n".join(member_list) or "Empty"
         fields.append({
             "name": f"__**{squad.name}**__",
@@ -278,7 +280,8 @@ async def send_squad_embed(request: SendEmbedRequest, db: Database = Depends(get
 
     embed_payload = {
         "embeds": [{
-            "title": f"🛠️ Finalized Team Composition{event_time_str}",
+            # --- MODIFIED: Use the new title format ---
+            "title": f"{title_str}{event_time_str}",
             "description": "The following squads have been finalized for the event.",
             "color": 15844367,
             "fields": fields,

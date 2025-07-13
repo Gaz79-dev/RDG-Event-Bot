@@ -826,7 +826,7 @@ class EventManagement(commands.Cog):
             ephemeral=True
         )
 
-    @event_grop.command(name="restore", description="Restores a previously deleted event.")
+    @event_group.command(name="restore", description="Restores a previously deleted event.")
     @app_commands.describe(event_id="The ID of the event to restore.")
     async def restore(self, interaction: discord.Interaction, event_id: int):
         if not interaction.user.guild_permissions.administrator:

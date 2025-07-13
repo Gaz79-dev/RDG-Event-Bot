@@ -441,8 +441,18 @@ class Database:
 
     async def get_finished_events_for_cleanup(self) -> List[dict]:
         query = """
-            SELECT event_id, thread_id, message_id, channel_id FROM events
-            WHERE is_recurring = FALSE AND end_time < (NOW() AT TIME ZONE 'utc' - INTERVAL '2 hours');
+            SELECT event_id, thread_id, message_id, channel_id 
+            FROM events
+            WHERE 
+                -- The event must have finished more than 2 hours ago
+                COALESCE(end_time, event_time + INTERVAL '2 hours') < (NOW() AT TIME ZONE 'utc' - INTERVAL '2 hours')
+            AND (
+                -- It is a regular, non-recurring event
+                is_recurring = FALSE 
+                OR
+                -- OR it is a child of a recurring event (and therefore should be deleted)
+                parent_event_id IS NOT NULL
+            );
         """
         async with self.pool.acquire() as connection:
             return [dict(row) for row in await connection.fetch(query)]

@@ -76,7 +76,7 @@ class Scheduler(commands.Cog):
                 accepted_user_ids = {s['user_id'] for s in signups if s['rsvp_status'] == RsvpStatus.ACCEPTED}
 
                 # Get the list of users who ARE in the thread from Discord
-                thread_member_ids = {member.id for member in thread.members}
+                thread_member_ids = {member.id async for member in thread.fetch_members()}
 
                 # Calculate which users to add or remove
                 users_to_add = accepted_user_ids - thread_member_ids

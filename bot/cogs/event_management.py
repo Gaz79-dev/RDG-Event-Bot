@@ -255,13 +255,11 @@ class PersistentEventView(ui.View):
         event = await self.db.get_event_by_message_id(i.message.id)
         if not event: return await i.followup.send("Event not found.", ephemeral=True)
         
-        # --- THIS IS THE CORRECTED BLOCK ---
         restricted_roles_config = {
             "Commander": os.getenv("ROLE_ID_COMMANDER"), "Officer": os.getenv("ROLE_ID_OFFICER"),
             "Recon": os.getenv("ROLE_ID_RECON"), "Tank Commander": os.getenv("ROLE_ID_TANK_COMMANDER"),
             "Pathfinders": os.getenv("ROLE_ID_PATHFINDER"), "Artillery": os.getenv("ROLE_ID_ARTY"),
         }
-        # The line below was the source of the error. It's now corrected to use its own definition.
         restricted_roles_config = {k: int(v) for k, v in restricted_roles_config.items() if v and v.isdigit()}
 
         user_role_ids = {r.id for r in i.user.roles}
@@ -279,7 +277,6 @@ class PersistentEventView(ui.View):
         await self.db.set_rsvp(event['event_id'], i.user.id, RsvpStatus.ACCEPTED)
         
         try:
-            # If available_roles is empty, this view will not be sent.
             if not available_roles:
                 await self.db.update_signup_role(event['event_id'], i.user.id, "Unassigned", None)
                 await i.followup.send("Accepted! There were no specific roles available for you, so you have been marked as 'Unassigned'.", ephemeral=True)
@@ -327,18 +324,37 @@ class PersistentEventView(ui.View):
             except:
                 pass
 
-class ConfirmationView(ui.View):
+# --- FIX: Renamed this view to be specific to Reminders ---
+class ReminderConfirmationView(ui.View):
     def __init__(self):
         super().__init__(timeout=120)
         self.value = None
-        
+
     @ui.button(label="Yes, Send Reminder", style=discord.ButtonStyle.green)
     async def confirm(self, i: discord.Interaction, button: ui.Button):
         await i.response.defer()
         self.value = True
         self.stop()
-    
+
     @ui.button(label="No, Cancel", style=discord.ButtonStyle.red)
+    async def reject(self, i: discord.Interaction, button: ui.Button):
+        await i.response.defer()
+        self.value = False
+        self.stop()
+
+# --- FIX: Re-created the generic ConfirmationView ---
+class ConfirmationView(ui.View):
+    def __init__(self):
+        super().__init__(timeout=120)
+        self.value = None
+        
+    @ui.button(label="Yes", style=discord.ButtonStyle.green)
+    async def confirm(self, i: discord.Interaction, button: ui.Button):
+        await i.response.defer()
+        self.value = True
+        self.stop()
+    
+    @ui.button(label="No/Skip", style=discord.ButtonStyle.red)
     async def reject(self, i: discord.Interaction, button: ui.Button):
         await i.response.defer()
         self.value = False
@@ -380,7 +396,8 @@ class ReminderConversation:
             self.finish()
 
     async def ask_for_confirmation(self) -> bool:
-        view = ConfirmationView()
+        # --- FIX: Use the specific ReminderConfirmationView ---
+        view = ReminderConfirmationView()
         msg = await self.user.send(
             f"You are about to send a reminder to **{len(self.member_ids)}** members of the '{self.target_role.name}' role. Do you wish to proceed?",
             view=view

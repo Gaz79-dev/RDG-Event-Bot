@@ -172,6 +172,8 @@ class Database:
             )
 
     async def update_event(self, event_id: int, data: Dict):
+        """Updates an event's details in the database."""
+        # This version allows editing recurrence rules, for use in the new admin UI
         query = """
             UPDATE events SET
                 title = $1, description = $2, event_time = $3, end_time = $4, timezone = $5,
@@ -186,7 +188,8 @@ class Database:
                 query, data.get('title'), data.get('description'),
                 data.get('event_time'), data.get('end_time'), data.get('timezone'),
                 data.get('is_recurring'), data.get('recurrence_rule'),
-                data.get('mention_role_ids', []), data.get('restrict_to_role_ids', []),
+                data.get('mention_role_ids', []),
+                data.get('restrict_to_role_ids', []),
                 data.get('recreation_hours'), event_id
             )
 
@@ -290,6 +293,18 @@ class Database:
                     role_name, subclass_name, user_id, event_id
                 )
 
+    async def get_recurring_parent_events(self) -> List[Dict]:
+        """Gets all parent recurring event templates."""
+        query = "SELECT * FROM events WHERE is_recurring = TRUE AND parent_event_id IS NULL AND deleted_at IS NULL ORDER BY event_time DESC;"
+        async with self.pool.acquire() as connection:
+            return [dict(row) for row in await connection.fetch(query)]
+
+    async def get_deleted_events(self) -> List[Dict]:
+        """Gets all soft-deleted events that can be restored."""
+        query = "SELECT * FROM events WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC;"
+        async with self.pool.acquire() as connection:
+            return [dict(row) for row in await connection.fetch(query)]
+    
     # --- Player Statistics Functions ---
     async def update_player_stats(self, user_id: int, old_status: Optional[str], new_status: str):
         decrement_col = f"{old_status.lower()}_count" if old_status else None

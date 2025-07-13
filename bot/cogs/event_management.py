@@ -461,17 +461,24 @@ class Conversation:
             traceback.print_exc()
             await self.cancel()
     
+    # --- MODIFIED run_conversation ---
     async def run_conversation(self):
         steps = [
             ("What is the title of the event?", self.process_text, 'title'),
-            (None, self.process_timezone, 'timezone'),
             ("What is the start date and time? Please use `DD-MM-YYYY HH:MM` format.", self.process_start_time, 'event_time'),
             ("What is the end date and time? Format: `DD-MM-YYYY HH:MM`.", self.process_end_time, 'end_time'),
             ("Please provide a detailed description for the event.", self.process_text, 'description'),
-            (None, self.ask_is_recurring, 'is_recurring'),
             (None, self.ask_mention_roles, 'mention_role_ids'),
             (None, self.ask_restrict_roles, 'restrict_to_role_ids'),
         ]
+        
+        # Only ask about recurrence if it's a new event or a parent template
+        # This prevents changing the recurrence status of a child event
+        is_child_event = self.event_id and self.data.get('parent_event_id') is not None
+        if not is_child_event:
+            steps.insert(1, (None, self.process_timezone, 'timezone')) # Timezone is part of the template
+            steps.append((None, self.ask_is_recurring, 'is_recurring'))
+
         for prompt, processor, data_key in steps:
             if self.is_finished: break
             if not await processor(prompt, data_key):
@@ -654,6 +661,7 @@ class Conversation:
     async def ask_mention_roles(self, p, dk): return await self._ask_roles(p, dk, "Mention roles in the announcement?")
     async def ask_restrict_roles(self, p, dk): return await self._ask_roles(p, dk, "Restrict sign-ups to specific roles?")
         
+    # --- MODIFIED finish method ---
     async def finish(self):
         if self.is_finished: return
         self.is_finished = True
@@ -665,12 +673,12 @@ class Conversation:
             content = " ".join([f"<@&{rid}>" for rid in self.data.get('mention_role_ids', [])])
 
             if self.event_id:
-                old_event_data = await self.db.get_event_by_id(self.event_id)
-                old_thread_id = old_event_data.get('thread_id') if old_event_data else None
+                # --- THIS IS THE START OF THE NEW LOGIC BLOCK FOR EDITING ---
                 
                 await self.db.update_event(self.event_id, self.data)
                 embed = await create_event_embed(self.bot, self.event_id, self.db)
                 
+                # Step 1: Try to edit the existing message in the event channel
                 try:
                     channel = self.bot.get_channel(self.data['channel_id']) or await self.bot.fetch_channel(self.data['channel_id'])
                     message = await channel.fetch_message(self.data['message_id'])
@@ -678,56 +686,33 @@ class Conversation:
                     await self.user.send("✅ Event embed successfully updated in the channel.")
                 except (discord.NotFound, discord.Forbidden):
                     await self.user.send("⚠️ **Warning:** The event data was updated in the database, but I couldn't find or edit the original event message in Discord. It might have been deleted.")
-                    return
+                    return # Abort if we can't edit the main message
                 
-                if old_thread_id:
-                    confirmation_view = ConfirmationView()
-                    await self.user.send("An event thread already exists. Do you want to delete it and create a new one later?", view=confirmation_view)
-                    await confirmation_view.wait()
-
-                    if confirmation_view.value is True:
-                        try:
-                            thread = await self.bot.fetch_channel(old_thread_id)
-                            # --- THIS IS THE CORRECTED LINE ---
-                            await thread.delete()
-                            await self.user.send("✅ Old event thread deleted.")
-                        except Exception as e:
-                            await self.user.send(f"⚠️ **Warning:** Could not delete the old thread: {e}")
-                    elif confirmation_view.value is False:
-                        try:
-                            thread = await self.bot.fetch_channel(old_thread_id)
-                            update_embed = await create_event_embed(self.bot, self.event_id, self.db)
-                            await thread.send(
-                                content="@everyone Please note, the event details have been updated.",
-                                embed=update_embed,
-                                allowed_mentions=discord.AllowedMentions(everyone=True)
-                            )
-                            await self.user.send("✅ Posted an update to the existing event thread.")
-                        except Exception as e:
-                            await self.user.send(f"⚠️ **Warning:** Could not post an update to the old thread: {e}")
-                
-                signups = await self.db.get_signups_for_event(self.event_id)
-                if signups:
-                    await self.user.send(f"Notifying {len(signups)} members who have previously RSVP'd...")
-                    notification_message = f"Please note: The event **{self.data['title']}** has been updated. Please check the event channel for the latest details. This may affect your ability to attend."
-                    
-                    dm_embed = await create_event_embed(self.bot, self.event_id, self.db)
-                    
-                    success_count = 0
-                    fail_count = 0
-                    
-                    for signup in signups:
-                        try:
-                            user = self.bot.get_user(signup['user_id']) or await self.bot.fetch_user(signup['user_id'])
-                            await user.send(notification_message, embed=dm_embed)
-                            success_count += 1
-                        except (discord.Forbidden, discord.HTTPException):
-                            fail_count += 1
-                        await asyncio.sleep(0.5)
-                    
-                    await self.user.send(f"Successfully notified {success_count} member(s). Failed to notify {fail_count}.")
+                # Step 2: If a thread exists, update its name and post a notification
+                if self.data.get('thread_id'):
+                    try:
+                        thread = await self.bot.fetch_channel(self.data['thread_id'])
+                        
+                        # Construct the new thread name
+                        event_time = self.data['event_time']
+                        event_time_str = event_time.strftime('%d-%m-%Y %H:%M') + f" {event_time.tzname()}"
+                        new_thread_name = f"{self.data['title']} - {event_time_str}"
+                        
+                        await thread.edit(name=new_thread_name)
+                        
+                        # Post an update inside the thread
+                        update_embed = await create_event_embed(self.bot, self.event_id, self.db)
+                        await thread.send(
+                            content="@everyone Please note, the event details have been updated.",
+                            embed=update_embed,
+                            allowed_mentions=discord.AllowedMentions(everyone=True)
+                        )
+                        await self.user.send("✅ Renamed the event thread and posted an update.")
+                    except Exception as e:
+                        await self.user.send(f"⚠️ **Warning:** Could not rename or post an update to the thread: {e}")
 
             else:
+                # This block handles brand new event creation.
                 event_id = await self.db.create_event(self.interaction.guild.id, self.interaction.channel.id, self.user.id, self.data)
                 embed = await create_event_embed(self.bot, event_id, self.db)
                 target_channel = self.bot.get_channel(self.interaction.channel.id)
@@ -817,7 +802,7 @@ class EventManagement(commands.Cog):
     @event_group.command(name="edit", description="Edit an existing event via DM.")
     @app_commands.describe(event_id="The ID of the event to edit.")
     async def edit(self, interaction: discord.Interaction, event_id: int):
-        if not (event := await self.db.get_event_by_id(event_id)) or event['guild_id'] != interaction.guild_id:
+        if not (event := await self.db.get_event_by_id(event_id)):
             return await interaction.response.send_message("Event not found.", ephemeral=True)
         await self.start_conversation(interaction, event_id)
 
@@ -841,7 +826,7 @@ class EventManagement(commands.Cog):
             ephemeral=True
         )
 
-    @event_group.command(name="restore", description="Restores a previously deleted event.")
+    @event_grop.command(name="restore", description="Restores a previously deleted event.")
     @app_commands.describe(event_id="The ID of the event to restore.")
     async def restore(self, interaction: discord.Interaction, event_id: int):
         if not interaction.user.guild_permissions.administrator:

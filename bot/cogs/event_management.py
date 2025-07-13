@@ -445,36 +445,6 @@ class ReminderConversation:
         if self.user.id in self.cog.active_conversations:
             del self.cog.active_conversations[self.user.id]
 
-# --- ADDED: New View for the Recurring Event Control Panel ---
-class SeriesControlView(ui.View):
-    def __init__(self, event_management_cog: 'EventManagement', parent_event_id: int):
-        super().__init__(timeout=None)
-        self.cog = event_management_cog
-        self.parent_event_id = parent_event_id
-
-    @ui.button(label="Edit Series", style=discord.ButtonStyle.secondary, custom_id="series_control:edit")
-    async def edit_series(self, interaction: discord.Interaction, button: ui.Button):
-        """Starts a DM conversation to edit the parent event template."""
-        if not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message("You need admin permissions to edit this series.", ephemeral=True)
-        
-        # Start a conversation for the parent event
-        await self.cog.start_conversation(interaction, event_id=self.parent_event_id)
-
-    @ui.button(label="Delete Series", style=discord.ButtonStyle.danger, custom_id="series_control:delete")
-    async def delete_series(self, interaction: discord.Interaction, button: ui.Button):
-        """Deletes the entire recurring event series."""
-        if not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message("You need admin permissions to delete this series.", ephemeral=True)
-
-        # Re-use the existing DeleteConfirmationView for the confirmation
-        view = DeleteConfirmationView(self.cog, self.parent_event_id)
-        await interaction.response.send_message(
-            "Are you sure you want to delete this **entire recurring series**? This will delete the control panel and all past and future occurrences. This cannot be undone.",
-            view=view,
-            ephemeral=True
-        )
-
 class Conversation:
     def __init__(self, cog: 'EventManagement', interaction: discord.Interaction, db: Database, event_id: int = None):
         self.cog, self.bot, self.interaction, self.user, self.db, self.event_id = cog, cog.bot, interaction, interaction.user, db, event_id
@@ -696,7 +666,7 @@ class Conversation:
 
         try:
             if self.event_id:
-                # --- LOGIC FOR EDITING AN EXISTING EVENT ---
+                # --- THIS IS THE CORRECTED LOGIC BLOCK FOR EDITING ---
                 await self.db.update_event(self.event_id, self.data)
                 
                 embed = await create_event_embed(self.bot, self.event_id, self.db)
@@ -709,7 +679,7 @@ class Conversation:
                     await message.edit(content=content, embed=embed, view=view)
                     await self.user.send("✅ Event embed successfully updated in the channel.")
                 except (discord.NotFound, discord.Forbidden):
-                    await self.user.send("⚠️ **Warning:** The event data was updated, but I couldn't find or edit the original event message in Discord. It might have been deleted.")
+                    await self.user.send("⚠️ **Warning:** The event data was updated in the database, but I couldn't find or edit the original event message in Discord. It might have been deleted.")
                     return
 
                 if self.data.get('thread_id'):
@@ -733,43 +703,13 @@ class Conversation:
                         await self.user.send(f"⚠️ **Warning:** Could not update the thread: {e}")
 
             else:
-                # --- LOGIC FOR CREATING A NEW EVENT ---
+                # This block handles brand new event creation.
                 if self.data.get('is_recurring'):
-                    # --- NEW: Recurring event creation with Control Panel ---
-                    # 1. Create the parent template record
                     parent_id = await self.db.create_event(self.interaction.guild.id, self.interaction.channel.id, self.user.id, self.data)
-                    await self.user.send(f"Recurring parent template created with ID: {parent_id}.")
-
-                    # 2. Post the Control Panel message
-                    control_panel_view = SeriesControlView(self.cog, parent_id)
-                    control_panel_embed = discord.Embed(
-                        title=f"🔁 Recurring Series: {self.data['title']}",
-                        description=f"This is the control panel for a recurring event. Use the buttons below to manage the series.\n\n**Schedule:** `{self.data['recurrence_rule'].capitalize()}`",
-                        color=discord.Color.purple()
-                    )
-                    target_channel = self.bot.get_channel(self.interaction.channel.id)
-                    control_msg = await target_channel.send(embed=control_panel_embed, view=control_panel_view)
+                    await self.user.send(f"Recurring parent template created with ID: {parent_id}. You can manage this from the Events page on the website.")
                     
-                    # 3. Link the control panel message to the parent event
-                    await self.db.update_event_message_id(parent_id, control_msg.id)
-
-                    # 4. Create the first child event record
-                    child_data = self.data.copy()
-                    child_data['is_recurring'] = False
-                    child_data['parent_event_id'] = parent_id
-                    child_id = await self.db.create_event(self.interaction.guild.id, self.interaction.channel.id, self.user.id, child_data)
-
-                    # 5. Post the first child's signup embed
-                    child_embed = await create_event_embed(self.bot, child_id, self.db)
-                    child_view = PersistentEventView(self.db)
-                    content = " ".join([f"<@&{rid}>" for rid in child_data.get('mention_role_ids', [])])
-                    child_msg = await target_channel.send(content=content, embed=child_embed, view=child_view)
-
-                    # 6. Link the signup message to the child event
-                    await self.db.update_event_message_id(child_id, child_msg.id)
-                    await self.user.send(f"Posted the first occurrence! (ID: {child_id})")
+                    # The first child is now created by the scheduler, not here.
                 else:
-                    # --- Standard non-recurring event creation ---
                     event_id = await self.db.create_event(self.interaction.guild.id, self.interaction.channel.id, self.user.id, self.data)
                     embed = await create_event_embed(self.bot, event_id, self.db)
                     view = PersistentEventView(self.db)
@@ -809,8 +749,10 @@ class DeleteConfirmationView(ui.View):
         for item in self.children: item.disabled = True
         await interaction.response.edit_message(content="Deleting event...", view=self)
 
+        is_parent_recurring = event.get('is_recurring') and not event.get('parent_event_id')
+
         # Use hard delete for parent templates to cascade delete children
-        if event.get('is_recurring') and not event.get('parent_event_id'):
+        if is_parent_recurring:
             await self.cog.db.delete_event(self.event_id)
             # The control panel message will be deleted by the cascade
             await interaction.edit_original_response(content=f"Recurring series '{event['title']}' has been deleted.", view=None)
@@ -971,4 +913,3 @@ async def setup(bot: commands.Bot):
     cog = EventManagement(bot, bot.db)
     await bot.add_cog(cog)
     bot.add_view(PersistentEventView(bot.db))
-    bot.add_view(SeriesControlView(cog, parent_event_id=0)) # Pass dummy data for initialization

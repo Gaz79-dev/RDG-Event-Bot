@@ -7,8 +7,7 @@ from dateutil.relativedelta import relativedelta
 
 # Use relative import to go up one level to the 'bot' package root
 from ..utils.database import Database, RsvpStatus
-# --- FIX: Import the embed creator to post signups in the new thread ---
-from .event_management import create_event_embed
+from .event_management import create_event_embed, PersistentEventView
 
 class Scheduler(commands.Cog):
     """Cog for handling scheduled background tasks."""
@@ -32,7 +31,6 @@ class Scheduler(commands.Cog):
         self.sync_event_threads.cancel()
         self.process_tentatives.cancel()
 
-    #Process Tentative RSVP's for Player Stats
     @tasks.loop(hours=1)
     async def process_tentatives(self):
         """Periodically converts 'Tentative' to 'Declined' for past events."""
@@ -44,7 +42,6 @@ class Scheduler(commands.Cog):
                 return
 
             for signup in tentative_signups:
-                # This will trigger the decrement/increment logic in the database
                 await self.db.set_rsvp(signup['event_id'], signup['user_id'], RsvpStatus.DECLINED)
                 print(f"  [ProcessTentative] Converted User {signup['user_id']} to Declined for Event {signup['event_id']}.")
             
@@ -53,7 +50,6 @@ class Scheduler(commands.Cog):
             print(f"[Scheduler] FATAL ERROR in process_tentatives loop: {e}")
             traceback.print_exc()
     
-    # --- ADDITION: The new task to sync members ---
     @tasks.loop(minutes=5)
     async def sync_event_threads(self):
         """Periodically syncs thread members with the latest accepted signups."""
@@ -71,18 +67,14 @@ class Scheduler(commands.Cog):
                 thread = guild.get_thread(event['thread_id'])
                 if not thread: continue
 
-                # Get the list of users who SHOULD be in the thread from the DB
                 signups = await self.db.get_signups_for_event(event['event_id'])
                 accepted_user_ids = {s['user_id'] for s in signups if s['rsvp_status'] == RsvpStatus.ACCEPTED}
 
-                # Get the list of users who ARE in the thread from Discord
                 thread_member_ids = {member.id for member in await thread.fetch_members()}
 
-                # Calculate which users to add or remove
                 users_to_add = accepted_user_ids - thread_member_ids
                 users_to_remove = thread_member_ids - accepted_user_ids
 
-                # Add users who have newly accepted
                 for user_id in users_to_add:
                     try:
                         member = await guild.fetch_member(user_id)
@@ -91,9 +83,7 @@ class Scheduler(commands.Cog):
                     except Exception as e:
                         print(f"  [Sync:{event['event_id']}] FAILED to add member {user_id}: {e}")
                 
-                # Remove users who are no longer "Accepted"
                 for user_id in users_to_remove:
-                    # Don't let the bot remove itself from the thread
                     if user_id == self.bot.user.id:
                         continue
                     try:
@@ -116,7 +106,6 @@ class Scheduler(commands.Cog):
             print(f"[Scheduler] Found {len(events_to_process)} event(s) awaiting channel creation.")
             
             if not events_to_process:
-                print("[Scheduler] No events to process this cycle.")
                 return
 
             for event in events_to_process:
@@ -139,28 +128,23 @@ class Scheduler(commands.Cog):
             
             print(f"  [Process:{event_id}] Found parent channel: '{parent_channel.name}'.")
             
-            # Format the thread name correctly with a human-readable date
             event_time = event['event_time']
             event_time_str = event_time.strftime('%d-%m-%Y %H:%M') + f" {event_time.tzname()}"
             thread_name = f"{event['title']} - {event_time_str}"
             
             print(f"  [Process:{event_id}] Attempting to create a private thread with name '{thread_name}'...")
-            # --- FIX: Create a private thread in the channel instead of from a message ---
             discussion_thread = await parent_channel.create_thread(
                 name=thread_name,
                 type=discord.ChannelType.private_thread
             )
             print(f"  [Process:{event_id}] SUCCESS: Discord API returned a thread object. ID: {discussion_thread.id}")
 
-            # Get accepted users
             signups = await self.db.get_signups_for_event(event_id)
             accepted_user_ids = [s['user_id'] for s in signups if s['rsvp_status'] == RsvpStatus.ACCEPTED]
             
-            # --- FIX: Add accepted members to the private thread ---
             print(f"  [Process:{event_id}] Adding {len(accepted_user_ids)} members to the private thread...")
             for user_id in accepted_user_ids:
                 try:
-                    # Fetch member object to add them
                     member = await parent_channel.guild.fetch_member(user_id)
                     if member:
                         await discussion_thread.add_user(member)
@@ -170,7 +154,6 @@ class Scheduler(commands.Cog):
                     print(f"    - Error adding member {user_id} to thread: {e}")
             print(f"  [Process:{event_id}] Finished adding members.")
 
-            # Create the embed and welcome message
             event_embed = await create_event_embed(self.bot, event_id, self.db)
             welcome_message = ""
             if accepted_user_ids:
@@ -186,7 +169,6 @@ class Scheduler(commands.Cog):
             print(f"  [Process:{event_id}] SUCCESS: Event marked as created in DB.")
 
         except discord.Forbidden:
-            # --- FIX: Update permission error message ---
             print(f"  [Process:{event_id}] FAILED: PERMISSION ERROR. The bot is likely missing 'Create Private Threads' permission. The event will be re-attempted later.")
         except Exception as e:
             print(f"  [Process:{event_id}] FAILED: An unexpected error occurred. The event will be re-attempted later.")
@@ -194,49 +176,47 @@ class Scheduler(commands.Cog):
 
     @tasks.loop(minutes=5)
     async def recreate_recurring_events(self):
-        """Periodically checks for recurring events that need to be recreated."""
-        from .event_management import create_event_embed, PersistentEventView
-        
+        """Checks if a recurring event's last occurrence has finished and creates the next one."""
+        print("\n[Scheduler] Running recreate_recurring_events loop...")
         try:
             parent_events = await self.db.get_events_for_recreation()
-            for event in parent_events:
-                await self.process_event_recreation(event, create_event_embed, PersistentEventView)
+            for parent_event in parent_events:
+                await self.process_event_recreation(parent_event)
         except Exception as e:
             print(f"Error in recreate_recurring_events loop: {e}")
             traceback.print_exc()
 
-    def calculate_next_occurrence(self, last_event_time: datetime.datetime, rule: str) -> datetime.datetime:
-        """Calculates the next occurrence based on a simple rule."""
-        now = datetime.datetime.now(last_event_time.tzinfo)
-        next_occurrence = last_event_time
+    def calculate_next_occurrence(self, basis_time: datetime.datetime, rule: str) -> datetime.datetime:
+        """Calculates the next occurrence strictly based on the previous time and rule."""
+        if rule == 'daily':
+            return basis_time + relativedelta(days=1)
+        elif rule == 'weekly':
+            return basis_time + relativedelta(weeks=1)
+        elif rule == 'monthly':
+            return basis_time + relativedelta(months=1)
+        return None
+
+    async def process_event_recreation(self, parent_event: dict):
+        """Creates the next occurrence of a recurring event if the last one is finished."""
+        now = datetime.datetime.now(pytz.utc)
+        latest_child = await self.db.get_latest_child_event(parent_event['event_id'])
+
+        # This logic handles the very first occurrence after the parent is made
+        if not latest_child:
+            # Check if it's within the creation window based on the parent's time
+            recreation_window = parent_event['event_time'] - datetime.timedelta(hours=parent_event.get('recreation_hours', 168))
+            if now < recreation_window:
+                return
+        else:
+            # For all subsequent occurrences, check if the latest child has finished
+            if latest_child['end_time'] > now:
+                return
+
+        print(f"Recreating event for parent ID {parent_event['event_id']}.")
         
-        while next_occurrence <= now:
-            if rule == 'daily':
-                next_occurrence += relativedelta(days=1)
-            elif rule == 'weekly':
-                next_occurrence += relativedelta(weeks=1)
-            elif rule == 'monthly':
-                next_occurrence += relativedelta(months=1)
-            else:
-                return None
-        return next_occurrence
-
-    async def process_event_recreation(self, parent_event: dict, create_embed_func, persistent_view_class):
-        """Creates the next occurrence of a recurring event."""
-        # FIX: Add a cooldown to prevent rapid, duplicate recreations.
-        # If the event was already recreated in the last 6 hours, skip it.
-        if parent_event['last_recreated_at'] and parent_event['last_recreated_at'] > (datetime.datetime.now(pytz.utc) - datetime.timedelta(hours=6)):
-            return
-
-        next_start_time = self.calculate_next_occurrence(parent_event['event_time'], parent_event['recurrence_rule'])
+        basis_time = latest_child['event_time'] if latest_child else parent_event['event_time']
+        next_start_time = self.calculate_next_occurrence(basis_time, parent_event['recurrence_rule'])
         if not next_start_time: return
-
-        # Check against the user-defined recreation window
-        recreation_window = next_start_time - datetime.timedelta(hours=parent_event.get('recreation_hours', 24))
-        if datetime.datetime.now(next_start_time.tzinfo) < recreation_window:
-            return # It's not time to recreate this event yet.
-
-        print(f"Recreating event for parent ID {parent_event['event_id']}. Next occurrence: {next_start_time}")
         
         child_data = dict(parent_event)
         duration = parent_event['end_time'] - parent_event['event_time']
@@ -252,15 +232,14 @@ class Scheduler(commands.Cog):
             
             target_channel = self.bot.get_channel(parent_event['channel_id']) or await self.bot.fetch_channel(parent_event['channel_id'])
             
-            view = persistent_view_class(self.db)
-            embed = await create_embed_func(self.bot, child_id, self.db)
+            embed = await create_event_embed(self.bot, child_id, self.db)
+            view = PersistentEventView(self.db)
             content = " ".join([f"<@&{rid}>" for rid in parent_event.get('mention_role_ids', [])])
             
             msg = await target_channel.send(content=content, embed=embed, view=view)
             await self.db.update_event_message_id(child_id, msg.id)
-            
             await self.db.update_last_recreated_at(parent_event['event_id'])
-            print(f"Successfully recreated event. New child event ID: {child_id}")
+            print(f"Successfully created new recurring child event. New child ID: {child_id}")
             
         except Exception as e:
             print(f"Failed to process recreation for parent event {parent_event['event_id']}: {e}")
@@ -280,43 +259,40 @@ class Scheduler(commands.Cog):
         except Exception as e:
             print(f"Error in purge_deleted_events loop: {e}")
             traceback.print_exc()
-
     
     @tasks.loop(minutes=1)
     async def cleanup_finished_events(self):
-        """Runs once daily to delete old, non-recurring events and their threads."""
-        print("Running daily cleanup of old events...")
+        """Finds finished events and PERMANENTLY deletes their messages, threads and DB records."""
+        print("Running cleanup of old events...")
         try:
             events_to_delete = await self.db.get_finished_events_for_cleanup()
             for event in events_to_delete:
+                print(f"Cleaning up finished event ID: {event['event_id']}")
+                # Delete Discord assets first
                 if event.get('message_id') and event.get('channel_id'):
                     try:
                         channel = self.bot.get_channel(event['channel_id']) or await self.bot.fetch_channel(event['channel_id'])
                         message = await channel.fetch_message(event['message_id'])
                         await message.delete()
-                    except discord.NotFound:
-                        pass # It's okay if it's already gone
-                    except Exception as e:
-                        print(f"Could not delete event message for event {event['event_id']}: {e}")
+                    except discord.NotFound: pass
+                    except Exception as e: print(f"Could not delete event message for event {event['event_id']}: {e}")
 
                 if event.get('thread_id'):
                     try:
                         thread = self.bot.get_channel(event['thread_id']) or await self.bot.fetch_channel(event['thread_id'])
                         await thread.delete()
-                    except discord.NotFound:
-                        pass
-                    except Exception as e:
-                        print(f"Could not delete thread for event {event['event_id']}: {e}")
+                    except discord.NotFound: pass
+                    except Exception as e: print(f"Could not delete thread for event {event['event_id']}: {e}")
 
-                await self.db.soft_delete_event(event['event_id'])
+                # Hard delete the event from the database, which will cascade to signups and squads
+                await self.db.delete_event(event['event_id'])
             
             if len(events_to_delete) > 0:
-                print(f"Daily cleanup finished. Removed {len(events_to_delete)} old events.")
+                print(f"Cleanup finished. Permanently removed {len(events_to_delete)} old events.")
         except Exception as e:
             print(f"Error in cleanup_finished_events loop: {e}")
             traceback.print_exc()
 
-    # --- ADDITION: Add the before_loop waiter for the new task ---
     @process_tentatives.before_loop
     @sync_event_threads.before_loop
     @create_event_threads.before_loop

@@ -73,3 +73,8 @@ async def stats_page(request: Request):
 async def player_detail_page(request: Request, user_id: int):
     # We can pass the user_id to the template if needed, but JS will handle fetching
     return templates.TemplateResponse("player_detail.html", {"request": request, "user_id": user_id})
+
+@app.get("/events", tags=["HTML"], summary="Serves the event management page")
+async def events_page(request: Request):
+    return templates.TemplateResponse("events.html", {"request": request})
+    

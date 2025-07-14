@@ -99,6 +99,7 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Function to convert UTC ISO string to local datetime-local input format
     const toLocalISOString = (dateString) => {
+        if (!dateString) return '';
         const date = new Date(dateString);
         const tzOffset = date.getTimezoneOffset() * 60000;
         const localISOTime = (new Date(date - tzOffset)).toISOString().slice(0, 16);

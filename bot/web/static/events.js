@@ -9,6 +9,18 @@ document.addEventListener('DOMContentLoaded', () => {
         'Content-Type': 'application/json'
     };
 
+    const CURATED_TIMEZONES = {
+        "USA / Canada": [
+            "US/Pacific", "US/Mountain", "US/Central", "US/Eastern",
+            "Canada/Atlantic", "US/Alaska", "US/Hawaii"
+        ],
+        "UK / Europe": [
+            "Europe/London", "Europe/Paris", "Europe/Berlin", 
+            "Europe/Helsinki", "Europe/Moscow"
+        ],
+        "Other": ["UTC"]
+    };
+
     // Page sections and buttons
     const recurringView = document.getElementById('recurring-events-view');
     const deletedView = document.getElementById('deleted-events-view');
@@ -120,7 +132,25 @@ document.addEventListener('DOMContentLoaded', () => {
                 document.getElementById('edit-description').value = event.description || '';
                 document.getElementById('edit-event-time').value = toLocalISOString(event.event_time);
                 document.getElementById('edit-end-time').value = toLocalISOString(event.end_time);
-                document.getElementById('edit-timezone').value = event.timezone;
+
+                // --- New logic to populate timezone dropdown ---
+                const timezoneSelect = document.getElementById('edit-timezone');
+                timezoneSelect.innerHTML = ''; // Clear previous options
+                for (const region in CURATED_TIMEZONES) {
+                    const optgroup = document.createElement('optgroup');
+                    optgroup.label = region;
+                    CURATED_TIMEZONES[region].forEach(tz => {
+                        const option = document.createElement('option');
+                        option.value = tz;
+                        option.textContent = tz;
+                        if (event.timezone === tz) {
+                            option.selected = true;
+                        }
+                        optgroup.appendChild(option);
+                    });
+                    timezoneSelect.appendChild(optgroup);
+                }
+                
                 document.getElementById('edit-recurrence-rule').value = event.recurrence_rule;
                 document.getElementById('edit-recreation-hours').value = event.recreation_hours;
 

@@ -493,7 +493,6 @@ class Conversation:
         
         self.data = dict(event_data)
         
-        # Define the mapping from user choice to data key and processor function
         edit_options = {
             "1": ("Title", 'title', self.process_text),
             "2": ("Start Time", 'event_time', self.process_start_time),
@@ -503,7 +502,6 @@ class Conversation:
             "6": ("Restrict Roles", 'restrict_to_role_ids', self.ask_restrict_roles),
         }
         
-        # Recurring options are only available for parent events
         is_child_event = self.data.get('parent_event_id') is not None
         if not is_child_event:
             edit_options["7"] = ("Timezone", 'timezone', self.process_timezone)
@@ -649,9 +647,9 @@ class Conversation:
 
     async def ask_is_recurring(self, prompt, data_key):
         view = ConfirmationView()
-        current_val_text = "Yes" if self.data.get(data_key) else "No"
-        await self.user.send(f"Is this a recurring event? (Current: **{current_val_text}**)", view=view)
+        msg = await self.user.send("Is this a recurring event?", view=view)
         await view.wait()
+        await msg.edit(content=msg.content, view=None)
         if view.value is None:
             await self.user.send("Timed out.")
             return False
@@ -697,8 +695,10 @@ class Conversation:
 
     async def _ask_roles(self, prompt, data_key, question):
         view = ConfirmationView()
-        await self.user.send(question, view=view)
+        msg = await self.user.send(question, view=view)
         await view.wait()
+        await msg.edit(content=msg.content, view=None)
+
         if view.value is None: return False
 
         if view.value:
@@ -743,27 +743,58 @@ class Conversation:
             if self.event_id:
                 await self.db.update_event(self.event_id, self.data)
                 
-                # Try to find the original message and update it
+                # Update the main event embed
                 try:
-                    # For recurring parent events, find the latest child to get message details
                     event_for_message = self.data
                     if self.data.get('is_recurring') and not self.data.get('parent_event_id'):
                         latest_child = await self.db.get_latest_child_event(self.event_id)
-                        if latest_child:
-                            event_for_message = latest_child
-
-                    channel = self.bot.get_channel(event_for_message['channel_id']) or await self.bot.fetch_channel(event_for_message['channel_id'])
-                    message = await channel.fetch_message(event_for_message['message_id'])
+                        event_for_message = latest_child if latest_child else self.data
                     
-                    embed = await create_event_embed(self.bot, self.event_id, self.db)
-                    view = PersistentEventView(self.db)
-                    content = " ".join([f"<@&{rid}>" for rid in self.data.get('mention_role_ids', [])])
-                    
-                    await message.edit(content=content, embed=embed, view=view)
-                    await self.user.send("✅ Event embed successfully updated in the channel.")
+                    if 'channel_id' in event_for_message and 'message_id' in event_for_message:
+                        channel = self.bot.get_channel(event_for_message['channel_id']) or await self.bot.fetch_channel(event_for_message['channel_id'])
+                        message = await channel.fetch_message(event_for_message['message_id'])
+                        embed = await create_event_embed(self.bot, self.event_id, self.db)
+                        view = PersistentEventView(self.db)
+                        content = " ".join([f"<@&{rid}>" for rid in self.data.get('mention_role_ids', [])])
+                        await message.edit(content=content, embed=embed, view=view)
+                        await self.user.send("✅ Event embed successfully updated in the channel.")
+                    else:
+                        await self.user.send("✅ Event data updated, but no message was found to edit.")
 
-                except (discord.NotFound, discord.Forbidden, KeyError):
-                    await self.user.send("✅ Event data was updated in the database, but I couldn't find or edit the original event message.")
+                except (discord.NotFound, discord.Forbidden, KeyError) as e:
+                    print(f"Error updating main embed: {e}")
+                    await self.user.send("⚠️ Event data was updated, but I couldn't find or edit the original event message.")
+                
+                update_embed = await create_event_embed(self.bot, self.event_id, self.db)
+
+                # Update the thread
+                if self.data.get('thread_id'):
+                    try:
+                        thread = await self.bot.fetch_channel(self.data['thread_id'])
+                        event_time = self.data['event_time']
+                        event_time_str = event_time.strftime('%d-%m-%Y %H:%M') + f" {event_time.tzname()}"
+                        new_thread_name = f"{self.data['title']} - {event_time_str}"
+                        await thread.edit(name=new_thread_name)
+                        await thread.send(content="@everyone Please note, the event details have been updated.", embed=update_embed, allowed_mentions=discord.AllowedMentions(everyone=True))
+                        await self.user.send("✅ Renamed the event thread and posted an update.")
+                    except Exception as e:
+                        await self.user.send(f"⚠️ Could not update the thread: {e}")
+
+                # Notify attendees
+                signups = await self.db.get_signups_for_event(self.event_id)
+                accepted_ids = [s['user_id'] for s in signups if s['rsvp_status'] == RsvpStatus.ACCEPTED]
+                if accepted_ids:
+                    await self.user.send(f"Now sending a DM to {len(accepted_ids)} accepted attendee(s)...")
+                    success_count = 0
+                    for user_id in accepted_ids:
+                        try:
+                            member = self.interaction.guild.get_member(user_id) or await self.interaction.guild.fetch_member(user_id)
+                            await member.send(f"Please note that the event **{self.data['title']}** has been updated.", embed=update_embed)
+                            success_count += 1
+                        except (discord.Forbidden, discord.NotFound):
+                            continue # Ignore users who can't be DMed
+                    await self.user.send(f"✅ Successfully notified {success_count}/{len(accepted_ids)} attendees.")
+
             else:
                 # This block handles brand new event creation.
                 if self.data.get('is_recurring'):
@@ -812,14 +843,11 @@ class DeleteConfirmationView(ui.View):
 
         is_parent_recurring = event.get('is_recurring') and not event.get('parent_event_id')
 
-        # Use hard delete for parent templates to cascade delete children
         if is_parent_recurring:
             await self.cog.db.delete_event(self.event_id)
-            # The control panel message will be deleted by the cascade
             await interaction.edit_original_response(content=f"Recurring series '{event['title']}' has been deleted.", view=None)
             return
 
-        # Normal soft delete for single events
         if event.get('message_id') and event.get('channel_id'):
             try:
                 channel = self.cog.bot.get_channel(event['channel_id']) or await self.cog.bot.fetch_channel(event['channel_id'])
@@ -969,7 +997,6 @@ class EventManagement(commands.Cog):
             conv = Conversation(self, interaction, self.db, event_id)
             self.active_conversations[interaction.user.id] = conv
             
-            # Choose the correct starting point based on the mode
             if mode == 'create':
                 asyncio.create_task(conv.start_creation())
             elif mode == 'edit':
@@ -979,6 +1006,7 @@ class EventManagement(commands.Cog):
             await interaction.followup.send("I couldn't send you a DM. Please check your privacy settings.", ephemeral=True)
 
 async def setup(bot: commands.Bot):
+    """Sets up the event management cog."""
     cog = EventManagement(bot, bot.db)
     await bot.add_cog(cog)
     bot.add_view(PersistentEventView(bot.db))

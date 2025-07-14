@@ -551,7 +551,8 @@ class Conversation:
             
             if value is not None:
                 if key in ['event_time', 'end_time'] and isinstance(value, datetime.datetime):
-                    display_value = discord.utils.format_dt(value, style='F')
+                    # Use a human-readable format instead of discord's timestamp
+                    display_value = value.strftime('%d-%m-%Y %H:%M')
                 elif key in ['mention_role_ids', 'restrict_to_role_ids']:
                     role_names = [r.name for r_id in value if (r := guild.get_role(r_id))]
                     display_value = ", ".join(role_names) if role_names else "None"
@@ -750,7 +751,7 @@ class Conversation:
                         latest_child = await self.db.get_latest_child_event(self.event_id)
                         event_for_message = latest_child if latest_child else self.data
                     
-                    if 'channel_id' in event_for_message and 'message_id' in event_for_message:
+                    if 'channel_id' in event_for_message and event_for_message.get('message_id'):
                         channel = self.bot.get_channel(event_for_message['channel_id']) or await self.bot.fetch_channel(event_for_message['channel_id'])
                         message = await channel.fetch_message(event_for_message['message_id'])
                         embed = await create_event_embed(self.bot, self.event_id, self.db)
@@ -792,7 +793,7 @@ class Conversation:
                             await member.send(f"Please note that the event **{self.data['title']}** has been updated.", embed=update_embed)
                             success_count += 1
                         except (discord.Forbidden, discord.NotFound):
-                            continue # Ignore users who can't be DMed
+                            continue
                     await self.user.send(f"✅ Successfully notified {success_count}/{len(accepted_ids)} attendees.")
 
             else:

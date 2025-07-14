@@ -323,6 +323,63 @@ class PersistentEventView(ui.View):
                 await i.followup.send("An error occurred while processing your RSVP. Please try again.", ephemeral=True)
             except:
                 pass
+    
+    # --- START: New Admin Buttons ---
+    @ui.button(label="Edit", style=discord.ButtonStyle.primary, custom_id="persistent_view:edit_event", row=2)
+    async def edit_event_button(self, interaction: discord.Interaction, button: ui.Button):
+        """A button to trigger the event editing flow."""
+        # This callback is executed when the button is clicked.
+
+        # 1. Permission Check
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("You must be an administrator to edit events.", ephemeral=True)
+            return
+
+        # 2. Find the Event Management Cog
+        # We need the cog to access the start_conversation method.
+        event_cog = interaction.client.get_cog('EventManagement')
+        if not event_cog:
+            await interaction.response.send_message("An error occurred. The event management module may be offline.", ephemeral=True)
+            return
+            
+        # 3. Get the Event ID from the message
+        event = await self.db.get_event_by_message_id(interaction.message.id)
+        if not event:
+            await interaction.response.send_message("This event could not be found in the database.", ephemeral=True)
+            return
+
+        # 4. Start the existing edit conversation flow
+        await event_cog.start_conversation(interaction, mode='edit', event_id=event['event_id'])
+
+    @ui.button(label="Delete", style=discord.ButtonStyle.danger, custom_id="persistent_view:delete_event", row=2)
+    async def delete_event_button(self, interaction: discord.Interaction, button: ui.Button):
+        """A button to trigger the event deletion flow."""
+        # 1. Permission Check
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("You must be an administrator to delete events.", ephemeral=True)
+            return
+
+        # 2. Find the Event Management Cog
+        event_cog = interaction.client.get_cog('EventManagement')
+        if not event_cog:
+            await interaction.response.send_message("An error occurred. The event management module may be offline.", ephemeral=True)
+            return
+            
+        # 3. Get the Event ID from the message
+        event = await self.db.get_event_by_message_id(interaction.message.id)
+        if not event:
+            await interaction.response.send_message("This event could not be found in the database.", ephemeral=True)
+            return
+
+        # 4. Trigger the existing delete confirmation view
+        view = DeleteConfirmationView(event_cog, event['event_id'])
+        await interaction.response.send_message(
+            f"Are you sure you want to delete the event **{event['title']}**?",
+            view=view,
+            ephemeral=True
+        )
+    # --- END: New Admin Buttons ---
+
 
 class ReminderConfirmationView(ui.View):
     def __init__(self):
@@ -551,20 +608,8 @@ class Conversation:
             
             if value is not None:
                 if key in ['event_time', 'end_time'] and isinstance(value, datetime.datetime):
-                    # --- START: FIX ---
-                    # 1. Get the target timezone, default to UTC if not set
-                    try:
-                        target_tz_str = self.data.get('timezone', 'UTC')
-                        target_tz = pytz.timezone(target_tz_str)
-                    except pytz.UnknownTimeZoneError:
-                        target_tz = pytz.utc
-                    
-                    # 2. Convert the UTC datetime object from the DB to the target timezone
-                    local_time = value.astimezone(target_tz)
-                    
-                    # 3. Format the new, local datetime object into the desired string
-                    display_value = local_time.strftime('%d-%m-%Y %H:%M')
-                    # --- END: FIX ---
+                    # --- This is the corrected line ---
+                    display_value = f"{discord.utils.format_dt(value, style='F')}"
                 elif key in ['mention_role_ids', 'restrict_to_role_ids']:
                     role_names = [r.name for r_id in value if (r := guild.get_role(r_id))]
                     display_value = ", ".join(role_names) if role_names else "None"
@@ -785,6 +830,7 @@ class Conversation:
                     try:
                         thread = await self.bot.fetch_channel(self.data['thread_id'])
                         event_time = self.data['event_time']
+                        # Format the date as "MMM DD" (e.g., Aug 09)
                         date_str = event_time.strftime('%b %d')
                         new_thread_name = f"{self.data['title']} - {date_str}"
                         await thread.edit(name=new_thread_name)

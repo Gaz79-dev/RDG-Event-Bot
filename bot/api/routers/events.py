@@ -228,7 +228,8 @@ async def get_guild_channels():
             for c in all_channels:
                 if c['type'] == 0: # GUILD_TEXT
                     category_name = categories.get(c.get('parent_id'))
-                    processed_list.append(Channel(id=c['id'], name=c['name'], category=category_name))
+                    # --- THIS IS THE FIX: Explicitly convert the ID to a string ---
+                    processed_list.append(Channel(id=str(c['id']), name=c['name'], category=category_name))
             
             # Sort the list by category, then by name
             return sorted(processed_list, key=lambda c: (c.category or ' ', c.name))

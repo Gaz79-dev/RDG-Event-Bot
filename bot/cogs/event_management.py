@@ -328,15 +328,12 @@ class PersistentEventView(ui.View):
     @ui.button(label="Edit", style=discord.ButtonStyle.primary, custom_id="persistent_view:edit_event", row=2)
     async def edit_event_button(self, interaction: discord.Interaction, button: ui.Button):
         """A button to trigger the event editing flow."""
-        # This callback is executed when the button is clicked.
-
         # 1. Permission Check
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("You must be an administrator to edit events.", ephemeral=True)
             return
 
         # 2. Find the Event Management Cog
-        # We need the cog to access the start_conversation method.
         event_cog = interaction.client.get_cog('EventManagement')
         if not event_cog:
             await interaction.response.send_message("An error occurred. The event management module may be offline.", ephemeral=True)
@@ -616,12 +613,13 @@ class Conversation:
                     except pytz.UnknownTimeZoneError:
                         # Fallback to UTC if the timezone is somehow invalid.
                         target_tz = pytz.utc
+                    
                     # Convert the stored UTC time to the event's original timezone.
                     local_time = value.astimezone(target_tz)
+                    
                     # Format the now-local time into the desired human-readable string.
                     display_value = local_time.strftime('%d-%m-%Y %H:%M')
                     # --- END: Timezone Formatting Fix ---
-                    display_value = f"{discord.utils.format_dt(value, style='F')}"
                 elif key in ['mention_role_ids', 'restrict_to_role_ids']:
                     role_names = [r.name for r_id in value if (r := guild.get_role(r_id))]
                     display_value = ", ".join(role_names) if role_names else "None"

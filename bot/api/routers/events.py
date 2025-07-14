@@ -211,7 +211,8 @@ async def get_guild_channels():
             for c in all_channels:
                 if c['type'] == 0: # GUILD_TEXT
                     category_name = categories.get(c.get('parent_id'))
-                    processed_list.append(Channel(id=c['id'], name=c['name'], category=category_name))
+                    # --- FIX: Explicitly convert ID to a string ---
+                    processed_list.append(Channel(id=str(c['id']), name=c['name'], category=category_name))
             
             # Process active threads
             for t in active_threads:
@@ -219,7 +220,8 @@ async def get_guild_channels():
                     category_name = categories.get(t.get('parent_id'))
                     # Add a prefix to distinguish threads in the list
                     thread_name = f"└ Thread: {t['name']}"
-                    processed_list.append(Channel(id=t['id'], name=thread_name, category=category_name))
+                    # --- FIX: Explicitly convert ID to a string here as well ---
+                    processed_list.append(Channel(id=str(t['id']), name=thread_name, category=category_name))
 
             # Sort the list: top-level channels first, then by category, then by name
             return sorted(processed_list, key=lambda c: (c.category or ' ', c.name))

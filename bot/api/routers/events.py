@@ -79,6 +79,55 @@ async def get_deleted_events_for_restore(db: Database = Depends(get_db)):
     """Gets all soft-deleted events."""
     return await db.get_deleted_events()
 
+@router.get("/channels") # <-- REMOVED response_model=List[Channel]
+async def get_guild_channels():
+    """Gets a list of text channels and active threads from the Discord server."""
+    if not BOT_TOKEN or not GUILD_ID:
+        raise HTTPException(status_code=500, detail="Bot token or Guild ID not configured on server.")
+    
+    url_channels = f"https://discord.com/api/v10/guilds/{GUILD_ID}/channels"
+    url_threads = f"https://discord.com/api/v10/guilds/{GUILD_ID}/threads/active"
+    headers = {"Authorization": f"Bot {BOT_TOKEN}"}
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            # Fetch both channels and active threads in parallel
+            res_channels_task = client.get(url_channels, headers=headers)
+            res_threads_task = client.get(url_threads, headers=headers)
+            res_channels, res_threads = await asyncio.gather(res_channels_task, res_threads_task)
+
+            res_channels.raise_for_status()
+            res_threads.raise_for_status()
+
+            all_channels = res_channels.json()
+            active_threads = res_threads.json().get('threads', [])
+
+            # Create a map of category IDs to names
+            categories = {c['id']: c['name'] for c in all_channels if c['type'] == 4}
+
+            processed_list = []
+            # Process standard text channels
+            for c in all_channels:
+                if c['type'] == 0: # GUILD_TEXT
+                    category_name = categories.get(c.get('parent_id'))
+                    # --- FIX: Return a simple dictionary instead of a Pydantic model ---
+                    processed_list.append({"id": str(c['id']), "name": c['name'], "category": category_name})
+            
+            # Process active threads
+            for t in active_threads:
+                if t['type'] in [11, 12]: # PUBLIC_THREAD or PRIVATE_THREAD
+                    category_name = categories.get(t.get('parent_id'))
+                    thread_name = f"└ Thread: {t['name']}"
+                    # --- FIX: Return a simple dictionary instead of a Pydantic model ---
+                    processed_list.append({"id": str(t['id']), "name": thread_name, "category": category_name})
+
+            # Sort the list: top-level channels first, then by category, then by name
+            return sorted(processed_list, key=lambda c: (c.get('category') or ' ', c.get('name')))
+            
+        except Exception as e:
+            print(f"Error fetching channels from Discord API: {e}")
+            raise HTTPException(status_code=502, detail="Failed to fetch channels from Discord.")
+
 @router.get("/{event_id}", response_model=Event, dependencies=[Depends(auth.get_current_admin_user)])
 async def get_event_details(event_id: int, db: Database = Depends(get_db)):
     """Gets all details for a single event."""
@@ -204,58 +253,6 @@ async def refresh_event_roster(event_id: int, request: RosterUpdateRequest, db: 
                     await db.add_squad_member(reserves_squad['squad_id'], user_id, role_name)
 
     return await db.get_squads_with_members(event_id)
-
-# In bot/api/routers/events.py
-# In bot/api/routers/events.py, find and replace the entire get_guild_channels function.
-
-@router.get("/channels") # <-- REMOVED response_model=List[Channel]
-async def get_guild_channels():
-    """Gets a list of text channels and active threads from the Discord server."""
-    if not BOT_TOKEN or not GUILD_ID:
-        raise HTTPException(status_code=500, detail="Bot token or Guild ID not configured on server.")
-    
-    url_channels = f"https://discord.com/api/v10/guilds/{GUILD_ID}/channels"
-    url_threads = f"https://discord.com/api/v10/guilds/{GUILD_ID}/threads/active"
-    headers = {"Authorization": f"Bot {BOT_TOKEN}"}
-    
-    async with httpx.AsyncClient() as client:
-        try:
-            # Fetch both channels and active threads in parallel
-            res_channels_task = client.get(url_channels, headers=headers)
-            res_threads_task = client.get(url_threads, headers=headers)
-            res_channels, res_threads = await asyncio.gather(res_channels_task, res_threads_task)
-
-            res_channels.raise_for_status()
-            res_threads.raise_for_status()
-
-            all_channels = res_channels.json()
-            active_threads = res_threads.json().get('threads', [])
-
-            # Create a map of category IDs to names
-            categories = {c['id']: c['name'] for c in all_channels if c['type'] == 4}
-
-            processed_list = []
-            # Process standard text channels
-            for c in all_channels:
-                if c['type'] == 0: # GUILD_TEXT
-                    category_name = categories.get(c.get('parent_id'))
-                    # --- FIX: Return a simple dictionary instead of a Pydantic model ---
-                    processed_list.append({"id": str(c['id']), "name": c['name'], "category": category_name})
-            
-            # Process active threads
-            for t in active_threads:
-                if t['type'] in [11, 12]: # PUBLIC_THREAD or PRIVATE_THREAD
-                    category_name = categories.get(t.get('parent_id'))
-                    thread_name = f"└ Thread: {t['name']}"
-                    # --- FIX: Return a simple dictionary instead of a Pydantic model ---
-                    processed_list.append({"id": str(t['id']), "name": thread_name, "category": category_name})
-
-            # Sort the list: top-level channels first, then by category, then by name
-            return sorted(processed_list, key=lambda c: (c.get('category') or ' ', c.get('name')))
-            
-        except Exception as e:
-            print(f"Error fetching channels from Discord API: {e}")
-            raise HTTPException(status_code=502, detail="Failed to fetch channels from Discord.")
 
 @router.post("/send-embed", status_code=204, dependencies=[Depends(check_event_lock)])
 async def send_squad_embed(request: SendEmbedRequest, db: Database = Depends(get_db)):

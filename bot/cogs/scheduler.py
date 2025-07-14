@@ -128,9 +128,12 @@ class Scheduler(commands.Cog):
             
             print(f"  [Process:{event_id}] Found parent channel: '{parent_channel.name}'.")
             
+            # --- START: Updated Naming Convention ---
             event_time = event['event_time']
-            event_time_str = event_time.strftime('%d-%m-%Y %H:%M') + f" {event_time.tzname()}"
-            thread_name = f"{event['title']} - {event_time_str}"
+            # Format the date as "Mon Day" (e.g., Aug 09)
+            date_str = event_time.strftime('%b %d')
+            thread_name = f"{event['title']} - {date_str}"
+            # --- END: Updated Naming Convention ---
             
             print(f"  [Process:{event_id}] Attempting to create a private thread with name '{thread_name}'...")
             discussion_thread = await parent_channel.create_thread(

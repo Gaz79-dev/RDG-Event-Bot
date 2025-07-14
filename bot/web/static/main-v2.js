@@ -55,19 +55,42 @@ document.addEventListener('DOMContentLoaded', () => {
         "Bottom Left Garrison", "Bottom Middle Garrison", "Bottom Right Garrison"
     ];
 
-    // --- UTILITY FUNCTIONS ---
-    const handleApiError = (response) => {
+    // --- MODIFIED: Enhanced API Error Handler ---
+    const handleApiError = async (response) => {
+        if (response.ok) {
+            return false; // Not an error
+        }
+
         if (response.status === 401) {
             localStorage.removeItem('accessToken');
             window.location.href = '/login';
             return true;
         }
-        if (response.status === 423) { return false; }
-        if (!response.ok) {
-            console.error('API request failed:', response);
-            return true;
+
+        if (response.status === 423) { // Let the calling function handle lock errors specifically
+            return false;
         }
-        return false;
+
+        // For all other errors, log the details from the response body.
+        console.error(`API request to ${response.url} failed with status: ${response.status}`);
+        try {
+            const errorData = await response.json(); // Await the JSON body
+            console.error("Server error details:", JSON.stringify(errorData, null, 2));
+            const detail = errorData.detail || 'An unknown error occurred. Check the console.';
+            
+            // If it's a validation error, detail is usually an array of objects.
+            if (Array.isArray(detail)) {
+                const errorMsg = detail.map(err => `${err.loc.join(' -> ')}: ${err.msg}`).join('\n');
+                alert(`A data validation error occurred:\n${errorMsg}`);
+            } else {
+                alert(`An error occurred: ${detail}`);
+            }
+        } catch (e) {
+            // This catch block handles cases where the response body is not valid JSON
+            console.error("Could not parse error response as JSON.", e);
+            alert(`An API error occurred (Status: ${response.status}).`);
+        }
+        return true; // Indicate an error occurred
     };
 
     const createEmojiHtml = (emojiString) => {
@@ -106,7 +129,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 return false;
             }
-            if (handleApiError(response)) return false;
+            if (await handleApiError(response)) return false;
             setLockedState(false);
             if (lockInterval) clearInterval(lockInterval);
             lockInterval = setInterval(() => { fetch(`/api/events/${eventId}/lock`, { method: 'POST', headers }); }, 60000);
@@ -147,7 +170,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 headers: { ...headers, 'Content-Type': 'application/json' },
                 body: JSON.stringify(buildRequest)
             });
-            if (handleApiError(response)) return;
+            if (await handleApiError(response)) return;
             renderWorkshop(await response.json());
         } catch (error) {
             alert('Error building squads.');
@@ -168,7 +191,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 headers: { ...headers, 'Content-Type': 'application/json' },
                 body: JSON.stringify({ squads: currentSquads })
             });
-            if (handleApiError(response)) return;
+            if (await handleApiError(response)) return;
             renderWorkshop(await response.json());
             alert('Roster has been updated!');
         } catch (error) {
@@ -214,15 +237,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 body: JSON.stringify({ channel_id: selectedChannelId, squads: currentSquads })
             });
             
-            if (!response.ok) {
-                if (response.status === 422) {
-                    const errorData = await response.json();
-                    console.error("--- 422 VALIDATION ERROR ---");
-                    console.error("The server rejected the data. Details:", JSON.stringify(errorData, null, 2));
-                    alert("A data validation error occurred. See the F12 console for the exact details.");
-                } else {
-                     alert('An API error occurred. Please check the browser console for details.');
-                }
+            if (await handleApiError(response)) {
                 throw new Error(`Server responded with status: ${response.status}`);
             }
             
@@ -285,7 +300,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 headers: { ...headers, 'Content-Type': 'application/json' },
                 body: JSON.stringify({ task: task })
             });
-            if (handleApiError(response)) return;
+            if (await handleApiError(response)) return;
             
             const memberEl = document.querySelector(`[data-member-id='${memberId}']`);
             if (memberEl) {
@@ -313,7 +328,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 headers: { ...headers, 'Content-Type': 'application/json' },
                 body: JSON.stringify({ new_role_name: newRole, event_id: parseInt(eventId) })
             });
-            if (handleApiError(response)) return;
+            if (await handleApiError(response)) return;
             
             const memberEl = document.querySelector(`[data-member-id='${memberId}']`);
             if (memberEl) {
@@ -321,8 +336,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 memberEl.querySelector('.assigned-role-text').textContent = newRole;
             }
             editModal.classList.add('hidden');
-
-            // --- FIX: Re-fetch and display the main roster to reflect the role change ---
             await fetchAndDisplayRoster(eventId);
 
         } catch (err) { alert("Error: Could not update role."); }
@@ -335,7 +348,7 @@ document.addEventListener('DOMContentLoaded', () => {
         fetch('/api/events', { headers }),
         fetch('/api/squads/emojis', { headers })
     ]).then(async ([userRes, rolesRes, eventsRes, emojiRes]) => {
-        if ([userRes, rolesRes, eventsRes, emojiRes].some(handleApiError)) return;
+        if (await handleApiError(userRes) || await handleApiError(rolesRes) || await handleApiError(eventsRes) || await handleApiError(emojiRes)) return;
         
         currentUser = await userRes.json();
         if (currentUser?.is_admin) adminLink.classList.remove('hidden');
@@ -374,14 +387,13 @@ document.addEventListener('DOMContentLoaded', () => {
         await acquireLock(eventId);
 
         try {
-            // --- FIX: Use the new helper function to load the roster ---
             await fetchAndDisplayRoster(eventId);
             
             populateBuildForm();
             rosterAndBuildSection.classList.remove('hidden');
 
             const squadsResponse = await fetch(`/api/events/${eventId}/squads`, { headers });
-            if(handleApiError(squadsResponse)) return;
+            if(await handleApiError(squadsResponse)) return;
             const existingSquads = await squadsResponse.json();
 
             if (existingSquads?.length > 0) {
@@ -394,12 +406,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     // --- UI RENDER FUNCTIONS ---
-
-    // --- FIX: New helper function to fetch and display the roster ---
     async function fetchAndDisplayRoster(eventId) {
         try {
             const rosterResponse = await fetch(`/api/events/${eventId}/signups`, { headers });
-            if(handleApiError(rosterResponse)) return;
+            if(await handleApiError(rosterResponse)) return;
             const rosterData = await rosterResponse.json();
             displayRoster(rosterData);
         } catch (error) {
@@ -445,7 +455,7 @@ document.addEventListener('DOMContentLoaded', () => {
     async function loadChannels() {
         try {
             const response = await fetch('/api/events/channels', { headers });
-            if (handleApiError(response)) return;
+            if (await handleApiError(response)) return;
             const channels = await response.json();
             
             channelDropdown.innerHTML = '<option value="">-- Select a Channel or Thread --</option>';
@@ -524,7 +534,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         method: 'PUT', headers: { ...headers, 'Content-Type': 'application/json' },
                         body: JSON.stringify({ new_squad_id: parseInt(newSquadId) })
                     });
-                    if(handleApiError(response)) throw new Error('Move failed on server');
+                    if(await handleApiError(response)) throw new Error('Move failed on server');
                 } catch (err) { alert("Error: Could not move member."); }
             }});
         });

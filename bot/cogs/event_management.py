@@ -54,26 +54,6 @@ async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> 
     event = await db.get_event_by_id(event_id)
     if not event: return discord.Embed(title="Error", description="Event not found.", color=discord.Color.red())
     
-    # --- Start: Timezone Correction Logic ---
-    event_time = event['event_time']
-    end_time = event.get('end_time')
-
-    # Ensure the datetime object is timezone-aware before formatting.
-    if event_time.tzinfo is None:
-        try:
-            event_timezone = pytz.timezone(event.get('timezone', 'UTC'))
-        except pytz.UnknownTimeZoneError:
-            event_timezone = pytz.utc
-        event_time = event_timezone.localize(event_time)
-
-    if end_time and end_time.tzinfo is None:
-        try:
-            event_timezone = pytz.timezone(event.get('timezone', 'UTC'))
-        except pytz.UnknownTimeZoneError:
-            event_timezone = pytz.utc
-        end_time = event_timezone.localize(end_time)
-    # --- End: Timezone Correction Logic ---
-    
     guild = bot.get_guild(event['guild_id'])
     if not guild: return discord.Embed(title="Error", description="Could not find the server for this event.", color=discord.Color.red())
     
@@ -102,10 +82,8 @@ async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> 
             description = restriction_notice + description
 
     embed = discord.Embed(title=f"📅 {event['title']}", description=description, color=discord.Color.blue())
-    
-    # Use the corrected, guaranteed-to-be-aware datetime objects for formatting
-    time_str = f"**Starts:** {discord.utils.format_dt(event_time, style='F')} ({discord.utils.format_dt(event_time, style='R')})"
-    if end_time: time_str += f"\n**Ends:** {discord.utils.format_dt(end_time, style='F')}"
+    time_str = f"**Starts:** {discord.utils.format_dt(event['event_time'], style='F')} ({discord.utils.format_dt(event['event_time'], style='R')})"
+    if event['end_time']: time_str += f"\n**Ends:** {discord.utils.format_dt(event['end_time'], style='F')}"
     if event['timezone']: time_str += f"\nTimezone: {event['timezone']}"
     embed.add_field(name="Time", value=time_str, inline=False)
     
@@ -573,8 +551,20 @@ class Conversation:
             
             if value is not None:
                 if key in ['event_time', 'end_time'] and isinstance(value, datetime.datetime):
-                    # --- This is the corrected line ---
-                    display_value = f"{discord.utils.format_dt(value, style='F')}"
+                    # --- START: FIX ---
+                    # 1. Get the target timezone, default to UTC if not set
+                    try:
+                        target_tz_str = self.data.get('timezone', 'UTC')
+                        target_tz = pytz.timezone(target_tz_str)
+                    except pytz.UnknownTimeZoneError:
+                        target_tz = pytz.utc
+                    
+                    # 2. Convert the UTC datetime object from the DB to the target timezone
+                    local_time = value.astimezone(target_tz)
+                    
+                    # 3. Format the new, local datetime object into the desired string
+                    display_value = local_time.strftime('%d-%m-%Y %H:%M')
+                    # --- END: FIX ---
                 elif key in ['mention_role_ids', 'restrict_to_role_ids']:
                     role_names = [r.name for r_id in value if (r := guild.get_role(r_id))]
                     display_value = ", ".join(role_names) if role_names else "None"

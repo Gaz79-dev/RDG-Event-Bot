@@ -444,50 +444,131 @@ class ReminderConversation:
         self.is_finished = True
         if self.user.id in self.cog.active_conversations:
             del self.cog.active_conversations[self.user.id]
-            
+
 class Conversation:
     def __init__(self, cog: 'EventManagement', interaction: discord.Interaction, db: Database, event_id: int = None):
         self.cog, self.bot, self.interaction, self.user, self.db, self.event_id = cog, cog.bot, interaction, interaction.user, db, event_id
         self.data, self.is_finished = {}, False
 
-    async def start(self):
+    async def _wait_for_message(self):
+        """Waits for a message from the user in a DM channel."""
+        return await self.bot.wait_for(
+            'message', 
+            check=lambda m: m.author == self.user and isinstance(m.channel, discord.DMChannel), 
+            timeout=300.0
+        )
+
+    async def start_creation(self):
+        """Guides the user through creating a new event from scratch."""
         try:
-            if self.event_id and (event_data := await self.db.get_event_by_id(self.event_id)):
-                self.data = dict(event_data)
-            await self.user.send(f"Starting event {'editing' if self.event_id else 'creation'}. Type `cancel` at any time to stop.")
-            await self.run_conversation()
+            await self.user.send("Starting event creation. Type `cancel` at any time to stop.")
+            steps = [
+                ("What is the title of the event?", self.process_text, 'title'),
+                (None, self.process_timezone, 'timezone'),
+                ("What is the start date and time? Please use `DD-MM-YYYY HH:MM` format.", self.process_start_time, 'event_time'),
+                ("What is the end date and time? Format: `DD-MM-YYYY HH:MM`.", self.process_end_time, 'end_time'),
+                ("Please provide a detailed description for the event.", self.process_text, 'description'),
+                (None, self.ask_mention_roles, 'mention_role_ids'),
+                (None, self.ask_restrict_roles, 'restrict_to_role_ids'),
+                (None, self.ask_is_recurring, 'is_recurring'),
+            ]
+            
+            for prompt, processor, data_key in steps:
+                if self.is_finished: break
+                if not await processor(prompt, data_key):
+                    await self.cancel()
+                    return
+            await self.finish()
+
         except Exception as e:
-            print(f"Error starting conversation: {e}")
+            print(f"Error during event creation conversation: {e}")
             traceback.print_exc()
             await self.cancel()
-    
-    async def run_conversation(self):
-        steps = [
-            ("What is the title of the event?", self.process_text, 'title'),
-            ("What is the start date and time? Please use `DD-MM-YYYY HH:MM` format.", self.process_start_time, 'event_time'),
-            ("What is the end date and time? Format: `DD-MM-YYYY HH:MM`.", self.process_end_time, 'end_time'),
-            ("Please provide a detailed description for the event.", self.process_text, 'description'),
-            (None, self.ask_mention_roles, 'mention_role_ids'),
-            (None, self.ask_restrict_roles, 'restrict_to_role_ids'),
-        ]
+
+    async def start_editing(self):
+        """Starts the interactive editing session for an existing event."""
+        if not (event_data := await self.db.get_event_by_id(self.event_id)):
+            await self.user.send("Could not find the event to edit.")
+            return await self.cancel()
         
-        is_child_event = self.event_id and self.data.get('parent_event_id') is not None
+        self.data = dict(event_data)
+        
+        # Define the mapping from user choice to data key and processor function
+        edit_options = {
+            "1": ("Title", 'title', self.process_text),
+            "2": ("Start Time", 'event_time', self.process_start_time),
+            "3": ("End Time", 'end_time', self.process_end_time),
+            "4": ("Description", 'description', self.process_text),
+            "5": ("Mention Roles", 'mention_role_ids', self.ask_mention_roles),
+            "6": ("Restrict Roles", 'restrict_to_role_ids', self.ask_restrict_roles),
+        }
+        
+        # Recurring options are only available for parent events
+        is_child_event = self.data.get('parent_event_id') is not None
         if not is_child_event:
-            steps.insert(1, (None, self.process_timezone, 'timezone'))
-            steps.append((None, self.ask_is_recurring, 'is_recurring'))
+            edit_options["7"] = ("Timezone", 'timezone', self.process_timezone)
+            edit_options["8"] = ("Is Recurring", 'is_recurring', self.ask_is_recurring)
 
-        for prompt, processor, data_key in steps:
-            if self.is_finished: break
-            if not await processor(prompt, data_key):
-                await self.cancel()
-                return
-        await self.finish()
+        try:
+            while not self.is_finished:
+                summary_embed = self.create_summary_embed(edit_options)
+                await self.user.send(
+                    "Select a field to edit by replying with its number. Type `finish` to save or `cancel` to exit.",
+                    embed=summary_embed
+                )
+                
+                msg = await self._wait_for_message()
+                choice = msg.content.lower()
 
-    async def _wait_for_message(self):
-        return await self.bot.wait_for('message', check=lambda m: m.author == self.user and isinstance(m.channel, discord.DMChannel), timeout=300.0)
+                if choice == 'cancel':
+                    await self.cancel()
+                    break
+                elif choice == 'finish':
+                    await self.finish()
+                    break
+                elif choice in edit_options:
+                    field_name, data_key, processor = edit_options[choice]
+                    prompt = f"What is the new value for **{field_name}**?"
+                    if not await processor(prompt, data_key):
+                        await self.user.send(f"Editing for **{field_name}** was cancelled.")
+                else:
+                    await self.user.send("Invalid selection. Please try again.")
+
+        except asyncio.TimeoutError:
+            await self.user.send("Your editing session has timed out.")
+            await self.cancel()
+        except Exception as e:
+            print(f"Error during event editing conversation: {e}")
+            traceback.print_exc()
+            await self.cancel()
+
+    def create_summary_embed(self, edit_options: Dict) -> discord.Embed:
+        """Creates an embed summarizing the current state of the event data."""
+        embed = discord.Embed(title="Event Editor", description="Current event details:", color=discord.Color.orange())
+        guild = self.interaction.guild
+        
+        for num, (name, key, _) in edit_options.items():
+            value = self.data.get(key)
+            display_value = "Not set"
+            
+            if value is not None:
+                if key in ['event_time', 'end_time'] and isinstance(value, datetime.datetime):
+                    display_value = discord.utils.format_dt(value, style='F')
+                elif key in ['mention_role_ids', 'restrict_to_role_ids']:
+                    role_names = [r.name for r_id in value if (r := guild.get_role(r_id))]
+                    display_value = ", ".join(role_names) if role_names else "None"
+                elif key == 'is_recurring':
+                    display_value = "Yes" if value else "No"
+                    if value and (rule := self.data.get('recurrence_rule')):
+                        display_value += f" ({rule.capitalize()})"
+                elif key not in ['is_recurring']:
+                    display_value = str(value)
+
+            embed.add_field(name=f"`{num}`. {name}", value=f"```{display_value or 'Not Set'}```", inline=False)
+            
+        return embed
 
     async def process_text(self, prompt, data_key):
-        if self.event_id and self.data.get(data_key): prompt += f"\n(Current: `{self.data.get(data_key)}`)"
         await self.user.send(prompt)
         try:
             msg = await self._wait_for_message()
@@ -510,10 +591,7 @@ class Conversation:
                 count += 1
         
         embed = discord.Embed(title="Please Select a Timezone", description="\n".join(description_lines), color=discord.Color.blue())
-        prompt_msg = "Please reply with the number for your desired timezone."
-        if self.event_id and self.data.get(data_key): prompt_msg += f"\n(Current: `{self.data.get(data_key)}`)"
-        
-        await self.user.send(prompt_msg, embed=embed)
+        await self.user.send("Please reply with the number for your desired timezone.", embed=embed)
         
         try:
             msg = await self._wait_for_message()
@@ -532,57 +610,56 @@ class Conversation:
             return False
 
     async def process_start_time(self, prompt, data_key):
-        while True:
-            val = self.data.get(data_key).strftime('%d-%m-%Y %H:%M') if self.data.get(data_key) else ''
-            p = prompt + (f"\n(Current: `{val}`)" if self.event_id and val else "")
-            await self.user.send(p)
+        p = prompt + "\nPlease use `DD-MM-YYYY HH:MM` format."
+        await self.user.send(p)
+        try:
+            msg = await self._wait_for_message()
+            if msg.content.lower() == 'cancel': return False
             try:
-                msg = await self._wait_for_message()
-                if msg.content.lower() == 'cancel': return False
-                try:
-                    naive_dt = datetime.datetime.strptime(msg.content, "%d-%m-%Y %H:%M")
-                    selected_tz_str = self.data.get('timezone', 'UTC')
-                    selected_tz = pytz.timezone(selected_tz_str)
-                    self.data[data_key] = selected_tz.localize(naive_dt)
-                    return True
-                except ValueError:
-                    await self.user.send("Invalid date format. Use `DD-MM-YYYY HH:MM`.")
-            except asyncio.TimeoutError:
-                await self.user.send("Conversation timed out.")
-                return False
+                naive_dt = datetime.datetime.strptime(msg.content, "%d-%m-%Y %H:%M")
+                selected_tz_str = self.data.get('timezone', 'UTC')
+                selected_tz = pytz.timezone(selected_tz_str)
+                self.data[data_key] = selected_tz.localize(naive_dt)
+                return True
+            except ValueError:
+                await self.user.send("Invalid date format. Let's try again.")
+                return await self.process_start_time(prompt, data_key)
+        except asyncio.TimeoutError:
+            await self.user.send("Conversation timed out.")
+            return False
 
     async def process_end_time(self, prompt, data_key):
-        while True:
-            val = self.data.get(data_key).strftime('%d-%m-%Y %H:%M') if self.data.get(data_key) else ''
-            p = prompt + (f"\n(Current: `{val}`)" if self.event_id and val else "")
-            await self.user.send(p)
+        p = prompt + "\nPlease use `DD-MM-YYYY HH:MM` format."
+        await self.user.send(p)
+        try:
+            msg = await self._wait_for_message()
+            if msg.content.lower() == 'cancel': return False
             try:
-                msg = await self._wait_for_message()
-                if msg.content.lower() == 'cancel': return False
-                try:
-                    naive_dt = datetime.datetime.strptime(msg.content, "%d-%m-%Y %H:%M")
-                    selected_tz_str = self.data.get('timezone', 'UTC')
-                    selected_tz = pytz.timezone(selected_tz_str)
-                    self.data[data_key] = selected_tz.localize(naive_dt)
-                    return True
-                except ValueError:
-                    await self.user.send("Invalid date format. Use `DD-MM-YYYY HH:MM`.")
-            except asyncio.TimeoutError:
-                await self.user.send("Conversation timed out.")
-                return False
+                naive_dt = datetime.datetime.strptime(msg.content, "%d-%m-%Y %H:%M")
+                selected_tz_str = self.data.get('timezone', 'UTC')
+                selected_tz = pytz.timezone(selected_tz_str)
+                self.data[data_key] = selected_tz.localize(naive_dt)
+                return True
+            except ValueError:
+                await self.user.send("Invalid date format. Let's try again.")
+                return await self.process_end_time(prompt, data_key)
+        except asyncio.TimeoutError:
+            await self.user.send("Conversation timed out.")
+            return False
 
     async def ask_is_recurring(self, prompt, data_key):
         view = ConfirmationView()
-        msg = await self.user.send("Is this a recurring event?", view=view)
+        current_val_text = "Yes" if self.data.get(data_key) else "No"
+        await self.user.send(f"Is this a recurring event? (Current: **{current_val_text}**)", view=view)
         await view.wait()
         if view.value is None:
-            await msg.delete()
             await self.user.send("Timed out.")
             return False
-        await msg.delete()
+
         self.data['is_recurring'] = view.value
         if view.value:
             return await self.process_recurrence_rule(None, 'recurrence_rule')
+        
         self.data['recurrence_rule'], self.data['recreation_hours'] = None, None
         return True
 
@@ -620,10 +697,9 @@ class Conversation:
 
     async def _ask_roles(self, prompt, data_key, question):
         view = ConfirmationView()
-        conf_msg = await self.user.send(question, view=view)
+        await self.user.send(question, view=view)
         await view.wait()
-        if view.value is None: await conf_msg.delete(); return False
-        await conf_msg.delete()
+        if view.value is None: return False
 
         if view.value:
             guild_roles = sorted([r for r in self.interaction.guild.roles if r.name != "@everyone" and not r.managed], key=lambda r: r.position, reverse=True)
@@ -631,8 +707,7 @@ class Conversation:
             description_lines = [f"`{i+1}` {role.name}" for i, role in enumerate(guild_roles)]
             
             embed = discord.Embed(title="Please Select Role(s)", description="\n".join(description_lines), color=discord.Color.blue())
-            prompt_msg = "Please reply with the number(s) for your desired roles, separated by commas (e.g., `1, 5, 12`)."
-            await self.user.send(prompt_msg, embed=embed)
+            await self.user.send("Please reply with the number(s) for your desired roles, separated by commas (e.g., `1, 5, 12`).", embed=embed)
 
             try:
                 msg = await self._wait_for_message()
@@ -659,61 +734,43 @@ class Conversation:
     async def ask_restrict_roles(self, p, dk): return await self._ask_roles(p, dk, "Restrict sign-ups to specific roles?")
         
     async def finish(self):
+        """Saves the event data to the database and updates the message."""
         if self.is_finished: return
         self.is_finished = True
-        if self.user.id in self.cog.active_conversations:
-            del self.cog.active_conversations[self.user.id]
+        del self.cog.active_conversations[self.user.id]
 
         try:
             if self.event_id:
-                # --- THIS IS THE CORRECTED LOGIC BLOCK FOR EDITING ---
                 await self.db.update_event(self.event_id, self.data)
                 
-                embed = await create_event_embed(self.bot, self.event_id, self.db)
-                view = PersistentEventView(self.db)
-                content = " ".join([f"<@&{rid}>" for rid in self.data.get('mention_role_ids', [])])
-                
+                # Try to find the original message and update it
                 try:
-                    channel = self.bot.get_channel(self.data['channel_id']) or await self.bot.fetch_channel(self.data['channel_id'])
-                    message = await channel.fetch_message(self.data['message_id'])
+                    # For recurring parent events, find the latest child to get message details
+                    event_for_message = self.data
+                    if self.data.get('is_recurring') and not self.data.get('parent_event_id'):
+                        latest_child = await self.db.get_latest_child_event(self.event_id)
+                        if latest_child:
+                            event_for_message = latest_child
+
+                    channel = self.bot.get_channel(event_for_message['channel_id']) or await self.bot.fetch_channel(event_for_message['channel_id'])
+                    message = await channel.fetch_message(event_for_message['message_id'])
+                    
+                    embed = await create_event_embed(self.bot, self.event_id, self.db)
+                    view = PersistentEventView(self.db)
+                    content = " ".join([f"<@&{rid}>" for rid in self.data.get('mention_role_ids', [])])
+                    
                     await message.edit(content=content, embed=embed, view=view)
                     await self.user.send("✅ Event embed successfully updated in the channel.")
-                except (discord.NotFound, discord.Forbidden):
-                    await self.user.send("⚠️ **Warning:** The event data was updated in the database, but I couldn't find or edit the original event message in Discord. It might have been deleted.")
-                    return
 
-                if self.data.get('thread_id'):
-                    try:
-                        thread = await self.bot.fetch_channel(self.data['thread_id'])
-                        
-                        event_time = self.data['event_time']
-                        event_time_str = event_time.strftime('%d-%m-%Y %H:%M') + f" {event_time.tzname()}"
-                        new_thread_name = f"{self.data['title']} - {event_time_str}"
-                        
-                        await thread.edit(name=new_thread_name)
-                        
-                        update_embed = await create_event_embed(self.bot, self.event_id, self.db)
-                        await thread.send(
-                            content="@everyone Please note, the event details have been updated.",
-                            embed=update_embed,
-                            allowed_mentions=discord.AllowedMentions(everyone=True)
-                        )
-                        await self.user.send("✅ Renamed the event thread and posted an update.")
-                    except Exception as e:
-                        await self.user.send(f"⚠️ **Warning:** Could not update the thread: {e}")
-
+                except (discord.NotFound, discord.Forbidden, KeyError):
+                    await self.user.send("✅ Event data was updated in the database, but I couldn't find or edit the original event message.")
             else:
-                # --- MODIFIED: This block handles brand new event creation. ---
+                # This block handles brand new event creation.
                 if self.data.get('is_recurring'):
-                    # Create the parent template record. It will have no message_id.
                     parent_id = await self.db.create_event(self.interaction.guild.id, self.interaction.channel.id, self.user.id, self.data)
                     await self.user.send(f"✅ Recurring parent template created (ID: {parent_id}). You can manage this from the Events page on the website.")
-                    
-                    # The first child is now created by the scheduler, which will run shortly.
                     await self.user.send(f"⏳ The first event occurrence will be created and posted by the scheduler based on your `recreation_hours` setting.")
-
                 else:
-                    # Standard non-recurring event creation
                     event_id = await self.db.create_event(self.interaction.guild.id, self.interaction.channel.id, self.user.id, self.data)
                     embed = await create_event_embed(self.bot, event_id, self.db)
                     view = PersistentEventView(self.db)
@@ -802,14 +859,14 @@ class EventManagement(commands.Cog):
 
     @event_group.command(name="create", description="Create a new event via DM.")
     async def create(self, interaction: discord.Interaction):
-        await self.start_conversation(interaction)
+        await self.start_conversation(interaction, mode='create')
 
     @event_group.command(name="edit", description="Edit an existing event via DM.")
     @app_commands.describe(event_id="The ID of the event to edit.")
     async def edit(self, interaction: discord.Interaction, event_id: int):
         if not (event := await self.db.get_event_by_id(event_id)):
             return await interaction.response.send_message("Event not found.", ephemeral=True)
-        await self.start_conversation(interaction, event_id)
+        await self.start_conversation(interaction, mode='edit', event_id=event_id)
 
     @event_group.command(name="delete", description="Marks an event for deletion and notifies attendees.")
     @app_commands.describe(event_id="The ID of the event to delete.")
@@ -902,14 +959,22 @@ class EventManagement(commands.Cog):
         self.active_conversations[interaction.user.id] = conv
         asyncio.create_task(conv.start())
 
-    async def start_conversation(self, interaction: discord.Interaction, event_id: int = None):
+    async def start_conversation(self, interaction: discord.Interaction, mode: str, event_id: int = None):
+        """Starts a conversation in DMs for either creating or editing an event."""
         if interaction.user.id in self.active_conversations:
             return await interaction.response.send_message("You are already in an active conversation with me. Please finish or cancel it first.", ephemeral=True)
+        
         try:
             await interaction.response.send_message("I've sent you a DM to start the process!", ephemeral=True)
             conv = Conversation(self, interaction, self.db, event_id)
             self.active_conversations[interaction.user.id] = conv
-            asyncio.create_task(conv.start())
+            
+            # Choose the correct starting point based on the mode
+            if mode == 'create':
+                asyncio.create_task(conv.start_creation())
+            elif mode == 'edit':
+                asyncio.create_task(conv.start_editing())
+
         except discord.Forbidden:
             await interaction.followup.send("I couldn't send you a DM. Please check your privacy settings.", ephemeral=True)
 

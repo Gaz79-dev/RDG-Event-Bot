@@ -573,8 +573,8 @@ class Conversation:
             
             if value is not None:
                 if key in ['event_time', 'end_time'] and isinstance(value, datetime.datetime):
-                    # --- THIS IS THE LINE TO BE FIXED ---
-                    display_value = value.strftime('%d-%m-%Y %H:%M') 
+                    # --- This is the corrected line ---
+                    display_value = f"{discord.utils.format_dt(value, style='F')}"
                 elif key in ['mention_role_ids', 'restrict_to_role_ids']:
                     role_names = [r.name for r_id in value if (r := guild.get_role(r_id))]
                     display_value = ", ".join(role_names) if role_names else "None"

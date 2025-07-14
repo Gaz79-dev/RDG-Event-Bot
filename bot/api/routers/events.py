@@ -180,6 +180,8 @@ async def refresh_event_roster(event_id: int, request: RosterUpdateRequest, db: 
 
     return await db.get_squads_with_members(event_id)
 
+# In bot/api/routers/events.py
+
 @router.get("/channels", response_model=List[Channel])
 async def get_guild_channels():
     """Gets a list of text channels and active threads from the Discord server."""

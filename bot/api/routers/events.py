@@ -218,7 +218,6 @@ async def get_guild_channels():
     
     async with httpx.AsyncClient() as client:
         try:
-            # Fetch both channels and active threads in parallel
             res_channels_task = client.get(url_channels, headers=headers)
             res_threads_task = client.get(url_threads, headers=headers)
             res_channels, res_threads = await asyncio.gather(res_channels_task, res_threads_task)
@@ -229,27 +228,20 @@ async def get_guild_channels():
             all_channels = res_channels.json()
             active_threads = res_threads.json().get('threads', [])
 
-            # Create a map of category IDs to names
             categories = {c['id']: c['name'] for c in all_channels if c['type'] == 4}
 
             processed_list = []
-            # Process standard text channels
             for c in all_channels:
                 if c['type'] == 0: # GUILD_TEXT
                     category_name = categories.get(c.get('parent_id'))
-                    # --- FIX: Explicitly convert ID to a string ---
                     processed_list.append(Channel(id=str(c['id']), name=c['name'], category=category_name))
             
-            # Process active threads
             for t in active_threads:
                 if t['type'] in [11, 12]: # PUBLIC_THREAD or PRIVATE_THREAD
                     category_name = categories.get(t.get('parent_id'))
-                    # Add a prefix to distinguish threads in the list
                     thread_name = f"└ Thread: {t['name']}"
-                    # --- FIX: Explicitly convert ID to a string here as well ---
                     processed_list.append(Channel(id=str(t['id']), name=thread_name, category=category_name))
 
-            # Sort the list: top-level channels first, then by category, then by name
             return sorted(processed_list, key=lambda c: (c.category or ' ', c.name))
             
         except Exception as e:

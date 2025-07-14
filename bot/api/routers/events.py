@@ -205,7 +205,7 @@ async def refresh_event_roster(event_id: int, request: RosterUpdateRequest, db: 
 
     return await db.get_squads_with_members(event_id)
 
-@router.get("/channels", response_model=List[Channel])
+@router.get("/channels")
 async def get_guild_channels():
     """Gets a list of text channels from the Discord server."""
     if not BOT_TOKEN or not GUILD_ID:
@@ -220,19 +220,16 @@ async def get_guild_channels():
             res_channels.raise_for_status()
             all_channels = res_channels.json()
 
-            # Create a map of category IDs to names
             categories = {c['id']: c['name'] for c in all_channels if c['type'] == 4}
 
             processed_list = []
-            # Process standard text channels
             for c in all_channels:
                 if c['type'] == 0: # GUILD_TEXT
                     category_name = categories.get(c.get('parent_id'))
-                    # --- THIS IS THE FIX: Explicitly convert the ID to a string ---
-                    processed_list.append(Channel(id=str(c['id']), name=c['name'], category=category_name))
+                    # The Channel model is no longer used for validation, but we can still structure the dict
+                    processed_list.append({"id": str(c['id']), "name": c['name'], "category": category_name})
             
-            # Sort the list by category, then by name
-            return sorted(processed_list, key=lambda c: (c.category or ' ', c.name))
+            return sorted(processed_list, key=lambda c: (c.get('category') or ' ', c.get('name')))
             
         except Exception as e:
             print(f"Error fetching channels from Discord API: {e}")

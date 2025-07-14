@@ -6,6 +6,7 @@ import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from fastapi.middleware.cors import CORSMiddleware
 
 # Use absolute imports from the 'bot' package root
 from bot.utils.database import Database
@@ -44,6 +45,22 @@ app = FastAPI(lifespan=lifespan)
 templates_dir = BASE_DIR / "web/templates"
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "web/static")), name="static")
 templates = Jinja2Templates(directory=str(templates_dir))
+
+origins = [
+    # Allow your main domain
+    "https://squadbuilder.rdg-clan.co.uk",
+    # You can also add localhost for local development if needed
+    "http://localhost",
+    "http://localhost:8000",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Include all the API routers
 app.include_router(auth.router)

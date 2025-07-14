@@ -257,7 +257,7 @@ class Database:
                     )
     
     async def get_upcoming_events(self) -> List[Dict]:
-        query = "SELECT * FROM events WHERE deleted_at IS NULL AND COALESCE(end_time, event_time + INTERVAL '2 hours') > (NOW() AT TIME ZONE 'utc' - INTERVAL '12 hours');"
+        query = "SELECT * FROM events WHERE deleted_at IS NULL AND (is_recurring = FALSE OR parent_event_id IS NOT NULL) AND COALESCE(end_time, event_time + INTERVAL '2 hours') > (NOW() AT TIME ZONE 'utc' - INTERVAL '12 hours');"
         async with self.pool.acquire() as connection:
             return [dict(row) for row in await connection.fetch(query)]
 

@@ -785,8 +785,8 @@ class Conversation:
                     try:
                         thread = await self.bot.fetch_channel(self.data['thread_id'])
                         event_time = self.data['event_time']
-                        event_time_str = event_time.strftime('%d-%m-%Y %H:%M') + f" {event_time.tzname()}"
-                        new_thread_name = f"{self.data['title']} - {event_time_str}"
+                        date_str = event_time.strftime('%b %d')
+                        new_thread_name = f"{self.data['title']} - {date_str}"
                         await thread.edit(name=new_thread_name)
                         await thread.send(content="@everyone Please note, the event details have been updated.", embed=update_embed, allowed_mentions=discord.AllowedMentions(everyone=True))
                         await self.user.send("✅ Renamed the event thread and posted an update.")

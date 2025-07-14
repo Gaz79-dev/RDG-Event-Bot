@@ -44,6 +44,7 @@ class Event(BaseModel):
     event_id: int
     title: str
     event_time: datetime
+    end_time: Optional[datetime] = None
 
 class Signup(BaseModel):
     user_id: int

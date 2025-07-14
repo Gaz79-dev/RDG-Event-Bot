@@ -608,7 +608,19 @@ class Conversation:
             
             if value is not None:
                 if key in ['event_time', 'end_time'] and isinstance(value, datetime.datetime):
-                    # --- This is the corrected line ---
+                    # --- START: Timezone Formatting Fix ---
+                    try:
+                        # Get the event's original timezone from the stored data.
+                        target_tz_str = self.data.get('timezone', 'UTC')
+                        target_tz = pytz.timezone(target_tz_str)
+                    except pytz.UnknownTimeZoneError:
+                        # Fallback to UTC if the timezone is somehow invalid.
+                        target_tz = pytz.utc
+                    # Convert the stored UTC time to the event's original timezone.
+                    local_time = value.astimezone(target_tz)
+                    # Format the now-local time into the desired human-readable string.
+                    display_value = local_time.strftime('%d-%m-%Y %H:%M')
+                    # --- END: Timezone Formatting Fix ---
                     display_value = f"{discord.utils.format_dt(value, style='F')}"
                 elif key in ['mention_role_ids', 'restrict_to_role_ids']:
                     role_names = [r.name for r_id in value if (r := guild.get_role(r_id))]

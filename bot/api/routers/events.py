@@ -206,7 +206,9 @@ async def refresh_event_roster(event_id: int, request: RosterUpdateRequest, db: 
     return await db.get_squads_with_members(event_id)
 
 # In bot/api/routers/events.py
-@router.get("/channels", response_model=List[Channel])
+# In bot/api/routers/events.py, find and replace the entire get_guild_channels function.
+
+@router.get("/channels") # <-- REMOVED response_model=List[Channel]
 async def get_guild_channels():
     """Gets a list of text channels and active threads from the Discord server."""
     if not BOT_TOKEN or not GUILD_ID:
@@ -218,6 +220,7 @@ async def get_guild_channels():
     
     async with httpx.AsyncClient() as client:
         try:
+            # Fetch both channels and active threads in parallel
             res_channels_task = client.get(url_channels, headers=headers)
             res_threads_task = client.get(url_threads, headers=headers)
             res_channels, res_threads = await asyncio.gather(res_channels_task, res_threads_task)
@@ -228,21 +231,27 @@ async def get_guild_channels():
             all_channels = res_channels.json()
             active_threads = res_threads.json().get('threads', [])
 
+            # Create a map of category IDs to names
             categories = {c['id']: c['name'] for c in all_channels if c['type'] == 4}
 
             processed_list = []
+            # Process standard text channels
             for c in all_channels:
                 if c['type'] == 0: # GUILD_TEXT
                     category_name = categories.get(c.get('parent_id'))
-                    processed_list.append(Channel(id=str(c['id']), name=c['name'], category=category_name))
+                    # --- FIX: Return a simple dictionary instead of a Pydantic model ---
+                    processed_list.append({"id": str(c['id']), "name": c['name'], "category": category_name})
             
+            # Process active threads
             for t in active_threads:
                 if t['type'] in [11, 12]: # PUBLIC_THREAD or PRIVATE_THREAD
                     category_name = categories.get(t.get('parent_id'))
                     thread_name = f"└ Thread: {t['name']}"
-                    processed_list.append(Channel(id=str(t['id']), name=thread_name, category=category_name))
+                    # --- FIX: Return a simple dictionary instead of a Pydantic model ---
+                    processed_list.append({"id": str(t['id']), "name": thread_name, "category": category_name})
 
-            return sorted(processed_list, key=lambda c: (c.category or ' ', c.name))
+            # Sort the list: top-level channels first, then by category, then by name
+            return sorted(processed_list, key=lambda c: (c.get('category') or ' ', c.get('name')))
             
         except Exception as e:
             print(f"Error fetching channels from Discord API: {e}")

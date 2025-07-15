@@ -228,12 +228,24 @@ class Scheduler(commands.Cog):
         child_data['is_recurring'] = False
         child_data['parent_event_id'] = parent_event['event_id']
         
+        # --- START OF FIX ---
+        # 1. Determine the correct channel ID. Use the latest child's channel if it exists,
+        #    otherwise fall back to the parent's default. This handles cases where events were moved.
+        target_channel_id = latest_child['channel_id'] if latest_child else parent_event['channel_id']
+        
+        # 2. Explicitly overwrite the channel ID in the data payload to ensure the new
+        #    database record is correct, overriding any stale ID copied from the parent.
+        child_data['channel_id'] = target_channel_id
+        # --- END OF FIX ---
+        
         try:
+            # 3. Use the corrected `target_channel_id` when creating the new event record.
             child_id = await self.db.create_event(
-                parent_event['guild_id'], parent_event['channel_id'], parent_event['creator_id'], child_data
+                parent_event['guild_id'], target_channel_id, parent_event['creator_id'], child_data
             )
             
-            target_channel = self.bot.get_channel(parent_event['channel_id']) or await self.bot.fetch_channel(parent_event['channel_id'])
+            # 4. Use the corrected `target_channel_id` to fetch the channel for posting.
+            target_channel = self.bot.get_channel(target_channel_id) or await self.bot.fetch_channel(target_channel_id)
             
             embed = await create_event_embed(self.bot, child_id, self.db)
             view = PersistentEventView(self.db)

@@ -956,6 +956,12 @@ class EventManagement(commands.Cog):
 
     @event_group.command(name="create", description="Create a new event via DM.")
     async def create(self, interaction: discord.Interaction):
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "This command cannot be used in a Direct Message. Please run it in the desired event channel.",
+                ephemeral=True
+            )
+            return
         await self.start_conversation(interaction, mode='create')
 
     @event_group.command(name="edit", description="Edit an existing event via DM.")

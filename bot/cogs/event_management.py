@@ -376,7 +376,6 @@ class NotificationTargetSelect(ui.Select):
         super().__init__(placeholder="Choose which groups to notify...", min_values=1, max_values=3, options=options)
 
     async def callback(self, interaction: discord.Interaction):
-        # Acknowledge the selection and let the view handle the values.
         await interaction.response.defer()
         self.stop()
 
@@ -389,8 +388,6 @@ class NotificationSelectView(ui.View):
 
     @property
     def selected_statuses(self) -> Optional[List[str]]:
-        # The .values property of the select menu contains the chosen options.
-        # It's accessed after the view has stopped (i.e., after the user has made a selection).
         return self.select_menu.values if hasattr(self, 'select_menu') else None
 # --- END: New UI Views for Notification Flow ---
 
@@ -622,14 +619,21 @@ class Conversation:
             
             if value is not None:
                 if key in ['event_time', 'end_time'] and isinstance(value, datetime.datetime):
+                    # --- START: Timezone Formatting Fix ---
                     try:
+                        # Get the event's original timezone from the stored data.
                         target_tz_str = self.data.get('timezone', 'UTC')
                         target_tz = pytz.timezone(target_tz_str)
                     except pytz.UnknownTimeZoneError:
+                        # Fallback to UTC if the timezone is somehow invalid.
                         target_tz = pytz.utc
                     
+                    # Convert the stored UTC time to the event's original timezone.
                     local_time = value.astimezone(target_tz)
+                    
+                    # Format the now-local time into the desired human-readable string.
                     display_value = local_time.strftime('%d-%m-%Y %H:%M')
+                    # --- END: Timezone Formatting Fix ---
                 elif key in ['mention_role_ids', 'restrict_to_role_ids']:
                     role_names = [r.name for r_id in value if (r := guild.get_role(r_id))]
                     display_value = ", ".join(role_names) if role_names else "None"

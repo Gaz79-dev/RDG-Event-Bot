@@ -324,58 +324,75 @@ class PersistentEventView(ui.View):
             except:
                 pass
     
-    # --- START: New Admin Buttons ---
     @ui.button(label="Edit", style=discord.ButtonStyle.primary, custom_id="persistent_view:edit_event", row=2)
     async def edit_event_button(self, interaction: discord.Interaction, button: ui.Button):
         """A button to trigger the event editing flow."""
-        # 1. Permission Check
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("You must be an administrator to edit events.", ephemeral=True)
             return
 
-        # 2. Find the Event Management Cog
         event_cog = interaction.client.get_cog('EventManagement')
         if not event_cog:
             await interaction.response.send_message("An error occurred. The event management module may be offline.", ephemeral=True)
             return
             
-        # 3. Get the Event ID from the message
         event = await self.db.get_event_by_message_id(interaction.message.id)
         if not event:
             await interaction.response.send_message("This event could not be found in the database.", ephemeral=True)
             return
 
-        # 4. Start the existing edit conversation flow
         await event_cog.start_conversation(interaction, mode='edit', event_id=event['event_id'])
 
     @ui.button(label="Delete", style=discord.ButtonStyle.danger, custom_id="persistent_view:delete_event", row=2)
     async def delete_event_button(self, interaction: discord.Interaction, button: ui.Button):
         """A button to trigger the event deletion flow."""
-        # 1. Permission Check
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("You must be an administrator to delete events.", ephemeral=True)
             return
 
-        # 2. Find the Event Management Cog
         event_cog = interaction.client.get_cog('EventManagement')
         if not event_cog:
             await interaction.response.send_message("An error occurred. The event management module may be offline.", ephemeral=True)
             return
             
-        # 3. Get the Event ID from the message
         event = await self.db.get_event_by_message_id(interaction.message.id)
         if not event:
             await interaction.response.send_message("This event could not be found in the database.", ephemeral=True)
             return
 
-        # 4. Trigger the existing delete confirmation view
-        view = DeleteConfirmationView(event_cog, event['event_id'])
-        await interaction.response.send_message(
-            f"Are you sure you want to delete the event **{event['title']}**?",
-            view=view,
-            ephemeral=True
-        )
-    # --- END: New Admin Buttons ---
+        # --- This now calls the delete command's logic directly ---
+        await event_cog.delete(interaction, event_id=event['event_id'])
+
+
+# --- START: New UI Views for Notification Flow ---
+class NotificationTargetSelect(ui.Select):
+    """A multi-select dropdown to choose which RSVP groups to notify."""
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="Accepted", value=RsvpStatus.ACCEPTED, emoji="✅", default=True),
+            discord.SelectOption(label="Tentative", value=RsvpStatus.TENTATIVE, emoji="🤔"),
+            discord.SelectOption(label="Declined", value=RsvpStatus.DECLINED, emoji="❌"),
+        ]
+        super().__init__(placeholder="Choose which groups to notify...", min_values=1, max_values=3, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        # Acknowledge the selection and let the view handle the values.
+        await interaction.response.defer()
+        self.stop()
+
+class NotificationSelectView(ui.View):
+    """The view containing the multi-select dropdown for notification targets."""
+    def __init__(self):
+        super().__init__(timeout=300)
+        self.select_menu = NotificationTargetSelect()
+        self.add_item(self.select_menu)
+
+    @property
+    def selected_statuses(self) -> Optional[List[str]]:
+        # The .values property of the select menu contains the chosen options.
+        # It's accessed after the view has stopped (i.e., after the user has made a selection).
+        return self.select_menu.values if hasattr(self, 'select_menu') else None
+# --- END: New UI Views for Notification Flow ---
 
 
 class ReminderConfirmationView(ui.View):
@@ -605,21 +622,14 @@ class Conversation:
             
             if value is not None:
                 if key in ['event_time', 'end_time'] and isinstance(value, datetime.datetime):
-                    # --- START: Timezone Formatting Fix ---
                     try:
-                        # Get the event's original timezone from the stored data.
                         target_tz_str = self.data.get('timezone', 'UTC')
                         target_tz = pytz.timezone(target_tz_str)
                     except pytz.UnknownTimeZoneError:
-                        # Fallback to UTC if the timezone is somehow invalid.
                         target_tz = pytz.utc
                     
-                    # Convert the stored UTC time to the event's original timezone.
                     local_time = value.astimezone(target_tz)
-                    
-                    # Format the now-local time into the desired human-readable string.
                     display_value = local_time.strftime('%d-%m-%Y %H:%M')
-                    # --- END: Timezone Formatting Fix ---
                 elif key in ['mention_role_ids', 'restrict_to_role_ids']:
                     role_names = [r.name for r_id in value if (r := guild.get_role(r_id))]
                     display_value = ", ".join(role_names) if role_names else "None"

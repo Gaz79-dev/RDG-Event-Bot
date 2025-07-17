@@ -249,7 +249,7 @@ async def refresh_event_roster(event_id: int, request: RosterUpdateRequest, db: 
             for user_id in new_users:
                 signup = await db.get_signup(event_id, user_id)
                 if signup:
-                    role_name = signup.get('subclass_name') or signup.get('role_name', 'Unassigned')
+                    role_name = signup.get('subclass_name') or signup.get('role_name', 'Unassigned') or 'Unassigned'
                     await db.add_squad_member(reserves_squad['squad_id'], user_id, role_name)
 
     return await db.get_squads_with_members(event_id)

@@ -80,12 +80,13 @@ async def _fill_squad(squad: Dict, player_pool: List[Dict], squad_size: int, cla
 
     while len(squad['members']) < squad_size and player_pool:
         player_to_add = player_pool.pop(0)
-        player_class = player_to_add.get('subclass_name')
-
+        # If a player has no specific subclass, use their primary role instead of rejecting them.
+        player_class = player_to_add.get('subclass_name') or player_to_add.get('role_name')
         if not player_class:
+            # This only happens if a player has neither a subclass nor a primary role.
             unplaced_players.append(player_to_add)
             continue
-
+            
         # Check if the class slot is available
         if squad['class_counts'][player_class] < class_limits.get(player_class, 99):
             squad['members'].append(player_to_add)

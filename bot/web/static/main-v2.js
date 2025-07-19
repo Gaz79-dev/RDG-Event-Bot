@@ -1,27 +1,4 @@
-document.body.addEventListener('click', (e) => {
-        if (e.target.classList.contains('edit-member-btn')) {
-            const memberItem = e.target.closest('.member-item');
-            modalMemberName.textContent = memberItem.querySelector('.member-name').textContent;
-            modalMemberIdInput.value = memberItem.dataset.memberId;
-            const currentRole = memberItem.querySelector('.assigned-role-text').textContent;
-            
-            modalRoleSelect.innerHTML = '';
-
-            // --- START: Dropdown Filtering Logic ---
-            const rolesToExclude = ["Infantry", "Pathfinders", "Recon", "Armour", "Artillery"];
-            const allRoles = [...new Set([...ALL_ROLES.roles, ...Object.values(ALL_ROLES.subclasses).flat()])];
-            const filteredRoles = allRoles.filter(role => !rolesToExclude.includes(role)).sort();
-            
-            filteredRoles.forEach(role => {
-                const option = new Option(role, role);
-                if (role === currentRole) option.selected = true;
-                modalRoleSelect.add(option);
-            });
-            // --- END: Dropdown Filtering Logic ---
-            
-            editModal.classList.remove('hidden');
-        } else if (e.target.closest('.assign-task-btn')) {
-    
+document.addEventListener('DOMContentLoaded', () => {
     // --- STATE AND HEADERS ---
     const token = getAuthToken();
     if (!token) {
@@ -390,6 +367,31 @@ document.body.addEventListener('click', (e) => {
 
     }).catch(err => console.error("FATAL: Initial page data failed to load:", err));
 
+
+document.body.addEventListener('click', (e) => {
+        if (e.target.classList.contains('edit-member-btn')) {
+            const memberItem = e.target.closest('.member-item');
+            modalMemberName.textContent = memberItem.querySelector('.member-name').textContent;
+            modalMemberIdInput.value = memberItem.dataset.memberId;
+            const currentRole = memberItem.querySelector('.assigned-role-text').textContent;
+            
+            modalRoleSelect.innerHTML = '';
+
+            const rolesToExclude = ["Infantry", "Pathfinders", "Recon", "Armour", "Artillery"];
+            const allRoles = [...new Set([...ALL_ROLES.roles, ...Object.values(ALL_ROLES.subclasses).flat()])];
+            const filteredRoles = allRoles.filter(role => !rolesToExclude.includes(role)).sort();
+            
+            filteredRoles.forEach(role => {
+                const option = new Option(role, role);
+                if (role === currentRole) option.selected = true;
+                modalRoleSelect.add(option);
+            });
+            
+            editModal.classList.remove('hidden');
+        } else if (e.target.closest('.assign-task-btn')) {
+            // ... logic for the task button ...
+        }
+    });
     // --- HANDLER FUNCTION ---
     async function handleEventSelection() {
         if (!isPageInitialized) return;

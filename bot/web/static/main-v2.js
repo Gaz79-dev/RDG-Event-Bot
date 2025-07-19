@@ -510,21 +510,12 @@ document.body.addEventListener('click', (e) => {
     function renderWorkshop(squads) {
         currentSquads = squads;
         workshopArea.innerHTML = '';
-        // The old reservesArea variable is no longer needed.
+        const reservesList = document.getElementById('reserves-list');
+        reservesList.innerHTML = '';
 
         (squads || []).forEach(squad => {
             const isReserves = squad.squad_type === 'Reserves';
             
-            // For reserves, we find the container that was added in the HTML.
-            // For regular squads, we create a new container.
-            const squadContainer = document.createElement('div');
-            squadContainer.className = 'bg-gray-700 p-4 rounded-lg';
-            
-            const title = document.createElement('h3');
-            title.className = 'font-bold text-white border-b border-gray-600 pb-2 mb-2';
-            title.textContent = squad.name;
-            squadContainer.appendChild(title);
-
             const memberList = document.createElement('div');
             memberList.className = 'member-list space-y-1 min-h-[40px] p-2 rounded-lg';
             memberList.dataset.squadId = squad.squad_id;
@@ -551,12 +542,18 @@ document.body.addEventListener('click', (e) => {
                 
                 memberList.appendChild(memberEl);
             });
-            
-            squadContainer.appendChild(memberList);
-            
-            // Now, we append all squads, including Reserves, to the main workshop area.
-            // The CSS grid layout will handle positioning.
-            workshopArea.appendChild(squadContainer);
+
+            if (isReserves) {
+                // If it is the Reserves squad, append its member list to the dedicated reserves area.
+                reservesList.appendChild(memberList);
+            } else {
+                // For all other squads, create the outer box and append it to the main workshop area.
+                const squadBox = document.createElement('div');
+                squadBox.className = 'bg-gray-700 p-4 rounded-lg';
+                squadBox.innerHTML = `<h3 class="font-bold text-white border-b border-gray-600 pb-2 mb-2">${squad.name}</h3>`;
+                squadBox.appendChild(memberList);
+                workshopArea.appendChild(squadBox);
+            }
         });
 
         document.querySelectorAll('.member-list').forEach(list => {

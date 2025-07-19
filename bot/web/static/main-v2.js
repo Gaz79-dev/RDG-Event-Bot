@@ -514,6 +514,12 @@ document.body.addEventListener('click', (e) => {
 
         (squads || []).forEach(squad => {
             const isReserves = squad.squad_type === 'Reserves';
+            const containerDiv = document.createElement('div');
+            containerDiv.className = 'bg-gray-700 p-4 rounded-lg';
+            const title = document.createElement('h3');
+            title.className = 'font-bold text-white border-b border-gray-600 pb-2 mb-2';
+            title.textContent = squad.name;
+            containerDiv.appendChild(title);
             const targetContainer = isReserves ? reservesArea : workshopArea;
             const squadDiv = document.createElement('div');
             const memberList = document.createElement('div');

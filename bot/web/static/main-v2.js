@@ -510,26 +510,17 @@ document.body.addEventListener('click', (e) => {
     function renderWorkshop(squads) {
         currentSquads = squads;
         workshopArea.innerHTML = '';
-        // Find the main reserves container, which is now also the member list
-        const reservesContainer = document.getElementById('reserves-area');
-        // Clear previous members, but keep the H3 title
-        const memberWrapper = reservesContainer.querySelector('.space-y-1');
-        memberWrapper.innerHTML = '';
-
 
         (squads || []).forEach(squad => {
-            const isReserves = squad.squad_type === 'Reserves';
+            // This single block of code now creates ALL squad boxes, including Reserves.
+            const squadBox = document.createElement('div');
+            squadBox.className = 'bg-gray-700 p-4 rounded-lg';
             
-            // Set the squad ID on the correct container for the drag-and-drop to find
-            if (isReserves) {
-                reservesContainer.dataset.squadId = squad.squad_id;
-            }
-
+            squadBox.innerHTML = `<h3 class="font-bold text-white border-b border-gray-600 pb-2 mb-2">${squad.name}</h3>`;
+            
             const memberList = document.createElement('div');
-            memberList.className = isReserves ? '' : 'member-list space-y-1 min-h-[40px] p-2 rounded-lg';
-            if (!isReserves) {
-                memberList.dataset.squadId = squad.squad_id;
-            }
+            memberList.className = 'member-list space-y-1 min-h-[40px] p-2 rounded-lg';
+            memberList.dataset.squadId = squad.squad_id;
 
             (squad.members || []).forEach(member => {
                 const memberEl = document.createElement('div');
@@ -551,21 +542,11 @@ document.body.addEventListener('click', (e) => {
                         <button class="edit-member-btn text-gray-400 hover:text-white" title="Edit Role">⚙️</button>
                     </div>`;
                 
-                // For reserves, add members directly to the wrapper inside the main container
-                if (isReserves) {
-                    memberWrapper.appendChild(memberEl);
-                } else {
-                    memberList.appendChild(memberEl);
-                }
+                memberList.appendChild(memberEl);
             });
 
-            if (!isReserves) {
-                const squadBox = document.createElement('div');
-                squadBox.className = 'bg-gray-700 p-4 rounded-lg';
-                squadBox.innerHTML = `<h3 class="font-bold text-white border-b border-gray-600 pb-2 mb-2">${squad.name}</h3>`;
-                squadBox.appendChild(memberList);
-                workshopArea.appendChild(squadBox);
-            }
+            squadBox.appendChild(memberList);
+            workshopArea.appendChild(squadBox);
         });
 
         document.querySelectorAll('.member-list').forEach(list => {

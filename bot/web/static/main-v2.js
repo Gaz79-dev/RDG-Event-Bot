@@ -510,14 +510,16 @@ document.body.addEventListener('click', (e) => {
     function renderWorkshop(squads) {
         currentSquads = squads;
         workshopArea.innerHTML = '';
-        const reservesContainer = document.getElementById('reserves-box-wrapper');
-        reservesContainer.innerHTML = '';
+        const reservesContainer = document.getElementById('reserves-container');
+        reservesContainer.innerHTML = ''; // Clear the dedicated reserves container
 
         (squads || []).forEach(squad => {
             const isReserves = squad.squad_type === 'Reserves';
             
+            // This single block creates all squad boxes with an identical, correct structure
             const squadBox = document.createElement('div');
             squadBox.className = 'bg-gray-700 p-4 rounded-lg';
+            
             squadBox.innerHTML = `<h3 class="font-bold text-white border-b border-gray-600 pb-2 mb-2">${squad.name}</h3>`;
             
             const memberList = document.createElement('div');
@@ -549,6 +551,7 @@ document.body.addEventListener('click', (e) => {
 
             squadBox.appendChild(memberList);
 
+            // Place the finished squad box in the correct container
             if (isReserves) {
                 reservesContainer.appendChild(squadBox);
             } else {

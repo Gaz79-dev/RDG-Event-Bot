@@ -510,25 +510,16 @@ document.body.addEventListener('click', (e) => {
     function renderWorkshop(squads) {
         currentSquads = squads;
         workshopArea.innerHTML = '';
-        reservesArea.querySelector('#reserves-list').innerHTML = ''; // Clear only the list inside the reserves box
+        const reservesList = reservesArea.querySelector('#reserves-list');
+        reservesList.innerHTML = ''; // Clear the list inside the reserves box
 
         (squads || []).forEach(squad => {
             const isReserves = squad.squad_type === 'Reserves';
-            // Determine the correct container for the member list (either workshop or reserves)
-            const targetContainer = isReserves ? reservesArea.querySelector('#reserves-list') : workshopArea;
-
-            // Create the list that will hold the members
+            
+            // Create the member list that will be used for any squad type
             const memberList = document.createElement('div');
             memberList.className = 'member-list space-y-1 min-h-[40px] p-2 rounded-lg';
             memberList.dataset.squadId = squad.squad_id;
-            
-            // For non-reserve squads, create the outer box and title
-            let squadBox;
-            if (!isReserves) {
-                squadBox = document.createElement('div');
-                squadBox.className = 'bg-gray-700 p-4 rounded-lg';
-                squadBox.innerHTML = `<h3 class="font-bold text-white border-b border-gray-600 pb-2 mb-2">${squad.name}</h3>`;
-            }
 
             (squad.members || []).forEach(member => {
                 const memberEl = document.createElement('div');
@@ -553,14 +544,16 @@ document.body.addEventListener('click', (e) => {
                 memberList.appendChild(memberEl);
             });
 
-            // If it's a regular squad, append the list to its box and the box to the workshop.
-            // If it's reserves, append the list directly to the reserves container.
-            if (!isReserves) {
-                squadBox.appendChild(memberList);
-                targetContainer.appendChild(squadBox);
+            if (isReserves) {
+                // If it's the Reserves squad, append the populated list directly to the reserves container.
+                reservesList.appendChild(memberList);
             } else {
-                // For reserves, we just need to append the populated member list
-                targetContainer.appendChild(memberList);
+                // For all other squads, create the outer box, add the list to it, and append to the workshop.
+                const squadBox = document.createElement('div');
+                squadBox.className = 'bg-gray-700 p-4 rounded-lg';
+                squadBox.innerHTML = `<h3 class="font-bold text-white border-b border-gray-600 pb-2 mb-2">${squad.name}</h3>`;
+                squadBox.appendChild(memberList);
+                workshopArea.appendChild(squadBox);
             }
         });
 

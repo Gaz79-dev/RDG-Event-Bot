@@ -546,6 +546,9 @@ document.body.addEventListener('click', (e) => {
             });
 
             squadBox.appendChild(memberList);
+            if (isReserves) {
+                reservesContainer.appendChild(squadBox);
+            } else {
             workshopArea.appendChild(squadBox);
         });
 

@@ -21,7 +21,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const buildBtn = document.getElementById('build-btn');
     const workshopSection = document.getElementById('workshop-section');
     const workshopArea = document.getElementById('workshop-area');
-    const reservesArea = document.getElementById('reserves-list');
     const channelDropdown = document.getElementById('channel-dropdown');
     const sendBtn = document.getElementById('send-btn');
     const refreshRosterBtn = document.getElementById('refresh-roster-btn');
@@ -55,30 +54,24 @@ document.addEventListener('DOMContentLoaded', () => {
         "Bottom Left Garrison", "Bottom Middle Garrison", "Bottom Right Garrison"
     ];
 
-    // --- MODIFIED: Enhanced API Error Handler ---
     const handleApiError = async (response) => {
         if (response.ok) {
-            return false; // Not an error
+            return false;
         }
-
         if (response.status === 401) {
             localStorage.removeItem('accessToken');
             window.location.href = '/login';
             return true;
         }
-
-        if (response.status === 423) { // Let the calling function handle lock errors specifically
+        if (response.status === 423) {
             return false;
         }
-
-        // For all other errors, log the details from the response body.
         console.error(`API request to ${response.url} failed with status: ${response.status}`);
         try {
-            const errorData = await response.json(); // Await the JSON body
+            const errorData = await response.json();
             console.error("Server error details:", JSON.stringify(errorData, null, 2));
             const detail = errorData.detail || 'An unknown error occurred. Check the console.';
             
-            // If it's a validation error, detail is usually an array of objects.
             if (Array.isArray(detail)) {
                 const errorMsg = detail.map(err => `${err.loc.join(' -> ')}: ${err.msg}`).join('\n');
                 alert(`A data validation error occurred:\n${errorMsg}`);
@@ -86,11 +79,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 alert(`An error occurred: ${detail}`);
             }
         } catch (e) {
-            // This catch block handles cases where the response body is not valid JSON
             console.error("Could not parse error response as JSON.", e);
             alert(`An API error occurred (Status: ${response.status}).`);
         }
-        return true; // Indicate an error occurred
+        return true;
     };
 
     const createEmojiHtml = (emojiString) => {
@@ -103,7 +95,6 @@ document.addEventListener('DOMContentLoaded', () => {
         return `<span class="text-xl">${emojiString}</span>`;
     };
 
-    // --- LOCKING FUNCTIONS ---
     const setLockedState = (isLocked, message = '') => {
         if (isLocked) {
             lockMessage.textContent = message;
@@ -153,7 +144,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (eventDropdown.value) releaseLock(eventDropdown.value);
     });
 
-    // --- EVENT LISTENERS ---
     buildBtn.addEventListener('click', async () => {
         const eventId = eventDropdown.value;
         if (!eventId) return;
@@ -341,7 +331,6 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (err) { alert("Error: Could not update role."); }
     });
 
-    // --- MAIN LOGIC ---
     Promise.all([
         fetch('/api/users/me', { headers }),
         fetch('/api/squads/roles', { headers }),
@@ -367,32 +356,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     }).catch(err => console.error("FATAL: Initial page data failed to load:", err));
 
-
-document.body.addEventListener('click', (e) => {
-        if (e.target.classList.contains('edit-member-btn')) {
-            const memberItem = e.target.closest('.member-item');
-            modalMemberName.textContent = memberItem.querySelector('.member-name').textContent;
-            modalMemberIdInput.value = memberItem.dataset.memberId;
-            const currentRole = memberItem.querySelector('.assigned-role-text').textContent;
-            
-            modalRoleSelect.innerHTML = '';
-
-            const rolesToExclude = ["Infantry", "Pathfinders", "Recon", "Armour", "Artillery"];
-            const allRoles = [...new Set([...ALL_ROLES.roles, ...Object.values(ALL_ROLES.subclasses).flat()])];
-            const filteredRoles = allRoles.filter(role => !rolesToExclude.includes(role)).sort();
-            
-            filteredRoles.forEach(role => {
-                const option = new Option(role, role);
-                if (role === currentRole) option.selected = true;
-                modalRoleSelect.add(option);
-            });
-            
-            editModal.classList.remove('hidden');
-        } else if (e.target.closest('.assign-task-btn')) {
-            // ... logic for the task button ...
-        }
-    });
-    // --- HANDLER FUNCTION ---
     async function handleEventSelection() {
         if (!isPageInitialized) return;
         if (!currentUser) return;
@@ -430,7 +393,6 @@ document.body.addEventListener('click', (e) => {
         } catch (error) { console.error(`Error loading event data for ${eventId}:`, error); }
     }
     
-    // --- UI RENDER FUNCTIONS ---
     async function fetchAndDisplayRoster(eventId) {
         try {
             const rosterResponse = await fetch(`/api/events/${eventId}/signups`, { headers });
@@ -511,12 +473,11 @@ document.body.addEventListener('click', (e) => {
         currentSquads = squads;
         workshopArea.innerHTML = '';
         const reservesContainer = document.getElementById('reserves-container');
-        reservesContainer.innerHTML = ''; // Clear the dedicated reserves container
+        reservesContainer.innerHTML = ''; 
 
         (squads || []).forEach(squad => {
             const isReserves = squad.squad_type === 'Reserves';
             
-            // This single block creates all squad boxes with an identical, correct structure
             const squadBox = document.createElement('div');
             squadBox.className = 'bg-gray-700 p-4 rounded-lg';
             
@@ -551,7 +512,6 @@ document.body.addEventListener('click', (e) => {
 
             squadBox.appendChild(memberList);
 
-            // Place the finished squad box in the correct container
             if (isReserves) {
                 reservesContainer.appendChild(squadBox);
             } else {
@@ -560,17 +520,28 @@ document.body.addEventListener('click', (e) => {
         });
 
         document.querySelectorAll('.member-list').forEach(list => {
-            new Sortable(list, { group: 'squads', animation: 150, onEnd: async (evt) => {
-                const memberId = evt.item.dataset.memberId;
-                const newSquadId = evt.to.dataset.squadId;
-                try {
-                    const response = await fetch(`/api/squads/members/${memberId}/move`, {
-                        method: 'PUT', headers: { ...headers, 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ new_squad_id: parseInt(newSquadId) })
-                    });
-                    if(await handleApiError(response)) throw new Error('Move failed on server');
-                } catch (err) { alert("Error: Could not move member."); }
-            }});
+            new Sortable(list, { 
+                group: 'squads', 
+                animation: 150, 
+                onEnd: async (evt) => {
+                    const memberId = evt.item.dataset.memberId;
+                    const newSquadId = evt.to.dataset.squadId;
+                    try {
+                        const squadIdInt = parseInt(newSquadId);
+                        if (isNaN(squadIdInt)) {
+                           throw new Error('Could not find a valid squad ID for the drop target.');
+                        }
+                        const response = await fetch(`/api/squads/members/${memberId}/move`, {
+                            method: 'PUT', headers: { ...headers, 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ new_squad_id: squadIdInt })
+                        });
+                        if (await handleApiError(response)) throw new Error('Move failed on server');
+                    } catch (err) {
+                        console.error("Drag-and-drop error:", err);
+                        alert("Error: Could not move member. " + err.message);
+                    }
+                }
+            });
         });
         
         workshopSection.classList.remove('hidden');

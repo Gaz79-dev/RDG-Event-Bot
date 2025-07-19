@@ -473,11 +473,12 @@ document.addEventListener('DOMContentLoaded', () => {
         currentSquads = squads;
         workshopArea.innerHTML = '';
         const reservesContainer = document.getElementById('reserves-container');
-        reservesContainer.innerHTML = ''; 
+        reservesContainer.innerHTML = ''; // Clear the dedicated reserves container
 
         (squads || []).forEach(squad => {
             const isReserves = squad.squad_type === 'Reserves';
             
+            // This single block creates all squad boxes with an identical, correct structure
             const squadBox = document.createElement('div');
             squadBox.className = 'bg-gray-700 p-4 rounded-lg';
             
@@ -512,6 +513,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             squadBox.appendChild(memberList);
 
+            // Place the finished squad box in the correct container
             if (isReserves) {
                 reservesContainer.appendChild(squadBox);
             } else {

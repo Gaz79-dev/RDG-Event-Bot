@@ -510,15 +510,26 @@ document.body.addEventListener('click', (e) => {
     function renderWorkshop(squads) {
         currentSquads = squads;
         workshopArea.innerHTML = '';
-        const reservesList = document.getElementById('reserves-list');
-        reservesList.innerHTML = '';
+        // Find the main reserves container, which is now also the member list
+        const reservesContainer = document.getElementById('reserves-area');
+        // Clear previous members, but keep the H3 title
+        const memberWrapper = reservesContainer.querySelector('.space-y-1');
+        memberWrapper.innerHTML = '';
+
 
         (squads || []).forEach(squad => {
             const isReserves = squad.squad_type === 'Reserves';
             
+            // Set the squad ID on the correct container for the drag-and-drop to find
+            if (isReserves) {
+                reservesContainer.dataset.squadId = squad.squad_id;
+            }
+
             const memberList = document.createElement('div');
-            memberList.className = 'member-list space-y-1 min-h-[40px] p-2 rounded-lg';
-            memberList.dataset.squadId = squad.squad_id;
+            memberList.className = isReserves ? '' : 'member-list space-y-1 min-h-[40px] p-2 rounded-lg';
+            if (!isReserves) {
+                memberList.dataset.squadId = squad.squad_id;
+            }
 
             (squad.members || []).forEach(member => {
                 const memberEl = document.createElement('div');
@@ -540,14 +551,15 @@ document.body.addEventListener('click', (e) => {
                         <button class="edit-member-btn text-gray-400 hover:text-white" title="Edit Role">⚙️</button>
                     </div>`;
                 
-                memberList.appendChild(memberEl);
+                // For reserves, add members directly to the wrapper inside the main container
+                if (isReserves) {
+                    memberWrapper.appendChild(memberEl);
+                } else {
+                    memberList.appendChild(memberEl);
+                }
             });
 
-            if (isReserves) {
-                // If it is the Reserves squad, append its member list to the dedicated reserves area.
-                reservesList.appendChild(memberList);
-            } else {
-                // For all other squads, create the outer box and append it to the main workshop area.
+            if (!isReserves) {
                 const squadBox = document.createElement('div');
                 squadBox.className = 'bg-gray-700 p-4 rounded-lg';
                 squadBox.innerHTML = `<h3 class="font-bold text-white border-b border-gray-600 pb-2 mb-2">${squad.name}</h3>`;

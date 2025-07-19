@@ -1,4 +1,27 @@
-document.addEventListener('DOMContentLoaded', () => {
+document.body.addEventListener('click', (e) => {
+        if (e.target.classList.contains('edit-member-btn')) {
+            const memberItem = e.target.closest('.member-item');
+            modalMemberName.textContent = memberItem.querySelector('.member-name').textContent;
+            modalMemberIdInput.value = memberItem.dataset.memberId;
+            const currentRole = memberItem.querySelector('.assigned-role-text').textContent;
+            
+            modalRoleSelect.innerHTML = '';
+
+            // --- START: Dropdown Filtering Logic ---
+            const rolesToExclude = ["Infantry", "Pathfinders", "Recon", "Armour", "Artillery"];
+            const allRoles = [...new Set([...ALL_ROLES.roles, ...Object.values(ALL_ROLES.subclasses).flat()])];
+            const filteredRoles = allRoles.filter(role => !rolesToExclude.includes(role)).sort();
+            
+            filteredRoles.forEach(role => {
+                const option = new Option(role, role);
+                if (role === currentRole) option.selected = true;
+                modalRoleSelect.add(option);
+            });
+            // --- END: Dropdown Filtering Logic ---
+            
+            editModal.classList.remove('hidden');
+        } else if (e.target.closest('.assign-task-btn')) {
+    
     // --- STATE AND HEADERS ---
     const token = getAuthToken();
     if (!token) {
@@ -516,7 +539,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     </div>
                     <div class="flex items-center space-x-2">
                         <button class="assign-task-btn text-gray-400 hover:text-white" title="Assign Task">📋</button>
-                        <button class="edit-member-btn text-gray-400 hover:text-white" title="Edit Role">EDIT</button>
+                        <button class="edit-member-btn text-gray-400 hover:text-white" title="Edit Role">⚙️</button>
                     </div>`;
                 
                 memberList.appendChild(memberEl);

@@ -508,55 +508,61 @@ document.body.addEventListener('click', (e) => {
     }
 
     function renderWorkshop(squads) {
-    currentSquads = squads;
-    workshopArea.innerHTML = '';
-    reservesArea.innerHTML = ''; // This will no longer be used but we clear it for safety
+        currentSquads = squads;
+        workshopArea.innerHTML = '';
+        reservesArea.querySelector('#reserves-list').innerHTML = ''; // Clear only the list inside the reserves box
 
-    (squads || []).forEach(squad => {
-        // --- START: Corrected Logic ---
-        // Create a single container for each squad box.
-        const squadContainer = document.createElement('div');
-        squadContainer.className = 'bg-gray-700 p-4 rounded-lg';
+        (squads || []).forEach(squad => {
+            const isReserves = squad.squad_type === 'Reserves';
+            // Determine the correct container for the member list (either workshop or reserves)
+            const targetContainer = isReserves ? reservesArea.querySelector('#reserves-list') : workshopArea;
 
-        // Create and add the title to the container.
-        const title = document.createElement('h3');
-        title.className = 'font-bold text-white border-b border-gray-600 pb-2 mb-2';
-        title.textContent = squad.name;
-        squadContainer.appendChild(title);
-
-        // Create the list for members.
-        const memberList = document.createElement('div');
-        memberList.className = 'member-list space-y-1 min-h-[40px] p-2 rounded-lg';
-        memberList.dataset.squadId = squad.squad_id;
-        // --- END: Corrected Logic ---
-
-        (squad.members || []).forEach(member => {
-            const memberEl = document.createElement('div');
-            memberEl.className = 'p-2 bg-gray-800 rounded-md flex justify-between items-center member-item cursor-grab';
-            memberEl.dataset.memberId = member.squad_member_id;
-            const emojiHtml = createEmojiHtml(EMOJI_MAP[member.assigned_role_name]);
+            // Create the list that will hold the members
+            const memberList = document.createElement('div');
+            memberList.className = 'member-list space-y-1 min-h-[40px] p-2 rounded-lg';
+            memberList.dataset.squadId = squad.squad_id;
             
-            memberEl.innerHTML = `
-                <div class="member-info flex-grow">
-                    <div class="flex items-center">
-                        <span class="member-emoji mr-2 flex-shrink-0 w-6 h-6 flex items-center justify-center">${emojiHtml}</span>
-                        <span class="member-name">${member.display_name}</span>
-                        <span class="assigned-role-text hidden">${member.assigned_role_name}</span>
+            // For non-reserve squads, create the outer box and title
+            let squadBox;
+            if (!isReserves) {
+                squadBox = document.createElement('div');
+                squadBox.className = 'bg-gray-700 p-4 rounded-lg';
+                squadBox.innerHTML = `<h3 class="font-bold text-white border-b border-gray-600 pb-2 mb-2">${squad.name}</h3>`;
+            }
+
+            (squad.members || []).forEach(member => {
+                const memberEl = document.createElement('div');
+                memberEl.className = 'p-2 bg-gray-800 rounded-md flex justify-between items-center member-item cursor-grab';
+                memberEl.dataset.memberId = member.squad_member_id;
+                const emojiHtml = createEmojiHtml(EMOJI_MAP[member.assigned_role_name]);
+                
+                memberEl.innerHTML = `
+                    <div class="member-info flex-grow">
+                        <div class="flex items-center">
+                            <span class="member-emoji mr-2 flex-shrink-0 w-6 h-6 flex items-center justify-center">${emojiHtml}</span>
+                            <span class="member-name">${member.display_name}</span>
+                            <span class="assigned-role-text hidden">${member.assigned_role_name}</span>
+                        </div>
+                        ${member.startup_task ? `<div class="text-xs text-yellow-400 font-semibold startup-task-text mt-1">${member.startup_task}</div>` : ''}
                     </div>
-                    ${member.startup_task ? `<div class="text-xs text-yellow-400 font-semibold startup-task-text mt-1">${member.startup_task}</div>` : ''}
-                </div>
-                <div class="flex items-center space-x-2">
-                    <button class="assign-task-btn text-gray-400 hover:text-white" title="Assign Task">📋</button>
-                    <button class="edit-member-btn text-gray-400 hover:text-white" title="Edit Role">⚙️</button>
-                </div>`;
-            
-            memberList.appendChild(memberEl);
-        });
+                    <div class="flex items-center space-x-2">
+                        <button class="assign-task-btn text-gray-400 hover:text-white" title="Assign Task">📋</button>
+                        <button class="edit-member-btn text-gray-400 hover:text-white" title="Edit Role">⚙️</button>
+                    </div>`;
+                
+                memberList.appendChild(memberEl);
+            });
 
-        // Add the member list to the container, and the container to the main workshop area.
-        squadContainer.appendChild(memberList);
-        workshopArea.appendChild(squadContainer);
-    });
+            // If it's a regular squad, append the list to its box and the box to the workshop.
+            // If it's reserves, append the list directly to the reserves container.
+            if (!isReserves) {
+                squadBox.appendChild(memberList);
+                targetContainer.appendChild(squadBox);
+            } else {
+                // For reserves, we just need to append the populated member list
+                targetContainer.appendChild(memberList);
+            }
+        });
 
         document.querySelectorAll('.member-list').forEach(list => {
             new Sortable(list, { group: 'squads', animation: 150, onEnd: async (evt) => {

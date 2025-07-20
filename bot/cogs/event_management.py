@@ -251,18 +251,25 @@ class NotificationTargetSelect(ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        self.view.stop()
 
 class NotificationSelectView(ui.View):
     def __init__(self):
         super().__init__(timeout=300)
+        self.value = None # This will be True if "Send" is clicked
         self.select_menu = NotificationTargetSelect()
         self.add_item(self.select_menu)
-        self.selected_statuses: Optional[List[str]] = None
 
-    async def wait(self):
-        await super().wait()
-        self.selected_statuses = self.select_menu.values
+    @ui.button(label="Send Notifications", style=discord.ButtonStyle.green, row=1)
+    async def confirm(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.defer()
+        self.value = True
+        self.stop()
+
+    @ui.button(label="Skip Notifications", style=discord.ButtonStyle.red, row=1)
+    async def cancel(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.defer()
+        self.value = False
+        self.stop()
 
 class PersistentEventView(ui.View):
     def __init__(self, db: Database):
@@ -815,15 +822,23 @@ class Conversation:
                 await msg.delete()
 
                 user_ids_to_notify = []
-                if notify_view.value: 
-                    
+                if notify_view.value:
                     select_view = NotificationSelectView()
-                    select_msg = await self.user.send("Please select the RSVP groups to notify:", view=select_view)
-                    await select_view.wait()
+                    select_msg = await self.user.send("Please select the RSVP groups to notify, then click Send.", view=select_view)
+                    await select_view.wait() # This now waits for the button press
 
-                    if statuses_to_notify := select_view.selected_statuses:
-                        signups = await self.db.get_signups_for_event(self.event_id)
-                        user_ids_to_notify = [s['user_id'] for s in signups if s['rsvp_status'] in statuses_to_notify]
+                    # Check if the "Send Notifications" button was clicked
+                    if select_view.value is True:
+                        statuses_to_notify = select_view.select_menu.values
+                        if statuses_to_notify:
+                            signups = await self.db.get_signups_for_event(self.event_id)
+                            user_ids_to_notify = [s['user_id'] for s in signups if s['rsvp_status'] in statuses_to_notify]
+                        else:
+                            await self.user.send("No RSVP groups were selected. Skipping notifications.")
+                    # This handles the "Skip" button or a timeout
+                    else:
+                        await self.user.send("Notification step skipped.")
+                    
                     await select_msg.delete()
                 else:
                     await self.user.send("Okay, no notifications will be sent.")

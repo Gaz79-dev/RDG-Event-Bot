@@ -272,13 +272,26 @@ async def send_squad_embed(request: SendEmbedRequest, db: Database = Depends(get
 
     event_details = await db.get_event_by_id(event_id) if event_id else None
     
-    # --- MODIFIED: Logic to build the new title ---
     title_str = "Team Composition"
     event_time_str = ""
     if event_details:
         event_timestamp = int(event_details['event_time'].timestamp())
         event_time_str = f" - <t:{event_timestamp}:F>"
         title_str = f"Team Composition - {event_details['title']}"
+
+    # --- START: New mention logic ---
+    content_str = ""
+    allowed_mentions = {"parse": ["users", "roles"]} # Default allowed mentions
+    accepted_ids = []
+
+    if request.mention_accepted and event_id:
+        signups = await db.get_signups_for_event(event_id)
+        accepted_ids = [s['user_id'] for s in signups if s['rsvp_status'] == RsvpStatus.ACCEPTED]
+        if accepted_ids:
+            content_str = ' '.join([f'<@{uid}>' for uid in accepted_ids])
+            # To be safe, explicitly specify which users can be mentioned
+            allowed_mentions = {"users": [str(uid) for uid in accepted_ids]}
+    # --- END: New mention logic ---
 
     reserves_list = []
     for squad in request.squads:
@@ -305,8 +318,9 @@ async def send_squad_embed(request: SendEmbedRequest, db: Database = Depends(get
         })
 
     embed_payload = {
+        # --- MODIFIED: Add content and allowed_mentions ---
+        "content": content_str,
         "embeds": [{
-            # --- MODIFIED: Use the new title format ---
             "title": f"{title_str}{event_time_str}",
             "description": "The following squads have been finalized for the event.",
             "color": 15844367,
@@ -314,7 +328,8 @@ async def send_squad_embed(request: SendEmbedRequest, db: Database = Depends(get
             "footer": {
                 "text": f"Reserves: {', '.join(reserves_list) if reserves_list else 'None'}"
             }
-        }]
+        }],
+        "allowed_mentions": allowed_mentions
     }
 
     async with httpx.AsyncClient() as client:

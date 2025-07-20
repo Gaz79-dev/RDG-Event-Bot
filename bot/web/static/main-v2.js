@@ -220,11 +220,16 @@ document.addEventListener('DOMContentLoaded', () => {
         
         try {
             const url = `/api/events/send-embed?event_id=${eventId}`;
+            const mentionAttendees = document.getElementById('mention-attendees-checkbox').checked;
 
             const response = await fetch(url, {
                 method: 'POST',
                 headers: { ...headers, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ channel_id: selectedChannelId, squads: currentSquads })
+                body: JSON.stringify({
+                    channel_id: selectedChannelId,
+                    squads: currentSquads,
+                    mention_accepted: mentionAttendees // Add this new key
+                })
             });
             
             if (await handleApiError(response)) {

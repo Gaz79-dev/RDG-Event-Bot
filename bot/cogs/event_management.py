@@ -966,6 +966,7 @@ class EventManagement(commands.Cog):
     @app_commands.describe(event_id="The ID of the event to delete.")
     async def delete(self, interaction: discord.Interaction, event_id: int):
         if not interaction.user.guild_permissions.administrator:
+            # Check if this interaction was from a button, if so, we need to use followup
             if interaction.response.is_done():
                 await interaction.followup.send("You must be an administrator to delete events.", ephemeral=True)
             else:

@@ -251,7 +251,7 @@ class NotificationTargetSelect(ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        self.view.stop()
+        self.stop()
 
 class NotificationSelectView(ui.View):
     def __init__(self):
@@ -360,8 +360,7 @@ class PersistentEventView(ui.View):
         event = await self.db.get_event_by_message_id(interaction.message.id)
         if not event:
             return await interaction.response.send_message("This event could not be found in the database.", ephemeral=True)
-        
-        # Acknowledge the button press before starting the conversation
+
         await interaction.response.send_message("I've sent you a DM to start the editing process.", ephemeral=True)
         await event_cog.start_conversation(interaction, mode='edit', event_id=event['event_id'])
 
@@ -378,9 +377,8 @@ class PersistentEventView(ui.View):
         if not event:
             return await interaction.response.send_message("This event could not be found in the database.", ephemeral=True)
         
-        # Acknowledge the button press, then call the delete logic
         await interaction.response.send_message("I've sent you a DM to confirm the deletion.", ephemeral=True)
-        await event_cog.delete(interaction, event_id=event['event_id'])
+        await event_cog.start_delete_conversation(interaction, event['event_id'])
 
 
 class ReminderConfirmationView(ui.View):
@@ -968,7 +966,6 @@ class EventManagement(commands.Cog):
     @app_commands.describe(event_id="The ID of the event to delete.")
     async def delete(self, interaction: discord.Interaction, event_id: int):
         if not interaction.user.guild_permissions.administrator:
-            # Check if this interaction was from a button, if so, we need to use followup
             if interaction.response.is_done():
                 await interaction.followup.send("You must be an administrator to delete events.", ephemeral=True)
             else:
@@ -994,79 +991,7 @@ class EventManagement(commands.Cog):
         if not interaction.response.is_done():
             await interaction.response.send_message("I've sent you a DM to confirm the deletion.", ephemeral=True)
 
-        try:
-            # 1. Confirm deletion in DMs
-            confirm_view = DeleteConfirmationView(self, event_id)
-            msg = await interaction.user.send(
-                f"Are you sure you want to delete the event **{event['title']}**?",
-                view=confirm_view
-            )
-            await confirm_view.wait()
-            
-            if confirm_view.value is not True:
-                await msg.edit(content="Deletion cancelled.", view=None)
-                return
-
-            # 2. Ask if they want to notify attendees
-            notify_view = ConfirmationView()
-            notify_msg = await interaction.user.send("Would you like to notify attendees of the cancellation?", view=notify_view)
-            await notify_view.wait()
-            await notify_msg.delete()
-            
-            user_ids_to_notify = []
-            if notify_view.value:
-                # 3. Ask which groups to notify
-                select_view = NotificationSelectView()
-                select_msg = await interaction.user.send("Please select the RSVP groups to notify:", view=select_view)
-                await select_view.wait()
-
-                if statuses_to_notify := select_view.selected_statuses:
-                    signups = await self.db.get_signups_for_event(event_id)
-                    user_ids_to_notify = [s['user_id'] for s in signups if s['rsvp_status'] in statuses_to_notify]
-                await select_msg.delete()
-            else:
-                await interaction.user.send("Okay, no notifications will be sent.")
-            
-            # 4. Perform the actual deletion
-            is_parent_recurring = event.get('is_recurring') and not event.get('parent_event_id')
-            if is_parent_recurring:
-                await self.db.delete_event(event_id)
-            else:
-                if event.get('message_id') and event.get('channel_id'):
-                    try:
-                        channel = self.bot.get_channel(event['channel_id']) or await self.bot.fetch_channel(event['channel_id'])
-                        message = await channel.fetch_message(event['message_id'])
-                        await message.delete()
-                    except Exception as e: print(f"Could not delete event message: {e}")
-                
-                if event.get('thread_id'):
-                    try:
-                        thread = self.bot.get_channel(event['thread_id']) or await self.bot.fetch_channel(event['thread_id'])
-                        await thread.delete()
-                    except Exception as e: print(f"Could not delete event thread: {e}")
-                await self.db.soft_delete_event(event_id)
-            
-            await interaction.user.send(f"✅ The event **{event['title']}** has been successfully deleted.")
-            
-            # 5. Send notifications
-            if user_ids_to_notify:
-                await interaction.user.send(f"Sending cancellation DM to {len(user_ids_to_notify)} selected attendee(s)...")
-                success_count = 0
-                for user_id in user_ids_to_notify:
-                    try:
-                        member = interaction.guild.get_member(user_id) or await interaction.guild.fetch_member(user_id)
-                        await member.send(f"Please note, the event **{event['title']}** has been cancelled by an administrator.")
-                        success_count += 1
-                    except (discord.Forbidden, discord.NotFound):
-                        continue
-                await interaction.user.send(f"✅ Successfully notified {success_count}/{len(user_ids_to_notify)} attendees.")
-
-        except discord.Forbidden:
-            if interaction.response.is_done():
-                await interaction.followup.send("I couldn't send you a DM. Please check your privacy settings.", ephemeral=True)
-        except Exception as e:
-            print(f"Error during deletion conversation: {e}")
-            traceback.print_exc()
+        await self.start_delete_conversation(interaction, event_id)
 
     @event_group.command(name="restore", description="Restores a previously deleted event.")
     @app_commands.describe(event_id="The ID of the event to restore.")
@@ -1148,9 +1073,8 @@ class EventManagement(commands.Cog):
                 await interaction.response.send_message("You are already in an active conversation with me. Please finish or cancel it first.", ephemeral=True)
             return
         
-        # This check is now handled by the button/command that calls this method.
-        # if not interaction.response.is_done():
-        #     await interaction.response.send_message("I've sent you a DM to start the process!", ephemeral=True)
+        if not interaction.response.is_done():
+            await interaction.response.send_message("I've sent you a DM to start the process!", ephemeral=True)
         
         try:
             conv = Conversation(self, interaction, self.db, event_id)
@@ -1164,6 +1088,26 @@ class EventManagement(commands.Cog):
         except discord.Forbidden:
             if interaction.response.is_done():
                 await interaction.followup.send("I couldn't send you a DM. Please check your privacy settings.", ephemeral=True)
+
+    # --- START: New Delete Conversation Starter ---
+    async def start_delete_conversation(self, interaction: discord.Interaction, event_id: int):
+        """Starts the dedicated conversation for deleting an event."""
+        if interaction.user.id in self.active_conversations:
+            if interaction.response.is_done():
+                await interaction.followup.send("You are already in an active conversation with me. Please finish or cancel it first.", ephemeral=True)
+            else:
+                await interaction.response.send_message("You are already in an active conversation with me. Please finish or cancel it first.", ephemeral=True)
+            return
+        
+        try:
+            conv = DeleteConversation(self, interaction, self.db, event_id)
+            self.active_conversations[interaction.user.id] = conv
+            asyncio.create_task(conv.start())
+
+        except discord.Forbidden:
+             if interaction.response.is_done():
+                await interaction.followup.send("I couldn't send you a DM. Please check your privacy settings.", ephemeral=True)
+    # --- END: New Delete Conversation Starter ---
 
 async def setup(bot: commands.Bot):
     """Sets up the event management cog."""

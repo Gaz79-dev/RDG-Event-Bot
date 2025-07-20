@@ -250,13 +250,17 @@ class NotificationTargetSelect(ui.Select):
         super().__init__(placeholder="Choose which groups to notify...", min_values=1, max_values=3, options=options)
 
     async def callback(self, interaction: discord.Interaction):
+        # Acknowledge the selection and update the parent view's state
+        self.view.selected_statuses = self.values
         await interaction.response.defer()
 
 class NotificationSelectView(ui.View):
     def __init__(self):
         super().__init__(timeout=300)
-        self.value = None # This will be True if "Send" is clicked
+        self.value = None
         self.select_menu = NotificationTargetSelect()
+        # Explicitly store the selected statuses, starting with the default
+        self.selected_statuses: List[str] = [RsvpStatus.ACCEPTED]
         self.add_item(self.select_menu)
 
     @ui.button(label="Send Notifications", style=discord.ButtonStyle.green, row=1)

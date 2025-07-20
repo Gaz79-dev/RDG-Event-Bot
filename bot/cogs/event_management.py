@@ -251,7 +251,7 @@ class NotificationTargetSelect(ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        self.stop()
+        self.view.stop()
 
 class NotificationSelectView(ui.View):
     def __init__(self):
@@ -809,14 +809,13 @@ class Conversation:
                 
                 update_embed = await create_event_embed(self.bot, self.event_id, self.db)
                 
-                # --- START: New Notification Logic ---
                 notify_view = ConfirmationView()
                 msg = await self.user.send("Would you like to notify attendees of the changes?", view=notify_view)
                 await notify_view.wait()
                 await msg.delete()
 
                 user_ids_to_notify = []
-                if notify_view.value: # If user clicked "Yes"
+                if notify_view.value: 
                     
                     select_view = NotificationSelectView()
                     select_msg = await self.user.send("Please select the RSVP groups to notify:", view=select_view)
@@ -828,7 +827,6 @@ class Conversation:
                     await select_msg.delete()
                 else:
                     await self.user.send("Okay, no notifications will be sent.")
-                # --- END: New Notification Logic ---
 
                 # Update the main event embed in the channel
                 try:
@@ -865,7 +863,6 @@ class Conversation:
                     except Exception as e:
                         await self.user.send(f"⚠️ Could not update the thread: {e}")
 
-                # Notify attendees (using the list gathered earlier)
                 if user_ids_to_notify:
                     await self.user.send(f"Now sending a DM to {len(user_ids_to_notify)} selected attendee(s)...")
                     success_count = 0
@@ -879,7 +876,6 @@ class Conversation:
                     await self.user.send(f"✅ Successfully notified {success_count}/{len(user_ids_to_notify)} attendees.")
 
             else:
-                # This block handles brand new event creation.
                 if self.data.get('is_recurring'):
                     parent_id = await self.db.create_event(self.interaction.guild.id, self.interaction.channel.id, self.user.id, self.data)
                     await self.user.send(f"✅ Recurring parent template created (ID: {parent_id}). You can manage this from the Events page on the website.")
@@ -910,17 +906,15 @@ class Conversation:
         await self.user.send("Event creation/editing cancelled")
 
 class DeleteConfirmationView(ui.View):
-    def __init__(self, event_management_cog, event_id: int):
+    def __init__(self):
         super().__init__(timeout=120)
-        self.cog = event_management_cog
-        self.event_id = event_id
         self.value = None
 
     @ui.button(label="Yes, Delete Event", style=discord.ButtonStyle.danger)
     async def confirm_delete(self, interaction: discord.Interaction, button: ui.Button):
         self.value = True
         for item in self.children: item.disabled = True
-        await interaction.response.edit_message(content="Confirmed. Proceeding with deletion...", view=self)
+        await interaction.response.edit_message(content="Confirmed. Proceeding...", view=self)
         self.stop()
 
     @ui.button(label="No, Cancel", style=discord.ButtonStyle.secondary)
@@ -1090,7 +1084,6 @@ class EventManagement(commands.Cog):
             if interaction.response.is_done():
                 await interaction.followup.send("I couldn't send you a DM. Please check your privacy settings.", ephemeral=True)
 
-    # --- START: New Delete Conversation Starter ---
     async def start_delete_conversation(self, interaction: discord.Interaction, event_id: int):
         """Starts the dedicated conversation for deleting an event."""
         if interaction.user.id in self.active_conversations:
@@ -1108,7 +1101,6 @@ class EventManagement(commands.Cog):
         except discord.Forbidden:
              if interaction.response.is_done():
                 await interaction.followup.send("I couldn't send you a DM. Please check your privacy settings.", ephemeral=True)
-    # --- END: New Delete Conversation Starter ---
 
 async def setup(bot: commands.Bot):
     """Sets up the event management cog."""

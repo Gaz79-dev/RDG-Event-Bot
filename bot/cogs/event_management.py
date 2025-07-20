@@ -1102,6 +1102,99 @@ class EventManagement(commands.Cog):
              if interaction.response.is_done():
                 await interaction.followup.send("I couldn't send you a DM. Please check your privacy settings.", ephemeral=True)
 
+    class DeleteConversation:
+    def __init__(self, cog: 'EventManagement', interaction: discord.Interaction, db: Database, event_id: int):
+        self.cog = cog
+        self.bot = cog.bot
+        self.user = interaction.user
+        self.guild = interaction.guild
+        self.db = db
+        self.event_id = event_id
+        self.is_finished = False
+
+    async def start(self):
+        """Guides the user through deleting an event."""
+        try:
+            # 1. Get event details first
+            event = await self.db.get_event_by_id(self.event_id)
+            if not event:
+                await self.user.send("This event could not be found in the database. It may have already been deleted.")
+                return self.finish()
+
+            # 2. Confirm deletion
+            confirm_view = DeleteConfirmationView()
+            msg = await self.user.send(f"Are you sure you want to delete the event **{event['title']}**? This action cannot be undone via the bot.", view=confirm_view)
+            await confirm_view.wait()
+
+            if confirm_view.value is not True:
+                await msg.edit(content="Deletion cancelled.", view=None)
+                return self.finish()
+            
+            await msg.edit(content="Deletion confirmed. Preparing to delete assets...", view=None)
+
+            # 3. Ask about notifying attendees
+            notify_view = ConfirmationView()
+            notify_msg = await self.user.send("Would you like to notify accepted attendees via DM that the event has been cancelled?", view=notify_view)
+            await notify_view.wait()
+            should_notify = notify_view.value
+            await notify_msg.edit(content="Okay, proceeding with deletion...", view=None)
+
+            # 4. Perform deletion of Discord assets
+            if event.get('message_id'):
+                try:
+                    channel = self.bot.get_channel(event['channel_id']) or await self.bot.fetch_channel(event['channel_id'])
+                    message = await channel.fetch_message(event['message_id'])
+                    await message.delete()
+                    await self.user.send("✅ Event message in channel deleted.")
+                except Exception as e:
+                    await self.user.send(f"⚠️ Could not delete the event message in the channel: {e}")
+
+            if event.get('thread_id'):
+                try:
+                    thread = self.bot.get_channel(event['thread_id']) or await self.bot.fetch_channel(event['thread_id'])
+                    await thread.delete()
+                    await self.user.send("✅ Event discussion thread deleted.")
+                except Exception as e:
+                    await self.user.send(f"⚠️ Could not delete the event thread: {e}")
+            
+            # 5. Notify users if requested
+            if should_notify:
+                signups = await self.db.get_signups_for_event(self.event_id)
+                accepted_ids = [s['user_id'] for s in signups if s['rsvp_status'] == RsvpStatus.ACCEPTED]
+                
+                if accepted_ids:
+                    await self.user.send(f"Now sending cancellation notices to {len(accepted_ids)} attendees...")
+                    success_count = 0
+                    for user_id in accepted_ids:
+                        try:
+                            member = self.guild.get_member(user_id) or await self.guild.fetch_member(user_id)
+                            await member.send(f"Please be advised that the event **{event['title']}** has been cancelled.")
+                            success_count += 1
+                        except (discord.Forbidden, discord.NotFound):
+                            continue
+                    await self.user.send(f"✅ Successfully notified {success_count}/{len(accepted_ids)} attendees.")
+                else:
+                    await self.user.send("No accepted attendees to notify.")
+
+            # 6. Soft-delete the event in the database
+            await self.db.soft_delete_event(self.event_id)
+            await self.user.send("✅ Event has been marked as deleted in the database.")
+
+        except asyncio.TimeoutError:
+            await self.user.send("Your session has timed out. Deletion cancelled.")
+        except Exception as e:
+            print(f"Error during event deletion conversation: {e}")
+            traceback.print_exc()
+            await self.user.send("An unexpected error occurred. Please check the bot's logs.")
+        finally:
+            self.finish()
+
+    def finish(self):
+        """Cleans up the active conversation."""
+        self.is_finished = True
+        if self.user.id in self.cog.active_conversations:
+            del self.cog.active_conversations[self.user.id]
+
 async def setup(bot: commands.Bot):
     """Sets up the event management cog."""
     cog = EventManagement(bot, bot.db)

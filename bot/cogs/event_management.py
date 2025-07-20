@@ -1,4 +1,3 @@
-
 import discord
 from discord.ext import commands
 from discord import app_commands, ui
@@ -241,6 +240,33 @@ class RoleSelectionView(ui.View):
             await message.edit(embed=await create_event_embed(self.bot, self.event_id, self.db))
         except (discord.NotFound, discord.Forbidden): pass
 
+# --- START: New UI Views for Notification Flow ---
+class NotificationTargetSelect(ui.Select):
+    """A multi-select dropdown to choose which RSVP groups to notify."""
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="Accepted", value=RsvpStatus.ACCEPTED, emoji="✅", default=True),
+            discord.SelectOption(label="Tentative", value=RsvpStatus.TENTATIVE, emoji="🤔"),
+            discord.SelectOption(label="Declined", value=RsvpStatus.DECLINED, emoji="❌"),
+        ]
+        super().__init__(placeholder="Choose which groups to notify...", min_values=1, max_values=3, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        self.stop()
+
+class NotificationSelectView(ui.View):
+    """The view containing the multi-select dropdown for notification targets."""
+    def __init__(self):
+        super().__init__(timeout=300)
+        self.select_menu = NotificationTargetSelect()
+        self.add_item(self.select_menu)
+
+    @property
+    def selected_statuses(self) -> Optional[List[str]]:
+        return self.select_menu.values if hasattr(self, 'select_menu') else None
+# --- END: New UI Views for Notification Flow ---
+
 class PersistentEventView(ui.View):
     def __init__(self, db: Database):
         super().__init__(timeout=None)
@@ -325,58 +351,36 @@ class PersistentEventView(ui.View):
             except:
                 pass
     
-    # --- START: New Admin Buttons ---
     @ui.button(label="Edit", style=discord.ButtonStyle.primary, custom_id="persistent_view:edit_event", row=2)
     async def edit_event_button(self, interaction: discord.Interaction, button: ui.Button):
-        """A button to trigger the event editing flow."""
-        # 1. Permission Check
         if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("You must be an administrator to edit events.", ephemeral=True)
-            return
+            return await interaction.response.send_message("You must be an administrator to edit events.", ephemeral=True)
 
-        # 2. Find the Event Management Cog
         event_cog = interaction.client.get_cog('EventManagement')
         if not event_cog:
-            await interaction.response.send_message("An error occurred. The event management module may be offline.", ephemeral=True)
-            return
+            return await interaction.response.send_message("An error occurred. The event management module may be offline.", ephemeral=True)
             
-        # 3. Get the Event ID from the message
         event = await self.db.get_event_by_message_id(interaction.message.id)
         if not event:
-            await interaction.response.send_message("This event could not be found in the database.", ephemeral=True)
-            return
+            return await interaction.response.send_message("This event could not be found in the database.", ephemeral=True)
 
-        # 4. Start the existing edit conversation flow
         await event_cog.start_conversation(interaction, mode='edit', event_id=event['event_id'])
 
     @ui.button(label="Delete", style=discord.ButtonStyle.danger, custom_id="persistent_view:delete_event", row=2)
     async def delete_event_button(self, interaction: discord.Interaction, button: ui.Button):
-        """A button to trigger the event deletion flow."""
-        # 1. Permission Check
         if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("You must be an administrator to delete events.", ephemeral=True)
-            return
+            return await interaction.response.send_message("You must be an administrator to delete events.", ephemeral=True)
 
-        # 2. Find the Event Management Cog
         event_cog = interaction.client.get_cog('EventManagement')
         if not event_cog:
-            await interaction.response.send_message("An error occurred. The event management module may be offline.", ephemeral=True)
-            return
+            return await interaction.response.send_message("An error occurred. The event management module may be offline.", ephemeral=True)
             
-        # 3. Get the Event ID from the message
         event = await self.db.get_event_by_message_id(interaction.message.id)
         if not event:
-            await interaction.response.send_message("This event could not be found in the database.", ephemeral=True)
-            return
+            return await interaction.response.send_message("This event could not be found in the database.", ephemeral=True)
 
-        # 4. Trigger the existing delete confirmation view
-        view = DeleteConfirmationView(event_cog, event['event_id'])
-        await interaction.response.send_message(
-            f"Are you sure you want to delete the event **{event['title']}**?",
-            view=view,
-            ephemeral=True
-        )
-    # --- END: New Admin Buttons ---
+        # This now correctly calls the DM-based delete flow
+        await event_cog.delete(interaction, event_id=event['event_id'])
 
 
 class ReminderConfirmationView(ui.View):
@@ -606,21 +610,14 @@ class Conversation:
             
             if value is not None:
                 if key in ['event_time', 'end_time'] and isinstance(value, datetime.datetime):
-                    # --- START: Timezone Formatting Fix ---
                     try:
-                        # Get the event's original timezone from the stored data.
                         target_tz_str = self.data.get('timezone', 'UTC')
                         target_tz = pytz.timezone(target_tz_str)
                     except pytz.UnknownTimeZoneError:
-                        # Fallback to UTC if the timezone is somehow invalid.
                         target_tz = pytz.utc
                     
-                    # Convert the stored UTC time to the event's original timezone.
                     local_time = value.astimezone(target_tz)
-                    
-                    # Format the now-local time into the desired human-readable string.
                     display_value = local_time.strftime('%d-%m-%Y %H:%M')
-                    # --- END: Timezone Formatting Fix ---
                 elif key in ['mention_role_ids', 'restrict_to_role_ids']:
                     role_names = [r.name for r_id in value if (r := guild.get_role(r_id))]
                     display_value = ", ".join(role_names) if role_names else "None"
@@ -812,7 +809,27 @@ class Conversation:
             if self.event_id:
                 await self.db.update_event(self.event_id, self.data)
                 
-                # Update the main event embed
+                # --- START: New Notification Logic ---
+                notify_view = ConfirmationView()
+                msg = await self.user.send("Would you like to notify attendees of the changes?", view=notify_view)
+                await notify_view.wait()
+
+                user_ids_to_notify = []
+                if notify_view.value: # If user clicked "Yes"
+                    await msg.edit(content="Who should be notified?", view=None)
+                    
+                    select_view = NotificationSelectView()
+                    await self.user.send("Please select the RSVP groups to notify:", view=select_view)
+                    await select_view.wait()
+
+                    if statuses_to_notify := select_view.selected_statuses:
+                        signups = await self.db.get_signups_for_event(self.event_id)
+                        user_ids_to_notify = [s['user_id'] for s in signups if s['rsvp_status'] in statuses_to_notify]
+                else:
+                    await msg.edit(content="Okay, no notifications will be sent.", view=None)
+                # --- END: New Notification Logic ---
+
+                # Update the main event embed in the channel
                 try:
                     event_for_message = self.data
                     if self.data.get('is_recurring') and not self.data.get('parent_event_id'):
@@ -841,7 +858,6 @@ class Conversation:
                     try:
                         thread = await self.bot.fetch_channel(self.data['thread_id'])
                         event_time = self.data['event_time']
-                        # Format the date as "MMM DD" (e.g., Aug 09)
                         date_str = event_time.strftime('%b %d')
                         new_thread_name = f"{self.data['title']} - {date_str}"
                         await thread.edit(name=new_thread_name)
@@ -850,20 +866,18 @@ class Conversation:
                     except Exception as e:
                         await self.user.send(f"⚠️ Could not update the thread: {e}")
 
-                # Notify attendees
-                signups = await self.db.get_signups_for_event(self.event_id)
-                accepted_ids = [s['user_id'] for s in signups if s['rsvp_status'] == RsvpStatus.ACCEPTED]
-                if accepted_ids:
-                    await self.user.send(f"Now sending a DM to {len(accepted_ids)} accepted attendee(s)...")
+                # Notify attendees (using the list gathered earlier)
+                if user_ids_to_notify:
+                    await self.user.send(f"Now sending a DM to {len(user_ids_to_notify)} selected attendee(s)...")
                     success_count = 0
-                    for user_id in accepted_ids:
+                    for user_id in user_ids_to_notify:
                         try:
                             member = self.interaction.guild.get_member(user_id) or await self.interaction.guild.fetch_member(user_id)
                             await member.send(f"Please note that the event **{self.data['title']}** has been updated.", embed=update_embed)
                             success_count += 1
                         except (discord.Forbidden, discord.NotFound):
                             continue
-                    await self.user.send(f"✅ Successfully notified {success_count}/{len(accepted_ids)} attendees.")
+                    await self.user.send(f"✅ Successfully notified {success_count}/{len(user_ids_to_notify)} attendees.")
 
             else:
                 # This block handles brand new event creation.
@@ -901,44 +915,23 @@ class DeleteConfirmationView(ui.View):
         super().__init__(timeout=120)
         self.cog = event_management_cog
         self.event_id = event_id
+        # --- Add a value to track button press ---
+        self.value = None
 
     @ui.button(label="Yes, Delete Event", style=discord.ButtonStyle.danger)
     async def confirm_delete(self, interaction: discord.Interaction, button: ui.Button):
-        event = await self.cog.db.get_event_by_id(self.event_id)
-        if not event:
-            return await interaction.response.edit_message(content="This event no longer exists.", view=None)
-
+        # This button just confirms the choice, the main logic is handled in the command
+        self.value = True
         for item in self.children: item.disabled = True
-        await interaction.response.edit_message(content="Deleting event...", view=self)
-
-        is_parent_recurring = event.get('is_recurring') and not event.get('parent_event_id')
-
-        if is_parent_recurring:
-            await self.cog.db.delete_event(self.event_id)
-            await interaction.edit_original_response(content=f"Recurring series '{event['title']}' has been deleted.", view=None)
-            return
-
-        if event.get('message_id') and event.get('channel_id'):
-            try:
-                channel = self.cog.bot.get_channel(event['channel_id']) or await self.cog.bot.fetch_channel(event['channel_id'])
-                message = await channel.fetch_message(event['message_id'])
-                await message.delete()
-            except Exception as e: print(f"Could not delete event message: {e}")
-        
-        if event.get('thread_id'):
-            try:
-                thread = self.cog.bot.get_channel(event['thread_id']) or await self.cog.bot.fetch_channel(event['thread_id'])
-                await thread.delete()
-            except Exception as e: print(f"Could not delete event thread: {e}")
-
-        await self.cog.db.soft_delete_event(self.event_id)
-        
-        await interaction.edit_original_response(content=f"Event '{event['title']}' has been deleted.", view=None)
+        await interaction.response.edit_message(content="Confirmed. Deleting event...", view=self)
+        self.stop()
 
     @ui.button(label="No, Cancel", style=discord.ButtonStyle.secondary)
     async def cancel_delete(self, interaction: discord.Interaction, button: ui.Button):
+        self.value = False
         for item in self.children: item.disabled = True
         await interaction.response.edit_message(content="Deletion cancelled.", view=self)
+        self.stop()
 
 class EventManagement(commands.Cog):
     def __init__(self, bot: commands.Bot, db: Database):
@@ -972,7 +965,7 @@ class EventManagement(commands.Cog):
             return await interaction.response.send_message("Event not found.", ephemeral=True)
         await self.start_conversation(interaction, mode='edit', event_id=event_id)
 
-    @event_group.command(name="delete", description="Marks an event for deletion and notifies attendees.")
+    @event_group.command(name="delete", description="Deletes an event via a DM conversation.")
     @app_commands.describe(event_id="The ID of the event to delete.")
     async def delete(self, interaction: discord.Interaction, event_id: int):
         if not interaction.user.guild_permissions.administrator:
@@ -985,12 +978,84 @@ class EventManagement(commands.Cog):
         if event.get('deleted_at'):
             return await interaction.response.send_message("This event has already been deleted.", ephemeral=True)
 
-        view = DeleteConfirmationView(self, event_id)
-        await interaction.response.send_message(
-            f"Are you sure you want to delete the event **{event['title']}**? This will notify all accepted attendees.",
-            view=view,
-            ephemeral=True
-        )
+        # Acknowledge the command and start the DM flow
+        if not interaction.response.is_done():
+            await interaction.response.send_message("I've sent you a DM to confirm the deletion.", ephemeral=True)
+        else:
+            await interaction.followup.send("I've sent you a DM to confirm the deletion.", ephemeral=True)
+
+        try:
+            # 1. Confirm deletion in DMs
+            confirm_view = DeleteConfirmationView(self, event_id)
+            msg = await interaction.user.send(
+                f"Are you sure you want to delete the event **{event['title']}**?",
+                view=confirm_view
+            )
+            await confirm_view.wait()
+            
+            if confirm_view.value is not True:
+                await msg.edit(content="Deletion cancelled.", view=None)
+                return
+
+            # 2. Ask if they want to notify attendees
+            notify_view = ConfirmationView()
+            notify_msg = await interaction.user.send("Would you like to notify attendees of the cancellation?", view=notify_view)
+            await notify_view.wait()
+            
+            user_ids_to_notify = []
+            if notify_view.value:
+                await notify_msg.edit(content="Who should be notified?", view=None)
+
+                # 3. Ask which groups to notify
+                select_view = NotificationSelectView()
+                await interaction.user.send("Please select the RSVP groups to notify:", view=select_view)
+                await select_view.wait()
+
+                if statuses_to_notify := select_view.selected_statuses:
+                    signups = await self.db.get_signups_for_event(event_id)
+                    user_ids_to_notify = [s['user_id'] for s in signups if s['rsvp_status'] in statuses_to_notify]
+            else:
+                await notify_msg.edit(content="Okay, no notifications will be sent.", view=None)
+            
+            # 4. Perform the actual deletion
+            is_parent_recurring = event.get('is_recurring') and not event.get('parent_event_id')
+            if is_parent_recurring:
+                await self.db.delete_event(event_id)
+            else:
+                if event.get('message_id') and event.get('channel_id'):
+                    try:
+                        channel = self.bot.get_channel(event['channel_id']) or await self.bot.fetch_channel(event['channel_id'])
+                        message = await channel.fetch_message(event['message_id'])
+                        await message.delete()
+                    except Exception as e: print(f"Could not delete event message: {e}")
+                
+                if event.get('thread_id'):
+                    try:
+                        thread = self.bot.get_channel(event['thread_id']) or await self.bot.fetch_channel(event['thread_id'])
+                        await thread.delete()
+                    except Exception as e: print(f"Could not delete event thread: {e}")
+                await self.db.soft_delete_event(event_id)
+            
+            await interaction.user.send(f"✅ The event **{event['title']}** has been successfully deleted.")
+            
+            # 5. Send notifications
+            if user_ids_to_notify:
+                await interaction.user.send(f"Sending cancellation DM to {len(user_ids_to_notify)} selected attendee(s)...")
+                success_count = 0
+                for user_id in user_ids_to_notify:
+                    try:
+                        member = interaction.guild.get_member(user_id) or await interaction.guild.fetch_member(user_id)
+                        await member.send(f"Please note, the event **{event['title']}** has been cancelled by an administrator.")
+                        success_count += 1
+                    except (discord.Forbidden, discord.NotFound):
+                        continue
+                await interaction.user.send(f"✅ Successfully notified {success_count}/{len(user_ids_to_notify)} attendees.")
+
+        except discord.Forbidden:
+            await interaction.followup.send("I couldn't send you a DM. Please check your privacy settings.", ephemeral=True)
+        except Exception as e:
+            print(f"Error during deletion conversation: {e}")
+            traceback.print_exc()
 
     @event_group.command(name="restore", description="Restores a previously deleted event.")
     @app_commands.describe(event_id="The ID of the event to restore.")
@@ -1065,11 +1130,20 @@ class EventManagement(commands.Cog):
 
     async def start_conversation(self, interaction: discord.Interaction, mode: str, event_id: int = None):
         """Starts a conversation in DMs for either creating or editing an event."""
+        # --- FIX: Acknowledge button interactions correctly ---
+        if interaction.response.is_done():
+             # If it's a button, the response has already been sent, so we can't send another.
+             # The button callback should have sent the "starting DM" message.
+             pass
+        else:
+            # If it's a slash command, send the initial response.
+            await interaction.response.send_message("I've sent you a DM to start the process!", ephemeral=True)
+
         if interaction.user.id in self.active_conversations:
-            return await interaction.response.send_message("You are already in an active conversation with me. Please finish or cancel it first.", ephemeral=True)
+            await interaction.followup.send("You are already in an active conversation with me. Please finish or cancel it first.", ephemeral=True)
+            return
         
         try:
-            await interaction.response.send_message("I've sent you a DM to start the process!", ephemeral=True)
             conv = Conversation(self, interaction, self.db, event_id)
             self.active_conversations[interaction.user.id] = conv
             

@@ -360,7 +360,7 @@ class PersistentEventView(ui.View):
         event = await self.db.get_event_by_message_id(interaction.message.id)
         if not event:
             return await interaction.response.send_message("This event could not be found in the database.", ephemeral=True)
-
+        
         # Acknowledge the button press before starting the conversation
         await interaction.response.send_message("I've sent you a DM to start the editing process.", ephemeral=True)
         await event_cog.start_conversation(interaction, mode='edit', event_id=event['event_id'])
@@ -378,7 +378,8 @@ class PersistentEventView(ui.View):
         if not event:
             return await interaction.response.send_message("This event could not be found in the database.", ephemeral=True)
         
-        # This now correctly calls the DM-based delete flow
+        # Acknowledge the button press, then call the delete logic
+        await interaction.response.send_message("I've sent you a DM to confirm the deletion.", ephemeral=True)
         await event_cog.delete(interaction, event_id=event['event_id'])
 
 
@@ -808,14 +809,16 @@ class Conversation:
             if self.event_id:
                 await self.db.update_event(self.event_id, self.data)
                 
+                update_embed = await create_event_embed(self.bot, self.event_id, self.db)
+                
                 # --- START: New Notification Logic ---
                 notify_view = ConfirmationView()
                 msg = await self.user.send("Would you like to notify attendees of the changes?", view=notify_view)
                 await notify_view.wait()
+                await msg.delete()
 
                 user_ids_to_notify = []
                 if notify_view.value: # If user clicked "Yes"
-                    await msg.edit(content="Who should be notified?", view=None)
                     
                     select_view = NotificationSelectView()
                     select_msg = await self.user.send("Please select the RSVP groups to notify:", view=select_view)
@@ -826,7 +829,7 @@ class Conversation:
                         user_ids_to_notify = [s['user_id'] for s in signups if s['rsvp_status'] in statuses_to_notify]
                     await select_msg.delete()
                 else:
-                    await msg.edit(content="Okay, no notifications will be sent.", view=None)
+                    await self.user.send("Okay, no notifications will be sent.")
                 # --- END: New Notification Logic ---
 
                 # Update the main event embed in the channel
@@ -851,8 +854,6 @@ class Conversation:
                     print(f"Error updating main embed: {e}")
                     await self.user.send("⚠️ Event data was updated, but I couldn't find or edit the original event message.")
                 
-                update_embed = await create_event_embed(self.bot, self.event_id, self.db)
-
                 # Update the thread
                 if self.data.get('thread_id'):
                     try:
@@ -989,7 +990,7 @@ class EventManagement(commands.Cog):
                 await interaction.response.send_message("This event has already been deleted.", ephemeral=True)
             return
 
-        # Acknowledge the command/button press
+        # Acknowledge the command/button press if it hasn't been already
         if not interaction.response.is_done():
             await interaction.response.send_message("I've sent you a DM to confirm the deletion.", ephemeral=True)
 
@@ -1010,11 +1011,10 @@ class EventManagement(commands.Cog):
             notify_view = ConfirmationView()
             notify_msg = await interaction.user.send("Would you like to notify attendees of the cancellation?", view=notify_view)
             await notify_view.wait()
+            await notify_msg.delete()
             
             user_ids_to_notify = []
             if notify_view.value:
-                await notify_msg.edit(content="Who should be notified?", view=None)
-
                 # 3. Ask which groups to notify
                 select_view = NotificationSelectView()
                 select_msg = await interaction.user.send("Please select the RSVP groups to notify:", view=select_view)
@@ -1025,7 +1025,7 @@ class EventManagement(commands.Cog):
                     user_ids_to_notify = [s['user_id'] for s in signups if s['rsvp_status'] in statuses_to_notify]
                 await select_msg.delete()
             else:
-                await notify_msg.edit(content="Okay, no notifications will be sent.", view=None)
+                await interaction.user.send("Okay, no notifications will be sent.")
             
             # 4. Perform the actual deletion
             is_parent_recurring = event.get('is_recurring') and not event.get('parent_event_id')
@@ -1148,10 +1148,9 @@ class EventManagement(commands.Cog):
                 await interaction.response.send_message("You are already in an active conversation with me. Please finish or cancel it first.", ephemeral=True)
             return
         
-        if not interaction.response.is_done():
-            # This is a slash command, so we send the initial response.
-            # The button callbacks now handle their own initial response.
-            await interaction.response.send_message("I've sent you a DM to start the process!", ephemeral=True)
+        # This check is now handled by the button/command that calls this method.
+        # if not interaction.response.is_done():
+        #     await interaction.response.send_message("I've sent you a DM to start the process!", ephemeral=True)
         
         try:
             conv = Conversation(self, interaction, self.db, event_id)

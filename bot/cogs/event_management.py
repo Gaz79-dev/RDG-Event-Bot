@@ -360,7 +360,7 @@ class PersistentEventView(ui.View):
         event = await self.db.get_event_by_message_id(interaction.message.id)
         if not event:
             return await interaction.response.send_message("This event could not be found in the database.", ephemeral=True)
-        
+
         # Acknowledge the button press before starting the conversation
         await interaction.response.send_message("I've sent you a DM to start the editing process.", ephemeral=True)
         await event_cog.start_conversation(interaction, mode='edit', event_id=event['event_id'])
@@ -377,8 +377,10 @@ class PersistentEventView(ui.View):
         event = await self.db.get_event_by_message_id(interaction.message.id)
         if not event:
             return await interaction.response.send_message("This event could not be found in the database.", ephemeral=True)
-
+        
+        # This now correctly calls the DM-based delete flow
         await event_cog.delete(interaction, event_id=event['event_id'])
+
 
 class ReminderConfirmationView(ui.View):
     def __init__(self):
@@ -804,10 +806,9 @@ class Conversation:
 
         try:
             if self.event_id:
-                # Update the database with the new data
                 await self.db.update_event(self.event_id, self.data)
                 
-                # Ask if the user wants to notify attendees
+                # --- START: New Notification Logic ---
                 notify_view = ConfirmationView()
                 msg = await self.user.send("Would you like to notify attendees of the changes?", view=notify_view)
                 await notify_view.wait()
@@ -826,6 +827,7 @@ class Conversation:
                     await select_msg.delete()
                 else:
                     await msg.edit(content="Okay, no notifications will be sent.", view=None)
+                # --- END: New Notification Logic ---
 
                 # Update the main event embed in the channel
                 try:
@@ -919,7 +921,7 @@ class DeleteConfirmationView(ui.View):
     async def confirm_delete(self, interaction: discord.Interaction, button: ui.Button):
         self.value = True
         for item in self.children: item.disabled = True
-        await interaction.response.edit_message(content="Confirmed. Deleting event...", view=self)
+        await interaction.response.edit_message(content="Confirmed. Proceeding with deletion...", view=self)
         self.stop()
 
     @ui.button(label="No, Cancel", style=discord.ButtonStyle.secondary)
@@ -987,7 +989,7 @@ class EventManagement(commands.Cog):
                 await interaction.response.send_message("This event has already been deleted.", ephemeral=True)
             return
 
-        # Acknowledge the command and start the DM flow
+        # Acknowledge the command/button press
         if not interaction.response.is_done():
             await interaction.response.send_message("I've sent you a DM to confirm the deletion.", ephemeral=True)
 
@@ -1060,7 +1062,6 @@ class EventManagement(commands.Cog):
                 await interaction.user.send(f"✅ Successfully notified {success_count}/{len(user_ids_to_notify)} attendees.")
 
         except discord.Forbidden:
-            # Check if original interaction can be followed up
             if interaction.response.is_done():
                 await interaction.followup.send("I couldn't send you a DM. Please check your privacy settings.", ephemeral=True)
         except Exception as e:
@@ -1141,16 +1142,15 @@ class EventManagement(commands.Cog):
     async def start_conversation(self, interaction: discord.Interaction, mode: str, event_id: int = None):
         """Starts a conversation in DMs for either creating or editing an event."""
         if interaction.user.id in self.active_conversations:
-            # If the interaction is from a button, the response is already "done".
             if interaction.response.is_done():
                 await interaction.followup.send("You are already in an active conversation with me. Please finish or cancel it first.", ephemeral=True)
             else:
                 await interaction.response.send_message("You are already in an active conversation with me. Please finish or cancel it first.", ephemeral=True)
             return
         
-        # When starting from a button, we don't send a response here, as it was already done.
-        # The button's callback is responsible for the initial "I've sent you a DM" message.
         if not interaction.response.is_done():
+            # This is a slash command, so we send the initial response.
+            # The button callbacks now handle their own initial response.
             await interaction.response.send_message("I've sent you a DM to start the process!", ephemeral=True)
         
         try:

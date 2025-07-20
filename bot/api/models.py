@@ -90,6 +90,7 @@ class SquadBuildRequest(BaseModel):
 class SendEmbedRequest(BaseModel):
     channel_id: str
     squads: List[Squad]
+    mention_accepted: bool = False # Add this line
 
 class RoleUpdateRequest(BaseModel):
     new_role_name: str

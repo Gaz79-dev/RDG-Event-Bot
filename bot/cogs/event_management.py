@@ -240,9 +240,7 @@ class RoleSelectionView(ui.View):
             await message.edit(embed=await create_event_embed(self.bot, self.event_id, self.db))
         except (discord.NotFound, discord.Forbidden): pass
 
-# --- START: New UI Views for Notification Flow ---
 class NotificationTargetSelect(ui.Select):
-    """A multi-select dropdown to choose which RSVP groups to notify."""
     def __init__(self):
         options = [
             discord.SelectOption(label="Accepted", value=RsvpStatus.ACCEPTED, emoji="✅", default=True),
@@ -253,19 +251,18 @@ class NotificationTargetSelect(ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        self.stop()
+        self.view.stop()
 
 class NotificationSelectView(ui.View):
-    """The view containing the multi-select dropdown for notification targets."""
     def __init__(self):
         super().__init__(timeout=300)
         self.select_menu = NotificationTargetSelect()
         self.add_item(self.select_menu)
+        self.selected_statuses: Optional[List[str]] = None
 
-    @property
-    def selected_statuses(self) -> Optional[List[str]]:
-        return self.select_menu.values if hasattr(self, 'select_menu') else None
-# --- END: New UI Views for Notification Flow ---
+    async def wait(self):
+        await super().wait()
+        self.selected_statuses = self.select_menu.values
 
 class PersistentEventView(ui.View):
     def __init__(self, db: Database):
@@ -363,7 +360,9 @@ class PersistentEventView(ui.View):
         event = await self.db.get_event_by_message_id(interaction.message.id)
         if not event:
             return await interaction.response.send_message("This event could not be found in the database.", ephemeral=True)
-
+        
+        # Acknowledge the button press before starting the conversation
+        await interaction.response.send_message("I've sent you a DM to start the editing process.", ephemeral=True)
         await event_cog.start_conversation(interaction, mode='edit', event_id=event['event_id'])
 
     @ui.button(label="Delete", style=discord.ButtonStyle.danger, custom_id="persistent_view:delete_event", row=2)
@@ -379,9 +378,7 @@ class PersistentEventView(ui.View):
         if not event:
             return await interaction.response.send_message("This event could not be found in the database.", ephemeral=True)
 
-        # This now correctly calls the DM-based delete flow
         await event_cog.delete(interaction, event_id=event['event_id'])
-
 
 class ReminderConfirmationView(ui.View):
     def __init__(self):
@@ -807,9 +804,10 @@ class Conversation:
 
         try:
             if self.event_id:
+                # Update the database with the new data
                 await self.db.update_event(self.event_id, self.data)
                 
-                # --- START: New Notification Logic ---
+                # Ask if the user wants to notify attendees
                 notify_view = ConfirmationView()
                 msg = await self.user.send("Would you like to notify attendees of the changes?", view=notify_view)
                 await notify_view.wait()
@@ -819,15 +817,15 @@ class Conversation:
                     await msg.edit(content="Who should be notified?", view=None)
                     
                     select_view = NotificationSelectView()
-                    await self.user.send("Please select the RSVP groups to notify:", view=select_view)
+                    select_msg = await self.user.send("Please select the RSVP groups to notify:", view=select_view)
                     await select_view.wait()
 
                     if statuses_to_notify := select_view.selected_statuses:
                         signups = await self.db.get_signups_for_event(self.event_id)
                         user_ids_to_notify = [s['user_id'] for s in signups if s['rsvp_status'] in statuses_to_notify]
+                    await select_msg.delete()
                 else:
                     await msg.edit(content="Okay, no notifications will be sent.", view=None)
-                # --- END: New Notification Logic ---
 
                 # Update the main event embed in the channel
                 try:
@@ -915,12 +913,10 @@ class DeleteConfirmationView(ui.View):
         super().__init__(timeout=120)
         self.cog = event_management_cog
         self.event_id = event_id
-        # --- Add a value to track button press ---
         self.value = None
 
     @ui.button(label="Yes, Delete Event", style=discord.ButtonStyle.danger)
     async def confirm_delete(self, interaction: discord.Interaction, button: ui.Button):
-        # This button just confirms the choice, the main logic is handled in the command
         self.value = True
         for item in self.children: item.disabled = True
         await interaction.response.edit_message(content="Confirmed. Deleting event...", view=self)
@@ -969,20 +965,31 @@ class EventManagement(commands.Cog):
     @app_commands.describe(event_id="The ID of the event to delete.")
     async def delete(self, interaction: discord.Interaction, event_id: int):
         if not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message("You must be an administrator to delete events.", ephemeral=True)
+            # Check if this interaction was from a button, if so, we need to use followup
+            if interaction.response.is_done():
+                await interaction.followup.send("You must be an administrator to delete events.", ephemeral=True)
+            else:
+                await interaction.response.send_message("You must be an administrator to delete events.", ephemeral=True)
+            return
         
         event = await self.db.get_event_by_id(event_id)
         if not event or event['guild_id'] != interaction.guild_id:
-            return await interaction.response.send_message("Event not found or it does not belong to this server.", ephemeral=True)
+            if interaction.response.is_done():
+                await interaction.followup.send("Event not found or it does not belong to this server.", ephemeral=True)
+            else:
+                await interaction.response.send_message("Event not found or it does not belong to this server.", ephemeral=True)
+            return
 
         if event.get('deleted_at'):
-            return await interaction.response.send_message("This event has already been deleted.", ephemeral=True)
+            if interaction.response.is_done():
+                await interaction.followup.send("This event has already been deleted.", ephemeral=True)
+            else:
+                await interaction.response.send_message("This event has already been deleted.", ephemeral=True)
+            return
 
         # Acknowledge the command and start the DM flow
         if not interaction.response.is_done():
             await interaction.response.send_message("I've sent you a DM to confirm the deletion.", ephemeral=True)
-        else:
-            await interaction.followup.send("I've sent you a DM to confirm the deletion.", ephemeral=True)
 
         try:
             # 1. Confirm deletion in DMs
@@ -1008,12 +1015,13 @@ class EventManagement(commands.Cog):
 
                 # 3. Ask which groups to notify
                 select_view = NotificationSelectView()
-                await interaction.user.send("Please select the RSVP groups to notify:", view=select_view)
+                select_msg = await interaction.user.send("Please select the RSVP groups to notify:", view=select_view)
                 await select_view.wait()
 
                 if statuses_to_notify := select_view.selected_statuses:
                     signups = await self.db.get_signups_for_event(event_id)
                     user_ids_to_notify = [s['user_id'] for s in signups if s['rsvp_status'] in statuses_to_notify]
+                await select_msg.delete()
             else:
                 await notify_msg.edit(content="Okay, no notifications will be sent.", view=None)
             
@@ -1052,7 +1060,9 @@ class EventManagement(commands.Cog):
                 await interaction.user.send(f"✅ Successfully notified {success_count}/{len(user_ids_to_notify)} attendees.")
 
         except discord.Forbidden:
-            await interaction.followup.send("I couldn't send you a DM. Please check your privacy settings.", ephemeral=True)
+            # Check if original interaction can be followed up
+            if interaction.response.is_done():
+                await interaction.followup.send("I couldn't send you a DM. Please check your privacy settings.", ephemeral=True)
         except Exception as e:
             print(f"Error during deletion conversation: {e}")
             traceback.print_exc()
@@ -1130,18 +1140,18 @@ class EventManagement(commands.Cog):
 
     async def start_conversation(self, interaction: discord.Interaction, mode: str, event_id: int = None):
         """Starts a conversation in DMs for either creating or editing an event."""
-        # --- FIX: Acknowledge button interactions correctly ---
-        if interaction.response.is_done():
-             # If it's a button, the response has already been sent, so we can't send another.
-             # The button callback should have sent the "starting DM" message.
-             pass
-        else:
-            # If it's a slash command, send the initial response.
-            await interaction.response.send_message("I've sent you a DM to start the process!", ephemeral=True)
-
         if interaction.user.id in self.active_conversations:
-            await interaction.followup.send("You are already in an active conversation with me. Please finish or cancel it first.", ephemeral=True)
+            # If the interaction is from a button, the response is already "done".
+            if interaction.response.is_done():
+                await interaction.followup.send("You are already in an active conversation with me. Please finish or cancel it first.", ephemeral=True)
+            else:
+                await interaction.response.send_message("You are already in an active conversation with me. Please finish or cancel it first.", ephemeral=True)
             return
+        
+        # When starting from a button, we don't send a response here, as it was already done.
+        # The button's callback is responsible for the initial "I've sent you a DM" message.
+        if not interaction.response.is_done():
+            await interaction.response.send_message("I've sent you a DM to start the process!", ephemeral=True)
         
         try:
             conv = Conversation(self, interaction, self.db, event_id)
@@ -1153,7 +1163,8 @@ class EventManagement(commands.Cog):
                 asyncio.create_task(conv.start_editing())
 
         except discord.Forbidden:
-            await interaction.followup.send("I couldn't send you a DM. Please check your privacy settings.", ephemeral=True)
+            if interaction.response.is_done():
+                await interaction.followup.send("I couldn't send you a DM. Please check your privacy settings.", ephemeral=True)
 
 async def setup(bot: commands.Bot):
     """Sets up the event management cog."""

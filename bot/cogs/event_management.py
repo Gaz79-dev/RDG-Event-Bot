@@ -87,41 +87,67 @@ async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> 
     if event['timezone']: time_str += f"\nTimezone: {event['timezone']}"
     embed.add_field(name="Time", value=time_str, inline=False)
     
-    accepted_signups, tentative_users, declined_users = defaultdict(list), [], []
+    accepted_signups = defaultdict(list)
+    tentative_users = []
+    declined_users = []
+    
     for signup in signups:
         member = guild.get_member(signup['user_id'])
         if not member: continue
         
         if signup['rsvp_status'] == RsvpStatus.ACCEPTED:
-            user_role_ids = {r.id for r in member.roles}
-            specialty = ""
-            attack_role = specialty_roles.get('attack')
-            defence_role = specialty_roles.get('defence')
-
-            if specialty_roles.get('arty') in user_role_ids: specialty = " (Arty)"
-            elif specialty_roles.get('armour') in user_role_ids: specialty = " (Armour)"
-            elif attack_role and defence_role and attack_role in user_role_ids and defence_role in user_role_ids: specialty = " (Flex)"
-            elif attack_role in user_role_ids: specialty = " (Attack)"
-            elif defence_role in user_role_ids: specialty = " (Defence)"
+            # Store by primary role and subclass for easy filtering later
+            role_key = signup['role_name'] or "Unassigned"
+            subclass_key = signup['subclass_name']
+            accepted_signups[role_key].append({
+                "display_name": f"**{member.display_name}**",
+                "subclass": subclass_key
+            })
+        elif signup['rsvp_status'] == RsvpStatus.TENTATIVE: 
+            tentative_users.append(member.display_name)
+        elif signup['rsvp_status'] == RsvpStatus.DECLINED: 
+            declined_users.append(member.display_name)
             
-            role, subclass = signup['role_name'] or "Unassigned", signup['subclass_name']
-            signup_text = f"**{member.display_name}**"
-            if subclass: signup_text += f" ({EMOJI_MAPPING.get(subclass, '❔')})"
-            signup_text += specialty
-            accepted_signups[role].append(signup_text)
-        elif signup['rsvp_status'] == RsvpStatus.TENTATIVE: tentative_users.append(member.display_name)
-        elif signup['rsvp_status'] == RsvpStatus.DECLINED: declined_users.append(member.display_name)
-        
     total_accepted = sum(len(v) for v in accepted_signups.values())
     embed.add_field(name=f"✅ Accepted ({total_accepted})", value="\u200b", inline=False)
+
+    # Process each primary role and its subclasses
+    for primary_role in ROLES:
+        if primary_role_signups := accepted_signups.get(primary_role):
+            # Add the main heading for the primary role
+            embed.add_field(
+                name=f"__**{primary_role}**__ ({len(primary_role_signups)})",
+                value="\u200b", # Zero-width space for spacing
+                inline=False
+            )
+            
+            # Group players by their chosen subclass within this primary role
+            subclass_groups = defaultdict(list)
+            for signup in primary_role_signups:
+                subclass_key = signup['subclass'] or "Unassigned"
+                subclass_groups[subclass_key].append(signup['display_name'])
+            
+            # Create sub-fields for each subclass that has signups
+            for subclass, players in sorted(subclass_groups.items()):
+                if players:
+                    embed.add_field(
+                        name=f"**{subclass}** ({len(players)})",
+                        value="\n".join(players),
+                        inline=True
+                    )
     
-    for role in ROLES + ["Unassigned"]:
-        if role == "Unassigned" and not accepted_signups.get("Unassigned"): continue
-        users_in_role = accepted_signups.get(role, [])
-        embed.add_field(name=f"{EMOJI_MAPPING.get(role, '')} **{role}** ({len(users_in_role)})", value="\n".join(users_in_role) or "No one yet", inline=False)
+    # Handle players who are "Unassigned" at the primary role level
+    if unassigned_signups := accepted_signups.get("Unassigned"):
+        embed.add_field(
+            name=f"**Unassigned** ({len(unassigned_signups)})",
+            value="\n".join([p['display_name'] for p in unassigned_signups]),
+            inline=False
+        )
         
-    if tentative_users: embed.add_field(name=f"🤔 Tentative ({len(tentative_users)})", value=", ".join(tentative_users), inline=False)
-    if declined_users: embed.add_field(name=f"❌ Declined ({len(declined_users)})", value=", ".join(declined_users), inline=False)
+    if tentative_users: 
+        embed.add_field(name=f"🤔 Tentative ({len(tentative_users)})", value=", ".join(tentative_users), inline=False)
+    if declined_users: 
+        embed.add_field(name=f"❌ Declined ({len(declined_users)})", value=", ".join(declined_users), inline=False)
     
     creator_name = "Unknown User"
     if creator_id := event.get('creator_id'):

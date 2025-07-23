@@ -15,6 +15,7 @@ class Scheduler(commands.Cog):
         self.bot = bot
         self.db = db
         print("[Scheduler Cog] Initialized. Starting tasks...")
+        self.check_event_messages.start()
         self.create_event_threads.start()
         self.recreate_recurring_events.start()
         self.cleanup_finished_events.start()
@@ -24,6 +25,7 @@ class Scheduler(commands.Cog):
 
     def cog_unload(self):
         """Cleanly cancels all tasks when the cog is unloaded."""
+        self.check_event_messages.cancel()
         self.create_event_threads.cancel()
         self.recreate_recurring_events.cancel()
         self.cleanup_finished_events.cancel()
@@ -31,6 +33,42 @@ class Scheduler(commands.Cog):
         self.sync_event_threads.cancel()
         self.process_tentatives.cancel()
 
+    @tasks.loop(minutes=3)
+    async def check_event_messages(self):
+        """
+        Periodically checks if the message for an active event still exists.
+        If not, it re-posts it. This acts as a self-healing mechanism.
+        """
+        print("\n[Scheduler] Running check_event_messages loop...")
+        try:
+            active_events = await self.db.get_active_events_with_message_id()
+            if not active_events:
+                print("[Scheduler] No active events with messages to check.")
+                return
+
+            print(f"[Scheduler] Checking {len(active_events)} active event message(s)...")
+            for event in active_events:
+                try:
+                    channel = self.bot.get_channel(event['channel_id']) or await self.bot.fetch_channel(event['channel_id'])
+                    await channel.fetch_message(event['message_id'])
+                except discord.NotFound:
+                    print(f"  [Self-Heal] Message for event {event['event_id']} ('{event['title']}') not found. Re-posting...")
+                    try:
+                        embed = await create_event_embed(self.bot, event['event_id'], self.db)
+                        view = PersistentEventView(self.db)
+                        content = " ".join([f"<@&{rid}>" for rid in event.get('mention_role_ids', [])])
+                        
+                        new_message = await channel.send(content=content, embed=embed, view=view)
+                        await self.db.update_event_message_id(event['event_id'], new_message.id)
+                        print(f"  [Self-Heal] Successfully re-posted message for event {event['event_id']}.")
+                    except Exception as post_error:
+                        print(f"  [Self-Heal] FAILED to re-post message for event {event['event_id']}: {post_error}")
+                except Exception as e:
+                    print(f"  [Self-Heal] Error checking message for event {event['event_id']}: {e}")
+        except Exception as e:
+            print(f"[Scheduler] FATAL ERROR in check_event_messages loop: {e}")
+            traceback.print_exc()
+    
     @tasks.loop(hours=1)
     async def process_tentatives(self):
         """Periodically converts 'Tentative' to 'Declined' for past events."""

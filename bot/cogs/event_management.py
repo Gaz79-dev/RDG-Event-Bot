@@ -109,46 +109,64 @@ async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> 
     total_accepted = sum(len(v) for v in accepted_signups.values())
     embed.add_field(name=f"Accepted ({total_accepted})", value="\u200b", inline=False)
 
-    # Process each primary role and its subclasses
-    for primary_role in ROLES:
-        if primary_role_signups := accepted_signups.get(primary_role):
-            
-            subclass_groups = defaultdict(list)
-            for signup in primary_role_signups:
-                subclass_key = signup['subclass'] or "Unassigned"
-                subclass_groups[subclass_key].append(signup['display_name'])
-            
-            # Build the single string for the field value
-            field_value_lines = []
-            for subclass in (SUBCLASSES.get(primary_role, []) + ["Unassigned"]):
-                if players := subclass_groups.get(subclass):
-                    field_value_lines.append(f"**{subclass}** ({len(players)})")
-                    field_value_lines.extend(players)
-                    field_value_lines.append("") # Add a blank line for spacing
-            
-            if field_value_lines:
-                # Remove the final blank line
-                if field_value_lines[-1] == "":
-                    field_value_lines.pop()
-                
-                embed.add_field(
-                    name=f"__**{primary_role}**__ ({len(primary_role_signups)})",
-                    value="\n".join(field_value_lines),
-                    inline=False
-                )
+   # Define the columns
+    column_1_roles = ["Commander", "Infantry"]
+    column_2_roles = ["Armour", "Pathfinders", "Artillery", "Recon"]
 
-    # Handle players who are "Unassigned" at the primary role level
+    # Function to generate the text block for a primary role
+    def build_role_block(primary_role, signups):
+        if not signups:
+            return None
+        
+        subclass_groups = defaultdict(list)
+        for signup in signups:
+            subclass_key = signup['subclass'] or "Unassigned"
+            subclass_groups[subclass_key].append(signup['display_name'])
+            
+        block_lines = [f"__**{primary_role}**__ ({len(signups)})"]
+        for subclass in (SUBCLASSES.get(primary_role, []) + ["Unassigned"]):
+            if players := subclass_groups.get(subclass):
+                block_lines.append(f"__**{subclass}**__ ({len(players)})")
+                block_lines.extend(players)
+                block_lines.append("") # Spacer line
+        
+        if len(block_lines) > 1: # If any players were added
+            if block_lines[-1] == "": block_lines.pop() # Remove last spacer
+            return "\n".join(block_lines)
+        return None
+
+    # Build the columns
+    col1_text = []
+    for role in column_1_roles:
+        if block := build_role_block(role, accepted_signups.get(role)):
+            col1_text.append(block)
+    
+    col2_text = []
+    for role in column_2_roles:
+        if block := build_role_block(role, accepted_signups.get(role)):
+            col2_text.append(block)
+    
+    # Add columns to embed if they have content
+    if col1_text:
+        embed.add_field(name="\u200b", value="\n\n".join(col1_text), inline=True)
+    if col2_text:
+        embed.add_field(name="\u200b", value="\n\n".join(col2_text), inline=True)
+    
+    # Add a spacer field if one column is populated and the other isn't, to maintain layout
+    if (col1_text and not col2_text) or (col2_text and not col1_text):
+        embed.add_field(name="\u200b", value="\u200b", inline=True)
+
+    # Unassigned, Tentative, and Declined remain full-width
     if unassigned_signups := accepted_signups.get("Unassigned"):
         embed.add_field(
-            name=f"**Unassigned** ({len(unassigned_signups)})",
+            name=f"__**Unassigned**__ ({len(unassigned_signups)})",
             value="\n".join([p['display_name'] for p in unassigned_signups]),
             inline=False
         )
-        
     if tentative_users: 
-        embed.add_field(name=f"Tentative ({len(tentative_users)})", value=", ".join(tentative_users), inline=False)
+        embed.add_field(name=f"__**Tentative**__ ({len(tentative_users)})", value=", ".join(tentative_users), inline=False)
     if declined_users: 
-        embed.add_field(name=f"Declined ({len(declined_users)})", value=", ".join(declined_users), inline=False)
+        embed.add_field(name=f"__**Declined**__ ({len(declined_users)})", value=", ".join(declined_users), inline=False)
     
     creator_name = "Unknown User"
     if creator_id := event.get('creator_id'):

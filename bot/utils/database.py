@@ -440,6 +440,20 @@ class Database:
         async with self.pool.acquire() as connection:
             return [dict(row) for row in await connection.fetch(query)]
 
+    async def get_active_events_with_message_id(self) -> List[Dict]:
+        """
+        Gets all active, non-deleted events that have a message ID and should be present in a channel.
+        """
+        query = """
+            SELECT event_id, title, channel_id, message_id, mention_role_ids
+            FROM events
+            WHERE deleted_at IS NULL
+              AND message_id IS NOT NULL
+              AND event_time > (NOW() AT TIME ZONE 'utc' - INTERVAL '2 hours');
+        """
+        async with self.pool.acquire() as connection:
+            return [dict(row) for row in await connection.fetch(query)]
+    
     async def get_past_events_with_tentatives(self) -> List[Dict]:
         query = """
             SELECT s.event_id, s.user_id FROM signups s

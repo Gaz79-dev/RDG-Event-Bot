@@ -96,12 +96,10 @@ async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> 
         if not member: continue
         
         if signup['rsvp_status'] == RsvpStatus.ACCEPTED:
-            # Store by primary role and subclass for easy filtering later
             role_key = signup['role_name'] or "Unassigned"
-            subclass_key = signup['subclass_name']
             accepted_signups[role_key].append({
                 "display_name": f"**{member.display_name}**",
-                "subclass": subclass_key
+                "subclass": signup['subclass_name']
             })
         elif signup['rsvp_status'] == RsvpStatus.TENTATIVE: 
             tentative_users.append(member.display_name)
@@ -109,33 +107,36 @@ async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> 
             declined_users.append(member.display_name)
             
     total_accepted = sum(len(v) for v in accepted_signups.values())
-    embed.add_field(name=f"✅ Accepted ({total_accepted})", value="\u200b", inline=False)
+    embed.add_field(name=f"Accepted ({total_accepted})", value="\u200b", inline=False)
 
     # Process each primary role and its subclasses
     for primary_role in ROLES:
         if primary_role_signups := accepted_signups.get(primary_role):
-            # Add the main heading for the primary role
-            embed.add_field(
-                name=f"__**{primary_role}**__ ({len(primary_role_signups)})",
-                value="\u200b", # Zero-width space for spacing
-                inline=False
-            )
             
-            # Group players by their chosen subclass within this primary role
             subclass_groups = defaultdict(list)
             for signup in primary_role_signups:
                 subclass_key = signup['subclass'] or "Unassigned"
                 subclass_groups[subclass_key].append(signup['display_name'])
             
-            # Create sub-fields for each subclass that has signups
-            for subclass, players in sorted(subclass_groups.items()):
-                if players:
-                    embed.add_field(
-                        name=f"**{subclass}** ({len(players)})",
-                        value="\n".join(players),
-                        inline=True
-                    )
-    
+            # Build the single string for the field value
+            field_value_lines = []
+            for subclass in (SUBCLASSES.get(primary_role, []) + ["Unassigned"]):
+                if players := subclass_groups.get(subclass):
+                    field_value_lines.append(f"**{subclass}** ({len(players)})")
+                    field_value_lines.extend(players)
+                    field_value_lines.append("") # Add a blank line for spacing
+            
+            if field_value_lines:
+                # Remove the final blank line
+                if field_value_lines[-1] == "":
+                    field_value_lines.pop()
+                
+                embed.add_field(
+                    name=f"__**{primary_role}**__ ({len(primary_role_signups)})",
+                    value="\n".join(field_value_lines),
+                    inline=False
+                )
+
     # Handle players who are "Unassigned" at the primary role level
     if unassigned_signups := accepted_signups.get("Unassigned"):
         embed.add_field(
@@ -145,9 +146,9 @@ async def create_event_embed(bot: commands.Bot, event_id: int, db: Database) -> 
         )
         
     if tentative_users: 
-        embed.add_field(name=f"🤔 Tentative ({len(tentative_users)})", value=", ".join(tentative_users), inline=False)
+        embed.add_field(name=f"Tentative ({len(tentative_users)})", value=", ".join(tentative_users), inline=False)
     if declined_users: 
-        embed.add_field(name=f"❌ Declined ({len(declined_users)})", value=", ".join(declined_users), inline=False)
+        embed.add_field(name=f"Declined ({len(declined_users)})", value=", ".join(declined_users), inline=False)
     
     creator_name = "Unknown User"
     if creator_id := event.get('creator_id'):

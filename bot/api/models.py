@@ -105,6 +105,11 @@ class RosterUpdateRequest(BaseModel):
 class StartupTaskUpdateRequest(BaseModel):
     task: Optional[str] = None
 
+class AcceptTentativeRequest(BaseModel):
+    user_id: int
+    role_name: str
+    subclass_name: Optional[str] = None
+
 # --- Player Statistics Models ---
 class PlayerStats(BaseModel):
     user_id: str

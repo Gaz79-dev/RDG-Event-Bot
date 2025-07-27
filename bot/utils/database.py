@@ -1,3 +1,4 @@
+
 import asyncpg
 import os
 import datetime
@@ -270,41 +271,6 @@ class Database:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow("SELECT * FROM signups WHERE event_id = $1 AND user_id = $2", event_id, user_id)
             return dict(row) if row else None
-
-    async def get_tentative_signups_for_event(self, event_id: int) -> List[Dict]:
-        """Gets all signups with a 'Tentative' status for a given event."""
-        query = "SELECT * FROM signups WHERE event_id = $1 AND rsvp_status = $2;"
-        async with self.pool.acquire() as conn:
-            return [dict(row) for row in await conn.fetch(query, event_id, RsvpStatus.TENTATIVE)]
-
-    async def accept_tentative_player(self, event_id: int, user_id: int, role_name: str, subclass_name: Optional[str]):
-        """Updates a player's status from Tentative to Accepted and assigns their role."""
-        async with self.pool.acquire() as connection:
-            async with connection.transaction():
-                # First, update the main signups table
-                await connection.execute(
-                    """
-                    UPDATE signups 
-                    SET rsvp_status = $1, role_name = $2, subclass_name = $3
-                    WHERE event_id = $4 AND user_id = $5 AND rsvp_status = $6;
-                    """,
-                    RsvpStatus.ACCEPTED, role_name, subclass_name, event_id, user_id, RsvpStatus.TENTATIVE
-                )
-                
-                # Next, update the player's stats, moving them from tentative to accepted
-                await self.update_player_stats(user_id, old_status=RsvpStatus.TENTATIVE, new_status=RsvpStatus.ACCEPTED)
-
-                # Finally, add them to the permanent event history
-                event_details = await self.get_event_by_id(event_id)
-                if event_details:
-                    await connection.execute(
-                        """
-                        INSERT INTO player_event_history (user_id, event_id, event_title, event_time, role_name, subclass_name)
-                        VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (user_id, event_id) DO UPDATE 
-                        SET role_name = EXCLUDED.role_name, subclass_name = EXCLUDED.subclass_name;
-                        """,
-                        user_id, event_id, event_details['title'], event_details['event_time'], role_name, subclass_name
-                    )
             
     async def get_event_by_id(self, event_id: int, include_deleted: bool = False) -> Optional[Dict]:
         query = "SELECT * FROM events WHERE event_id = $1"
